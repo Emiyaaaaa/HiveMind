@@ -2,7 +2,7 @@
 
 架构与数据模型见 [architecture.md](architecture.md) 与 [data-model.md](data-model.md)。
 
-**最后核对：** 2026-09-04
+**最后核对：** 2026-09-16
 
 ## 优化方向
 
@@ -17,15 +17,15 @@
 
 ## 可引入的先进技术
 
-| 领域 | 候选方案 | 价值 |
-| --- | --- | --- |
-| 长任务编排 | Temporal、Restate | 超越 Redis ACK 的 durable timer、saga、人工审批 |
-| LLM 可观测 | Langfuse、Arize Phoenix、OTel GenAI | 在现有 Step/Message 之上做 trace 与 eval |
-| 工具协议 | MCP | 标准化 adapter 工具面 |
-| 向量 / 记忆 | pgvector（首选，与现有 Postgres 同库）、可选 LanceDB | 语义检索与长期记忆；**不得**把记忆塞进某个 adapter 的 checkpointer |
-| 认证与多租户 | OIDC + `tenant_id` | RBAC、审计、团队隔离 |
-| SDK 生成 | OpenAPI → TS/Python | Java、FastAPI、前端类型自动同步 |
-| 部署 | Helm、HPA | 将 compose profile 产品化 |
+| 领域         | 候选方案                                             | 价值                                                               |
+| ------------ | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| 长任务编排   | Temporal、Restate                                    | 超越 Redis ACK 的 durable timer、saga、人工审批                    |
+| LLM 可观测   | Langfuse、Arize Phoenix、OTel GenAI                  | 在现有 Step/Message 之上做 trace 与 eval                           |
+| 工具协议     | MCP                                                  | 标准化 adapter 工具面                                              |
+| 向量 / 记忆  | pgvector（首选，与现有 Postgres 同库）、可选 LanceDB | 语义检索与长期记忆；**不得**把记忆塞进某个 adapter 的 checkpointer |
+| 认证与多租户 | OIDC + `tenant_id`                                   | RBAC、审计、团队隔离                                               |
+| SDK 生成     | OpenAPI → TS/Python                                  | Java、FastAPI、前端类型自动同步                                    |
+| 部署         | Helm、HPA                                            | 将 compose profile 产品化                                          |
 
 ## 路线图
 
@@ -87,13 +87,13 @@
 
 ### 现状（代码事实）
 
-| 已有 | 实际作用 | 缺口 |
-| --- | --- | --- |
-| `Message`（`backend/app/models/run.py`） | 单次 Run 内有序 transcript；`role` 为 system/user/assistant/tool | 无跨 Run 语义检索；`content` 仅 TEXT（Thread L1 已补跨 Run 窗口） |
-| `Checkpoint.state` | adapter 不透明快照，供 retry/resume/Temporal 恢复 | LangGraph 每次节点把整份 `graph_state`（含不断增长的 `messages`）写入 JSON；与 `Message` 行重复存储 |
-| `AdapterContext`（`backend/app/adapters/base.py`） | 只写：`emit_message` / `emit_checkpoint`；只读：`thread_messages`（L1） | 无 `recall` / `search` / `store`（L2/L3 待做） |
-| `POST /v1/runs` | 可带可选 `thread_id` 绑定会话 | 无语义记忆；连续对话靠 Thread L1 |
-| 控制台 Messages / Threads | Run 级 Messages + Thread 连续对话页 | 无记忆注入审计（M2） |
+| 已有                                               | 实际作用                                                                | 缺口                                                                                                |
+| -------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `Message`（`backend/app/models/run.py`）           | 单次 Run 内有序 transcript；`role` 为 system/user/assistant/tool        | 无跨 Run 语义检索；`content` 仅 TEXT（Thread L1 已补跨 Run 窗口）                                   |
+| `Checkpoint.state`                                 | adapter 不透明快照，供 retry/resume/Temporal 恢复                       | LangGraph 每次节点把整份 `graph_state`（含不断增长的 `messages`）写入 JSON；与 `Message` 行重复存储 |
+| `AdapterContext`（`backend/app/adapters/base.py`） | 只写：`emit_message` / `emit_checkpoint`；只读：`thread_messages`（L1） | 无 `recall` / `search` / `store`（L2/L3 待做）                                                      |
+| `POST /v1/runs`                                    | 可带可选 `thread_id` 绑定会话                                           | 无语义记忆；连续对话靠 Thread L1                                                                    |
+| 控制台 Messages / Threads                          | Run 级 Messages + Thread 连续对话页                                     | 无记忆注入审计（M2）                                                                                |
 
 LangGraph 默认图（`backend/app/adapters/langgraph_adapter.py`）把完整 `messages` 列表交给模型，没有窗口裁剪、摘要或 token 预算。retry 时 Java/Python 把 `checkpoint_state` 塞进 `Run.metadata._resume` 再入队 Redis——长对话会把大 JSON 打进 metadata 和 job payload。
 
@@ -242,14 +242,14 @@ Adapters **不得** import SQLAlchemy 查 `messages` / `memory_items`（与现�
 
 ## 从哪里入手
 
-| 目标 | 入口 |
-| --- | --- |
-| 事件重放 | `backend/app/events/bus.py`、`backend/app/api/v1/events.py` |
-| 修控制台 | `frontend/app/runs/`、`frontend/components/` |
-| 新 adapter | `backend/app/adapters/` + `__init__.py` 注册；MCP 见 [architecture.md](architecture.md#mcp-tool-bridge) |
-| 扩展 API | 先改 [api-contract.md](api-contract.md)，再实现 Java API；涉及执行协议时同步 Python Worker |
-| 队列可靠性 | `backend/app/worker/queue.py`、`backend/app/worker/monitor.py` |
-| 可观测性 | `backend/app/core/telemetry.py`、Java `RedMetricsFilter` |
-| Working memory 瘦身 | `backend/app/adapters/langgraph_adapter.py`（checkpoint 内容）、`backend/app/runtime/resume_context.py`、Python/Java `retry_run` |
-| Thread / 长期记忆 | 先改 [data-model.md](data-model.md) + [api-contract.md](api-contract.md)；`AdapterContext` 增 `memory`；Java `RunsController` 接受 `thread_id`；控制台 `frontend/app/runs/[id]/page.tsx` |
-| Run 对比 / 回归 | Java `RunComparisonsController` / `RegressionExecutionsController`；控制台 `frontend/app/regression/` |
+| 目标                | 入口                                                                                                                                                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 事件重放            | `backend/app/events/bus.py`、`backend/app/api/v1/events.py`                                                                                                                              |
+| 修控制台            | `frontend/app/runs/`、`frontend/components/`                                                                                                                                             |
+| 新 adapter          | `backend/app/adapters/` + `__init__.py` 注册；MCP 见 [architecture.md](architecture.md#mcp-tool-bridge)                                                                                  |
+| 扩展 API            | 先改 [api-contract.md](api-contract.md)，再实现 Java API；涉及执行协议时同步 Python Worker                                                                                               |
+| 队列可靠性          | `backend/app/worker/queue.py`、`backend/app/worker/monitor.py`                                                                                                                           |
+| 可观测性            | `backend/app/core/telemetry.py`、Java `RedMetricsFilter`                                                                                                                                 |
+| Working memory 瘦身 | `backend/app/adapters/langgraph_adapter.py`（checkpoint 内容）、`backend/app/runtime/resume_context.py`、Python/Java `retry_run`                                                         |
+| Thread / 长期记忆   | 先改 [data-model.md](data-model.md) + [api-contract.md](api-contract.md)；`AdapterContext` 增 `memory`；Java `RunsController` 接受 `thread_id`；控制台 `frontend/app/runs/[id]/page.tsx` |
+| Run 对比 / 回归     | Java `RunComparisonsController` / `RegressionExecutionsController`；控制台 `frontend/app/regression/`                                                                                    |
