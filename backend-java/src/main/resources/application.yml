@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: agentflow-api
+  datasource:
+    url: ${AGENTFLOW_DATABASE_URL:jdbc:postgresql://localhost:5432/agentflow}
+    username: ${AGENTFLOW_DATABASE_USERNAME:agentflow}
+    password: ${AGENTFLOW_DATABASE_PASSWORD:agentflow}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: ${AGENTFLOW_JPA_DDL:validate}
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  data:
+    redis:
+      host: ${AGENTFLOW_REDIS_HOST:localhost}
+      port: ${AGENTFLOW_REDIS_PORT:6379}
+  mvc:
+    async:
+      request-timeout: -1
+
+server:
+  port: ${AGENTFLOW_SERVER_PORT:8000}
+
+agentflow:
+  version: 0.1.0
+  adapters: echo,langgraph
+  jobs:
+    queue-key: agentflow:jobs:runs
+  cancel:
+    key-prefix: "agentflow:cancel:"
+    ttl-seconds: 86400
+  events:
+    channel-prefix: "agentflow:run:"
+    sse-heartbeat-seconds: 15
+
+logging:
+  level:
+    io.agentflow: INFO
+    org.springframework.web: INFO

@@ -16,7 +16,8 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from app.adapters import AdapterContext, get_adapter
+from app.adapters import get_adapter
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.events import EventBus
@@ -30,6 +31,8 @@ from app.models import (
     ToolCall,
 )
 from app.schemas.run import EventType, RunCreate, RunEvent
+from app.worker.cancel import CancelRegistry, get_cancel_registry
+from app.worker.queue import JobQueue, RunJob, get_job_queue
 
 logger = get_logger("run_service")
 
@@ -52,12 +55,20 @@ class RunService:
         session: AsyncSession,
         bus: EventBus,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
+        job_queue: JobQueue | None = None,
+        cancel_registry: CancelRegistry | None = None,
     ) -> None:
         self.session = session
         self.bus = bus
         # Background adapter tasks need their own session, decoupled from the
         # request-scoped one. Tests can inject a different factory.
         self.session_factory = session_factory or SessionLocal
+        # The job queue and cancel registry are also process-wide singletons
+        # by default; tests may swap them out. They are only consulted when
+        # `worker_mode == "queue"`, but we resolve them eagerly so we don't
+        # surprise the caller with a network handle on first use.
+        self.job_queue = job_queue or get_job_queue()
+        self.cancel_registry = cancel_registry or get_cancel_registry()
 
     async def create_run(self, payload: RunCreate) -> Run:
         agent = await self.session.get(Agent, payload.agent_id)
@@ -79,10 +90,14 @@ class RunService:
         return run
 
     async def start_run(self, run_id: str) -> asyncio.Task[Any]:
-        """Kick off the orchestrator for `run_id` as a background task.
+        """Kick off the orchestrator for `run_id`.
 
-        The adapter executes against its own session so concurrent reads
-        from the API request that created the run are not blocked.
+        In ``inline`` mode (the default; used by the FastAPI dev server and
+        the test suite) the adapter executes as a background asyncio task in
+        the API process. In ``queue`` mode the run is enqueued on the shared
+        job queue and a separate worker process (or container) is expected
+        to pick it up. Either way the returned task completes promptly so
+        the request handler can return ``202``.
         """
         run = await self._get_run(run_id)
         if run.status not in (RunStatus.PENDING, RunStatus.WAITING_HUMAN):
@@ -92,6 +107,17 @@ class RunService:
             return asyncio.create_task(asyncio.sleep(0))
 
         adapter = get_adapter(run.adapter)
+
+        if get_settings().worker_mode == "queue":
+            await self.job_queue.enqueue(
+                RunJob.new(
+                    run_id=run_id,
+                    agent_id=run.agent_id,
+                    adapter=adapter.name,
+                )
+            )
+            return asyncio.create_task(asyncio.sleep(0))
+
         task = asyncio.create_task(
             self._run_adapter_in_background(run_id, adapter.name)
         )
@@ -99,66 +125,37 @@ class RunService:
         return task
 
     async def _run_adapter_in_background(self, run_id: str, adapter_name: str) -> None:
+        # Delegated to the shared executor so the inline path and the
+        # standalone worker process exercise the exact same code.
+        from app.worker.executor import RunExecutor
+
+        executor = RunExecutor(
+            bus=self.bus,
+            session_factory=self.session_factory,
+            cancel_registry=self.cancel_registry,
+        )
         try:
-            async with self.session_factory() as session:
-                inner = RunService(
-                    session=session,
-                    bus=self.bus,
-                    session_factory=self.session_factory,
-                )
-                run = await inner._get_run(run_id)
-                agent = await session.get(Agent, run.agent_id)
-                if agent is None:
-                    await inner._finalize(
-                        run_id, RunStatus.FAILED, error="agent missing"
-                    )
-                    return
-
-                run.status = RunStatus.RUNNING
-                await session.commit()
-                await inner._broadcast("run.started", run.id, {})
-
-                ctx = AdapterContext(
-                    run_id=run.id,
-                    agent_id=agent.id,
-                    agent_config=agent.config or {},
-                    input=run.input,
-                    metadata=run.metadata_,
-                    emit=lambda event_type, data: inner._handle_event(
-                        run.id, event_type, data
-                    ),
-                )
-
-                adapter = get_adapter(adapter_name)
-                try:
-                    result = await adapter.run(ctx)
-                except asyncio.CancelledError:
-                    await inner._finalize(
-                        run_id, RunStatus.CANCELLED, error="cancelled"
-                    )
-                    raise
-                except Exception as exc:
-                    logger.exception(
-                        "adapter_failed", run_id=run_id, adapter=adapter_name
-                    )
-                    await inner._finalize(run_id, RunStatus.FAILED, error=str(exc))
-                    return
-
-                await inner._finalize(
-                    run_id,
-                    result.status,
-                    output=result.output,
-                    error=result.error,
-                )
+            await executor.execute(run_id, adapter_name)
         finally:
             _running_tasks.pop(run_id, None)
 
     async def cancel_run(self, run_id: str) -> None:
+        # Ensure the run exists so the API returns 404 for unknown ids
+        # whether or not a worker is currently executing it.
+        await self._get_run(run_id)
+
+        # Signal external workers (queue mode) via the cancel registry.
+        await self.cancel_registry.request_cancel(run_id)
+
+        # Inline-mode shortcut: cancel the in-process task directly.
         task = _running_tasks.get(run_id)
         if task is not None:
             task.cancel()
             return
-        await self._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
+
+        # No live task and no external worker would pick it up: finalize now.
+        if get_settings().worker_mode == "inline":
+            await self._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
 
     async def get_run(self, run_id: str, *, with_relations: bool = True) -> Run:
         return await self._get_run(run_id, with_relations=with_relations)

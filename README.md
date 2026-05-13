@@ -8,6 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org)
 
+
 AgentFlow provides the runtime infrastructure around multi-agent applications.
 It does not replace frameworks such as LangGraph, AutoGen or CrewAI. Instead,
 it gives them a consistent execution model: agents are invoked as runs, runs
@@ -18,9 +19,6 @@ The project is designed for teams that want to move from an agent prototype to
 an inspectable service without committing to a single orchestration framework
 or rebuilding persistence, event streaming and operational tooling for each
 new agent.
-
-> Status: early MVP. The current implementation defines the core shape of the
-> runtime, but public APIs may still change before a stable release.
 
 ## Motivation
 
@@ -57,48 +55,88 @@ live updates, and an adapter interface for orchestration frameworks.
 
 ## Architecture
 
+The HTTP layer that the frontend talks to is a Java/Spring Boot service in
+[`backend-java/`](backend-java/). Agent orchestration stays in Python; a
+worker process in [`backend/`](backend/) consumes a Redis-backed job queue
+and drives adapters (LangGraph, Echo, ...) to completion.
+
 ```
-┌───────────────────┐  REST   ┌─────────────────────┐
-│  Next.js console  │ ──────▶ │   FastAPI server     │
-│  (app/runs/...)   │ ◀─SSE── │  api/v1, services/   │
-└───────────────────┘         └──────────┬──────────┘
-                                         │
+┌───────────────────┐  REST   ┌──────────────────────┐
+│  Next.js console  │ ──────▶ │  Java/Spring Boot API│
+│  (app/runs/...)   │ ◀─SSE── │  /v1/* + SSE bridge  │
+└───────────────────┘         └──────────┬───────────┘
+                                         │ jobs / cancel / events (Redis)
+                                         ▼
+                              ┌──────────────────────┐
+                              │ Python worker (uv)   │
+                              │  app.worker.runner   │
+                              └──────────┬───────────┘
                                          ▼
                               ┌──────────────────────┐
                               │ Orchestrator adapter │
                               │  (LangGraph, Echo...)│
-                              └──────────┬──────────┘
-                                         │ events
+                              └──────────┬───────────┘
                                          ▼
                               ┌──────────────────────┐
-                              │  Postgres + Redis    │
+                              │  Postgres (state)    │
                               └──────────────────────┘
 ```
 
-See [docs/architecture.md](docs/architecture.md) and
-[docs/data-model.md](docs/data-model.md) for the service flow, adapter
-contract and database model.
+The legacy FastAPI server in [`backend/`](backend/) still exists. It runs
+in `inline` mode (the default `AGENTFLOW_WORKER_MODE`), executes adapter
+runs in-process, and is what the test suite exercises. Switch a deployment
+to the Java API by setting `AGENTFLOW_WORKER_MODE=queue` on the worker and
+pointing the frontend at the Java server (port `8000`).
+
+See:
+
+- [docs/api-contract.md](docs/api-contract.md) — frozen `/v1` contract that
+  both backends must implement, plus the Java↔Python Redis protocol.
+- [docs/migration-verification.md](docs/migration-verification.md) — what
+  is auto-verified, plus the manual Java/integration smoke test.
+- [docs/architecture.md](docs/architecture.md) and
+  [docs/data-model.md](docs/data-model.md) — adapter contract and database
+  model.
 
 ## Quick start
 
 Requirements: Docker, [`uv`](https://github.com/astral-sh/uv) and Node.js 20+.
+The Java API server additionally needs JDK 21 and Maven 3.9+.
+
+### Option A — Legacy FastAPI (single process, no Java)
 
 ```bash
-# 1. Start dependencies
 docker compose up -d postgres redis
-
-# 2. Start the backend
 cd backend
 cp .env.example .env
 uv sync
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload --port 8000
 
-# 3. Start the console
-cd ../frontend
-npm install
-npm run dev
+cd ../frontend && npm install && npm run dev
 ```
+
+### Option B — Java API + Python worker (target architecture)
+
+```bash
+# Infrastructure
+docker compose up -d postgres redis
+
+# DB schema (Python owns Alembic)
+cd backend && uv sync && uv run alembic upgrade head
+
+# Worker (queue mode pulls jobs from Redis)
+AGENTFLOW_WORKER_MODE=queue uv run python -m app.worker
+
+# Java API (separate shell)
+cd ../backend-java && mvn spring-boot:run
+
+# Frontend (separate shell)
+cd ../frontend && npm install && npm run dev
+```
+
+Or via docker compose: `docker compose --profile java up --build` brings up
+postgres, redis, the Java API and the Python worker together.
 
 Open http://localhost:3000. The default `echo` adapter runs locally and does
 not require a model provider key.
@@ -138,21 +176,30 @@ curl -N http://localhost:8000/v1/events/<run_id>
 
 ```
 agentflow/
-├── backend/                FastAPI runtime + LangGraph adapter
+├── backend/                Python runtime, adapters, worker, legacy FastAPI
 │   ├── app/
 │   │   ├── adapters/       orchestrator adapters
-│   │   ├── api/v1/         HTTP routes
+│   │   ├── api/v1/         legacy FastAPI HTTP routes (inline mode)
 │   │   ├── core/           configuration and logging
 │   │   ├── db/             SQLAlchemy session and base
 │   │   ├── events/         in-memory and Redis event bus
 │   │   ├── models/         ORM models
 │   │   ├── schemas/        Pydantic schemas
-│   │   └── services/       run lifecycle service
-│   ├── alembic/            database migrations
+│   │   ├── services/       run lifecycle service
+│   │   └── worker/         queue + cancel registry + standalone worker loop
+│   ├── alembic/            database migrations (source of truth for the schema)
 │   └── tests/
+├── backend-java/           Spring Boot 3 API server (frontend-facing)
+│   └── src/main/java/io/agentflow/api/
+│       ├── controller/     /v1 REST + SSE controllers
+│       ├── dto/            wire-format DTOs (snake_case)
+│       ├── entity/         JPA entities mapping the same Postgres tables
+│       ├── jobs/           Redis job producer + cancel signal
+│       ├── repository/     Spring Data JPA repositories
+│       └── service/        agent / run / event services
 ├── frontend/               Next.js admin console
-├── docs/                   architecture and data model
-└── docker-compose.yml
+├── docs/                   architecture, data model, API contract, verification
+└── docker-compose.yml      profiles: default (legacy), `java`, `full`
 ```
 
 ## Adapter interface

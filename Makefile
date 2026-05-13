@@ -1,15 +1,17 @@
-.PHONY: help up down backend frontend migrate test lint format
+.PHONY: help up down backend backend-java worker frontend migrate test lint format
 
 help:
 	@echo "Available targets:"
-	@echo "  up        - start postgres + redis"
-	@echo "  down      - stop infrastructure"
-	@echo "  backend   - run FastAPI dev server"
-	@echo "  frontend  - run Next.js dev server"
-	@echo "  migrate   - run alembic migrations"
-	@echo "  test      - run backend tests"
-	@echo "  lint      - run ruff + tsc"
-	@echo "  format    - run ruff format"
+	@echo "  up           - start postgres + redis"
+	@echo "  down         - stop infrastructure"
+	@echo "  backend      - run FastAPI dev server (inline mode)"
+	@echo "  backend-java - run Spring Boot API server"
+	@echo "  worker       - run Python agent worker (queue mode)"
+	@echo "  frontend     - run Next.js dev server"
+	@echo "  migrate      - run alembic migrations"
+	@echo "  test         - run backend tests"
+	@echo "  lint         - run ruff + tsc"
+	@echo "  format       - run ruff format"
 
 up:
 	docker compose up -d postgres redis
@@ -19,6 +21,12 @@ down:
 
 backend:
 	cd backend && uv run uvicorn app.main:app --reload --port 8000
+
+backend-java:
+	cd backend-java && mvn spring-boot:run
+
+worker:
+	cd backend && AGENTFLOW_WORKER_MODE=queue uv run python -m app.worker
 
 frontend:
 	cd frontend && npm run dev

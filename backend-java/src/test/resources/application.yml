@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:agentflow;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate.dialect: org.hibernate.dialect.H2Dialect
+  data:
+    redis:
+      host: localhost
+      port: 16379
+
+agentflow:
+  jobs:
+    queue-key: test:agentflow:jobs:runs
+  cancel:
+    key-prefix: "test:agentflow:cancel:"
+  events:
+    channel-prefix: "test:agentflow:run:"
