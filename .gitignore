@@ -1,8 +1,38 @@
-node_modules
-dist
-.turbo
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.env.local
+*.sqlite
+*.db
+
+# uv
+.uv/
+uv.lock
+
+# Node
+node_modules/
+.next/
+out/
+.pnpm-store/
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
 .DS_Store
-storybook-static
-coverage
 
+# Coverage / test
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
+# Build
+dist/
+build/
