@@ -30,6 +30,23 @@ class Settings(BaseSettings):
         description="Adapter key used when a run does not specify one.",
     )
 
+    # When "inline" (default), the FastAPI process executes adapter runs
+    # itself as asyncio tasks (legacy behaviour, used by the test suite).
+    # When "queue", `RunService.start_run` pushes the run onto the shared
+    # Redis job queue and a separate worker process (or the Java API server's
+    # producer) is responsible for dispatching execution.
+    worker_mode: Literal["inline", "queue"] = "inline"
+
+    job_queue_key: str = Field(
+        default="agentflow:jobs:runs",
+        description="Redis LIST key the API pushes run jobs to and the worker BRPOPs from.",
+    )
+    cancel_key_prefix: str = Field(
+        default="agentflow:cancel:",
+        description="Redis key prefix the API uses to signal cancel for a run id.",
+    )
+    cancel_ttl_seconds: int = 86400
+
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
 

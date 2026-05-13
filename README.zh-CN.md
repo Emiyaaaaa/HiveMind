@@ -17,8 +17,6 @@ agent 以 run 的形式被调用，run 产生有序的 step 和 message，tool c
 同时获得运行历史、事件流、调试视图和框架切换边界，而不需要为每个 agent
 项目重复实现这些基础能力。
 
-> 项目状态：早期 MVP。当前实现已经确定核心运行时形态，但公开 API 在稳定版前仍可能调整。
-
 ## 设计动机
 
 多数 agent 框架主要关注本地编排：prompt、tool、graph、role 和 model call。
