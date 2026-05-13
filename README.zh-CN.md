@@ -5,7 +5,6 @@
 
 [English](README.md) · [架构](docs/architecture.md) · [数据模型](docs/data-model.md)
 
-[![CI](https://github.com/your-org/agentflow/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/agentflow/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org)
 
