@@ -229,7 +229,7 @@ class RedisStreamsJobQueue:
             await self._redis.xgroup_create(
                 name=self._stream,
                 groupname=self._group,
-                id="$",
+                id="0",
                 mkstream=True,
             )
         except Exception as exc:  # pragma: no cover - exact class is module-local
