@@ -39,7 +39,55 @@ class Settings(BaseSettings):
 
     job_queue_key: str = Field(
         default="agentflow:jobs:runs",
-        description="Redis LIST key the API pushes run jobs to and the worker BRPOPs from.",
+        description=(
+            "Redis key the API pushes run jobs to. When `redis_queue_impl` is "
+            "`list` it is a LIST consumed with BRPOP; when `streams` it is a "
+            "stream consumed with XREADGROUP."
+        ),
+    )
+    redis_queue_impl: Literal["list", "streams"] = Field(
+        default="streams",
+        description=(
+            "Wire protocol for the run job queue. `streams` provides "
+            "at-least-once delivery with XACK + XCLAIM-based recovery; "
+            "`list` is the legacy LPUSH/BRPOP path kept for rollback."
+        ),
+    )
+    job_stream_group: str = Field(
+        default="agentflow-workers",
+        description="Consumer group name for the run-job Redis stream.",
+    )
+    job_stream_consumer: str | None = Field(
+        default=None,
+        description=(
+            "Override the consumer name registered with the stream. "
+            "Defaults to `{hostname}:{pid}` when unset."
+        ),
+    )
+    job_stream_block_ms: int = Field(
+        default=5_000,
+        description="XREADGROUP block timeout in milliseconds.",
+    )
+    job_stream_claim_idle_ms: int = Field(
+        default=60_000,
+        description=(
+            "How long a pending entry may remain un-ACKed before another "
+            "consumer is allowed to XAUTOCLAIM it."
+        ),
+    )
+    job_stream_max_deliveries: int = Field(
+        default=5,
+        description=(
+            "Maximum delivery attempts before a job is routed to the DLQ "
+            "stream and XACKed off the main stream."
+        ),
+    )
+    job_dlq_key: str | None = Field(
+        default=None,
+        description=(
+            "Stream key for the dead-letter queue. Defaults to "
+            "`{job_queue_key}:dlq` when unset."
+        ),
     )
     cancel_key_prefix: str = Field(
         default="agentflow:cancel:",

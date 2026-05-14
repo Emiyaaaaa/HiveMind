@@ -219,10 +219,26 @@ The supported `type` values are:
 The HTTP contract above is the only surface the frontend sees. Between the
 Java API and the Python worker we use Redis as the broker:
 
-- **Job queue** — Redis LIST `agentflow:jobs:runs`. The API server pushes
-  JSON job payloads with `LPUSH`; the worker consumes them with `BRPOP`.
+- **Job queue** — Redis stream `agentflow:jobs:runs` (default). The API
+  server pushes JSON job payloads with `XADD <stream> * payload <json>`;
+  the worker consumes them with `XREADGROUP` inside the
+  `agentflow-workers` consumer group and explicitly `XACK`s after the run
+  reaches a terminal state. Pending entries left behind by a crashed
+  worker are recovered with `XAUTOCLAIM`; entries that exceed
+  `AGENTFLOW_JOB_STREAM_MAX_DELIVERIES` (default 5) are routed to the
+  `agentflow:jobs:runs:dlq` stream and ACKed off the main stream.
 
-  Payload:
+  This gives the broker at-least-once semantics: a worker that dies
+  mid-execute does not lose the job.
+
+  Set `AGENTFLOW_JOBS_IMPL=list` on the Java side and
+  `AGENTFLOW_REDIS_QUEUE_IMPL=list` on the Python worker to fall back to
+  the legacy `LPUSH` + `BRPOP` protocol (at-most-once; provided for
+  rollback only).
+
+  Payload (identical in both modes — the streams mode wraps it in a
+  single-field map record `{"payload": "<json>"}` so Python's
+  `RunJob.from_json` is reused unchanged):
 
   ```json
   {

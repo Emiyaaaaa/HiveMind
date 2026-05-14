@@ -4,15 +4,34 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentflow.api.config.AgentflowProperties;
 import java.time.Instant;
+import java.util.Map;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Pushes run jobs onto the Redis list that the Python worker consumes with
- * {@code BRPOP}. {@code LPUSH} + {@code BRPOP} gives FIFO semantics.
+ * Pushes run jobs onto the broker that the Python worker consumes.
+ *
+ * <p>The wire format selected by {@code agentflow.jobs.impl} must match the
+ * Python worker's configuration:
+ *
+ * <ul>
+ *   <li>{@code streams} (default) -> {@code XADD <queue-key> *
+ *       payload=<json>}. The worker reads with {@code XREADGROUP} inside a
+ *       consumer group and explicitly {@code XACK}s after the run terminates,
+ *       so a worker crash mid-execute lets another consumer reclaim the job
+ *       via {@code XAUTOCLAIM}.</li>
+ *   <li>{@code list} -> legacy {@code LPUSH} / {@code BRPOP}. At-most-once;
+ *       kept for rollback only.</li>
+ * </ul>
+ *
+ * <p>The JSON payload itself is identical across both modes: a single
+ * {@link RunJob} record serialised in snake_case, decoded by Python's
+ * {@code RunJob.from_json}.
  */
 @Component
 public class JobProducer {
+
+    static final String STREAM_PAYLOAD_FIELD = "payload";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper mapper;
@@ -26,11 +45,22 @@ public class JobProducer {
 
     public void enqueue(String runId, String agentId, String adapter) {
         RunJob job = new RunJob(runId, agentId, adapter, Instant.now());
+        String payload;
         try {
-            String payload = mapper.writeValueAsString(job);
-            redis.opsForList().leftPush(props.getJobs().getQueueKey(), payload);
+            payload = mapper.writeValueAsString(job);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialise run job", e);
         }
+
+        String impl = props.getJobs().getImpl();
+        String key = props.getJobs().getQueueKey();
+        if ("list".equalsIgnoreCase(impl)) {
+            redis.opsForList().leftPush(key, payload);
+            return;
+        }
+        // Default: Redis Streams. Single-field map keeps the wire format
+        // compatible with Python's ``RunJob.from_json`` -- the consumer
+        // reads ``fields["payload"]`` and decodes the JSON.
+        redis.opsForStream().add(key, Map.of(STREAM_PAYLOAD_FIELD, payload));
     }
 }
