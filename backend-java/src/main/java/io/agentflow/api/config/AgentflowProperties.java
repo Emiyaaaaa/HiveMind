@@ -53,7 +53,25 @@ public class AgentflowProperties {
     }
 
     public static class Jobs {
+        /**
+         * Wire protocol used to enqueue run jobs for the Python worker.
+         * Must match the Python side's {@code AGENTFLOW_REDIS_QUEUE_IMPL}.
+         * <ul>
+         *   <li>{@code streams} (default) -> {@code XADD} onto a Redis stream
+         *       with at-least-once delivery via XACK + XAUTOCLAIM.</li>
+         *   <li>{@code list} -> legacy {@code LPUSH} + {@code BRPOP}.</li>
+         * </ul>
+         */
+        private String impl = "streams";
         private String queueKey = "agentflow:jobs:runs";
+
+        public String getImpl() {
+            return impl;
+        }
+
+        public void setImpl(String impl) {
+            this.impl = impl;
+        }
 
         public String getQueueKey() {
             return queueKey;

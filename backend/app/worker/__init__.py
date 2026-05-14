@@ -20,8 +20,10 @@ from app.worker.cancel import (
 from app.worker.executor import RunExecutor
 from app.worker.queue import (
     InMemoryJobQueue,
+    JobLease,
     JobQueue,
     RedisJobQueue,
+    RedisStreamsJobQueue,
     RunJob,
     get_job_queue,
 )
@@ -30,9 +32,11 @@ __all__ = [
     "CancelRegistry",
     "InMemoryCancelRegistry",
     "InMemoryJobQueue",
+    "JobLease",
     "JobQueue",
     "RedisCancelRegistry",
     "RedisJobQueue",
+    "RedisStreamsJobQueue",
     "RunExecutor",
     "RunJob",
     "get_cancel_registry",

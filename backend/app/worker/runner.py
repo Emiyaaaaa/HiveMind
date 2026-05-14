@@ -1,12 +1,15 @@
 """Standalone worker loop.
 
-Run with ``python -m app.worker``. Each iteration pops a run job off the
-shared Redis queue, executes it to completion (or cancellation), and moves
-on. Failures inside a single run are surfaced through ``RunStatus.FAILED``
-and never bring the loop down.
+Run with ``python -m app.worker``. Each iteration leases the next run job
+from the shared Redis queue, executes it to completion (or cancellation),
+``XACK``s the queue and moves on. Failures inside a single run are
+surfaced through ``RunStatus.FAILED`` and never bring the loop down; a
+crash before ACK leaves the entry in the consumer group's pending list so
+another consumer can ``XAUTOCLAIM`` it once the idle timeout elapses.
 
 The worker is intentionally single-process and concurrency-safe through
-Redis: multiple workers can compete on the same queue with ``BRPOP``.
+Redis: multiple workers can compete on the same stream within one
+consumer group.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from app.db.session import engine
 from app.events import get_event_bus
 from app.worker.cancel import get_cancel_registry
 from app.worker.executor import RunExecutor
-from app.worker.queue import RunJob, get_job_queue
+from app.worker.queue import JobLease, JobQueue, get_job_queue
 
 logger = get_logger("worker.runner")
 
@@ -33,16 +36,41 @@ async def _ensure_schema() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def _process_job(executor: RunExecutor, job: RunJob) -> None:
-    logger.info("job.received", run_id=job.run_id, adapter=job.adapter)
+async def _process_lease(
+    executor: RunExecutor, queue: JobQueue, lease: JobLease
+) -> None:
+    """Drive a single leased job to its terminal state and ACK on the queue.
+
+    ACK boundary:
+
+    * Normal return of ``execute`` -> ACK. ``RunExecutor.execute`` catches
+      adapter exceptions internally and writes ``RunStatus.FAILED``, so a
+      clean return always means the DB row is in a terminal state.
+    * ``asyncio.CancelledError`` -> ACK and re-raise. The executor wrote a
+      terminal status before propagating; not ACKing would let another
+      consumer re-execute an already-cancelled run.
+    * Any other exception -> deliberately *no* ACK so the entry stays in
+      the consumer group's pending list. ``XAUTOCLAIM`` on a later loop
+      will re-deliver it (or DLQ it once the retry budget is exhausted).
+    """
+    job = lease.job
+    logger.info(
+        "job.received",
+        run_id=job.run_id,
+        adapter=job.adapter,
+        deliveries=lease.delivery_count,
+    )
     try:
         await executor.execute(job.run_id, job.adapter)
-        logger.info("job.completed", run_id=job.run_id)
     except asyncio.CancelledError:
         logger.info("job.cancelled", run_id=job.run_id)
+        await queue.ack(lease)
         raise
     except Exception:
         logger.exception("job.failed", run_id=job.run_id)
+        return
+    await queue.ack(lease)
+    logger.info("job.completed", run_id=job.run_id)
 
 
 async def run_forever() -> None:
@@ -70,10 +98,10 @@ async def run_forever() -> None:
             signal.signal(sig, lambda *_: _request_stop())
 
     try:
-        async for job in queue.consume():
+        async for lease in queue.consume():
             if stop.is_set():
                 break
-            await _process_job(executor, job)
+            await _process_lease(executor, queue, lease)
     finally:
         logger.info("worker.shutting_down")
         await queue.aclose()

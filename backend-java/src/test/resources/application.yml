@@ -16,6 +16,7 @@ spring:
 
 agentflow:
   jobs:
+    impl: streams
     queue-key: test:agentflow:jobs:runs
   cancel:
     key-prefix: "test:agentflow:cancel:"

@@ -26,6 +26,10 @@ agentflow:
   version: 0.1.0
   adapters: echo,langgraph
   jobs:
+    # Wire protocol: ``streams`` (XADD/XREADGROUP, at-least-once) or
+    # ``list`` (legacy LPUSH/BRPOP). MUST match the Python worker's
+    # ``AGENTFLOW_REDIS_QUEUE_IMPL``.
+    impl: ${AGENTFLOW_JOBS_IMPL:streams}
     queue-key: agentflow:jobs:runs
   cancel:
     key-prefix: "agentflow:cancel:"
