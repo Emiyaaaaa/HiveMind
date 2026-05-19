@@ -21,6 +21,11 @@ public class RunResponse {
     private List<MessageResponse> messages;
     private List<CheckpointResponse> checkpoints;
 
+    /** Run header only; nested collections are empty (used by {@code GET /v1/runs}). */
+    public static RunResponse fromEntity(RunEntity entity) {
+        return fromEntity(entity, List.of(), List.of(), List.of());
+    }
+
     public static RunResponse fromEntity(
             RunEntity entity,
             List<StepResponse> steps,

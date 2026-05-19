@@ -25,6 +25,8 @@ import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * The Java equivalent of {@code app.services.run_service.RunService}. The
@@ -77,9 +79,7 @@ public class RunService {
         run.setInput(new HashMap<>(req.getInput()));
         run.setMetadata(new HashMap<>(req.getMetadata()));
         RunEntity saved = runs.save(run);
-        runs.flush();
-
-        jobProducer.enqueue(saved.getId(), agent.getId(), adapter);
+        enqueueJobAfterCommit(saved.getId(), agent.getId(), adapter);
 
         return toResponse(saved);
     }
@@ -87,8 +87,9 @@ public class RunService {
     @Transactional(readOnly = true)
     public List<RunResponse> list(int limit) {
         int capped = Math.max(1, Math.min(limit, 200));
+        // Header rows only — matches Python list_runs (no steps/messages/checkpoints).
         return runs.findRecent(PageRequest.of(0, capped)).stream()
-                .map(this::toResponse)
+                .map(RunResponse::fromEntity)
                 .toList();
     }
 
@@ -104,6 +105,23 @@ public class RunService {
         cancelSignal.requestCancel(run.getId());
         // We do not flip the row to CANCELLED here: the worker owns the
         // transition so steps/messages can be flushed first.
+    }
+
+    /**
+     * Enqueue only after the run row is committed so the worker never sees a
+     * job for a run that is not yet visible outside this transaction.
+     */
+    private void enqueueJobAfterCommit(String runId, String agentId, String adapter) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            jobProducer.enqueue(runId, agentId, adapter);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                jobProducer.enqueue(runId, agentId, adapter);
+            }
+        });
     }
 
     private RunResponse toResponse(RunEntity run) {
