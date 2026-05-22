@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from sqlalchemy import select
 
 from app.adapters import register_adapter
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
@@ -23,7 +24,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.events import get_event_bus
-from app.models import Agent, Run, RunStatus
+from app.models import Agent, Run, RunStatus, Step
 from app.schemas.run import RunCreate
 from app.services.run_service import RunService
 from app.worker.cancel import InMemoryCancelRegistry
@@ -105,6 +106,39 @@ async def test_executor_drives_run_to_succeeded():
         assert loaded is not None
         assert loaded.status == RunStatus.SUCCEEDED
         assert loaded.output == {"reply": "echo: hello"}
+
+
+@pytest.mark.asyncio
+async def test_step_completed_preserves_existing_metrics_when_missing_from_event():
+    bus = get_event_bus()
+
+    async with SessionLocal() as session:
+        agent = await _make_agent(session)
+        service = RunService(session=session, bus=bus)
+        run = await service.create_run(RunCreate(agent_id=agent.id, input={"prompt": "x"}))
+
+        await service._handle_event(run.id, "step.started", {"index": 0, "node": "n0"})
+
+        step = await service._find_step(run.id, 0)
+        assert step is not None
+        step.latency_ms = 123
+        step.tokens_in = 4
+        step.tokens_out = 9
+        await session.commit()
+
+        await service._handle_event(run.id, "step.completed", {"index": 0, "output": {"ok": True}})
+
+    async with SessionLocal() as session:
+        step = (
+            await session.execute(
+                select(Step).where(Step.run_id == run.id, Step.index == 0)
+            )
+        ).scalar_one()
+        assert step.status == RunStatus.SUCCEEDED
+        assert step.output == {"ok": True}
+        assert step.latency_ms == 123
+        assert step.tokens_in == 4
+        assert step.tokens_out == 9
 
 
 class _SlowAdapter(OrchestratorAdapter):

@@ -234,9 +234,12 @@ class RunService:
             if step is not None:
                 step.status = RunStatus.SUCCEEDED
                 step.output = data.get("output")
-                step.latency_ms = data.get("latency_ms")
-                step.tokens_in = data.get("tokens_in")
-                step.tokens_out = data.get("tokens_out")
+                if "latency_ms" in data:
+                    step.latency_ms = data["latency_ms"]
+                if "tokens_in" in data:
+                    step.tokens_in = data["tokens_in"]
+                if "tokens_out" in data:
+                    step.tokens_out = data["tokens_out"]
                 await self.session.commit()
         elif event_type == "step.failed":
             step = await self._find_step(run_id, data["index"])
