@@ -29,8 +29,9 @@ agent 以 run 的形式被调用，run 产生有序的 step 和 message，tool c
 - 可替换或混用不同编排框架的稳定抽象；
 - 面向开发和运维的运行检查控制台。
 
-AgentFlow 聚焦在这个运行时边界。核心服务保持明确且可读：FastAPI 负责 HTTP 与
-SSE，SQLAlchemy 负责持久化，事件总线负责实时更新，adapter 接口负责接入不同编排框架。
+AgentFlow 聚焦在这个运行时边界：Java/Spring Boot 提供 HTTP 与 SSE，
+Python worker 执行 adapter，SQLAlchemy + Alembic 负责持久化，Redis 负责
+任务队列与实时事件。
 
 ## 核心能力
 
@@ -42,13 +43,13 @@ PydanticAI 或内部框架可以通过相同接口注册接入，不需要修改
 客户端无需轮询即可跟踪执行过程。
 - **轻量管理控制台。** Next.js 控制台支持 run 列表、run 详情、step 和 message
 展示，以及实时事件流订阅。
-- **面向贡献者的技术栈。** Python 3.12、FastAPI、Pydantic v2、SQLAlchemy 2、
-Alembic、Redis、`uv`、Next.js 和 TypeScript。技术选择尽量使用社区常规方案。
+- **面向贡献者的技术栈。** Java 21、Spring Boot 3、Python 3.12、
+SQLAlchemy 2、Alembic、Redis、`uv`、Next.js 和 TypeScript。
 
 ## 架构
 
-前端对接的是 Java/Spring Boot API（`[backend-java/](backend-java/)`）。
-Agent 编排仍在 Python worker（`[backend/](backend/)`）中执行，通过 Redis
+前端对接 Java/Spring Boot API（[`backend-java/`](backend-java/)）。
+Agent 编排在 Python worker（[`backend/`](backend/)）中执行，通过 Redis
 队列与事件总线与 API 协作。
 
 ```
@@ -73,29 +74,14 @@ Agent 编排仍在 Python worker（`[backend/](backend/)`）中执行，通过 R
                               └──────────────────────┘
 ```
 
-`[backend/](backend/)` 中仍保留 legacy FastAPI 服务，默认以 `inline` 模式在
-进程内执行 adapter（CI 与本地开发常用）。生产目标架构为 Java API + Python
-worker（`AGENTFLOW_WORKER_MODE=queue`）。
-
 详见 [docs/architecture.md](docs/architecture.md)、
+[docs/deployment.md](docs/deployment.md)、
 [docs/api-contract.md](docs/api-contract.md) 与
 [docs/data-model.md](docs/data-model.md)。
 
 ## 快速开始
 
-依赖：Docker、`[uv](https://github.com/astral-sh/uv)` 和 Node.js 20+。
-Java API 另需 JDK 21 与 Maven 3.9+。
-
-### 方式 A — Legacy FastAPI（单进程，无 Java）
-
-```bash
-docker compose up -d postgres redis
-cd backend && cp .env.example .env && uv sync && uv run alembic upgrade head
-uv run uvicorn app.main:app --reload --port 8000
-cd ../frontend && npm install && npm run dev
-```
-
-### 方式 B — Java API + Python worker（目标架构）
+依赖：Docker、[`uv`](https://github.com/astral-sh/uv)、Node.js 20+、JDK 21 与 Maven 3.9+。
 
 ```bash
 docker compose up -d postgres redis
@@ -105,9 +91,14 @@ cd ../backend-java && mvn spring-boot:run                   # 单独终端
 cd ../frontend && npm install && npm run dev                # 单独终端
 ```
 
-或使用 `docker compose --profile java up --build` 一键启动。
+或使用 Docker Compose：
 
-打开 [http://localhost:3000。默认](http://localhost:3000。默认) `echo` adapter 在本地执行，不需要配置模型服务密钥。
+```bash
+cd backend && uv sync && uv run alembic upgrade head
+docker compose --profile app up --build
+```
+
+打开 [http://localhost:3000](http://localhost:3000)。默认 `echo` adapter 在本地执行，不需要配置模型服务密钥。
 
 ## 通过 API 创建 run
 
@@ -144,20 +135,20 @@ curl -N http://localhost:8000/v1/events/<run_id>
 
 ```
 agentflow/
-├── backend/                FastAPI runtime + LangGraph adapter
+├── backend/                Python 运行时：adapter、worker、Alembic schema
 │   ├── app/
 │   │   ├── adapters/       编排 adapter
-│   │   ├── api/v1/         HTTP 路由
 │   │   ├── core/           配置与日志
 │   │   ├── db/             SQLAlchemy session 与 base
 │   │   ├── events/         内存版与 Redis 事件总线
 │   │   ├── models/         ORM 模型
 │   │   ├── schemas/        Pydantic schema
-│   │   └── services/       run 生命周期服务
-│   ├── alembic/            数据库迁移
+│   │   └── worker/         队列、取消信号、worker 循环
+│   ├── alembic/            数据库 schema
 │   └── tests/
+├── backend-java/           Spring Boot API 服务
 ├── frontend/               Next.js 管理控制台
-├── docs/                   架构与数据模型
+├── docs/                   架构、部署、API 契约
 └── docker-compose.yml
 ```
 
@@ -178,27 +169,28 @@ class MyAdapter(OrchestratorAdapter):
         return AdapterResult(status=RunStatus.SUCCEEDED, output={"ok": True})
 ```
 
-在 `app/adapters/__init__.py` 中注册 adapter。API、持久化模型、事件流和控制台
-都会继续通过统一的运行时契约工作。
+在 `app/adapters/__init__.py` 中注册 adapter。Worker 会自动加载；
+API、持久化模型、事件流和控制台继续通过统一的运行时契约工作。
 
 ## 当前架构（摘要）
 
-AgentFlow 是**分层运行时**：前端 API 层、Python 执行层、共享基础设施。
+AgentFlow 是**分层运行时**：Java API 层、Python 执行层、共享基础设施。
 
 
-| 层级          | 技术栈                          | 职责                                   |
-| ----------- | ---------------------------- | ------------------------------------ |
-| 控制台         | Next.js 15、React Query、SSE   | Agent/Run 管理、实时事件流                   |
-| API（目标）     | Java 21、Spring Boot 3、JPA    | REST `/v1/`*、SSE 桥接、入队、取消            |
-| API（legacy） | Python 3.12、FastAPI          | 相同契约；inline 模式供开发/CI                 |
-| Worker      | Python asyncio、`RunExecutor` | 消费 Redis 任务、执行 adapter、写 Postgres    |
-| Adapter     | LangGraph、Echo（可注册）          | 统一接口下的框架编排                           |
-| 状态          | Postgres 16、Alembic          | Run、Step、Message、ToolCall、Checkpoint |
-| 消息          | Redis Streams + pub/sub      | 至少一次任务队列、取消信号、实时事件                   |
+| 层级     | 技术栈                          | 职责                                   |
+| -------- | ---------------------------- | ------------------------------------ |
+| 控制台    | Next.js 15、React Query、SSE   | Agent/Run 管理、实时事件流                   |
+| API      | Java 21、Spring Boot 3、JPA    | REST `/v1/*`、SSE 桥接、入队、取消            |
+| Worker   | Python asyncio、`RunExecutor` | 消费 Redis 任务、执行 adapter、写 Postgres    |
+| Adapter  | LangGraph、Echo（可注册）          | 统一接口下的框架编排                           |
+| 状态     | Postgres 16、Alembic          | Run、Step、Message、ToolCall、Checkpoint |
+| 消息     | Redis Streams + pub/sub      | 至少一次任务队列、取消信号、实时事件                   |
 
 
 **数据流：** `POST /v1/runs` → API 写入 `pending` → Redis 任务 → worker 执行  
 adapter → 持久化 + 事件 → SSE 推送到控制台。Postgres 是唯一真相源；Redis 仅做协调。
+
+详见 [docs/deployment.md](docs/deployment.md)。
 
 ## License
 

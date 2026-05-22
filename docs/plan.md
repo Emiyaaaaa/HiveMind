@@ -7,16 +7,14 @@
 
 按投入产出比排序：
 
-1. **完善 Java 迁移的 CI 与运维。** 将 `backend-java` 纳入 GitHub Actions，增加
-   compose 集成测试与 FastAPI 契约对比；生产文档以 queue 模式为准。
-2. **前端用事件驱动替代轮询。** Run 列表每 3s、详情页每 2s 轮询；改为 SSE/WebSocket
+1. **前端用事件驱动替代轮询。** Run 列表每 3s、详情页每 2s 轮询；改为 SSE/WebSocket
    推送状态变更。
-3. **Worker 并发与背压。** 当前单 job 串行；增加可配置并行度、队列深度指标与消费者延迟告警。
-4. **增强 LangGraph adapter。** 支持多节点 graph、工具注册、token/延迟写入 Step、流式 token 事件。
-5. **实现 retry / resume。** 数据模型已有 Checkpoint 与 `waiting_human`，补齐 HTTP 动作与 adapter 钩子。
-6. **事件总线持久化。** Redis pub/sub 无订阅者时会丢消息；支持 `Last-Event-ID` 重放。
-7. **可观测性基线。** 在 API → worker → adapter 链路上接入 OpenTelemetry，导出 RED 指标。
-8. **控制台体验。** Step 时间线、ToolCall 检查面板、token/成本汇总、Checkpoint 标记。
+2. **Worker 并发与背压。** 当前单 job 串行；增加可配置并行度、队列深度指标与消费者延迟告警。
+3. **增强 LangGraph adapter。** 支持多节点 graph、工具注册、token/延迟写入 Step、流式 token 事件。
+4. **实现 retry / resume。** 数据模型已有 Checkpoint 与 `waiting_human`，补齐 HTTP 动作与 adapter 钩子。
+5. **事件总线持久化。** Redis pub/sub 无订阅者时会丢消息；支持 `Last-Event-ID` 重放。
+6. **可观测性基线。** 在 API → worker → adapter 链路上接入 OpenTelemetry，导出 RED 指标。
+7. **控制台体验。** Step 时间线、ToolCall 检查面板、token/成本汇总、Checkpoint 标记。
 
 ## 可引入的先进技术
 
@@ -50,7 +48,7 @@
 - [ ] SSE 事件重放（`Last-Event-ID`）
 - [ ] OpenTelemetry 全链路 trace
 - [ ] 队列深度、worker 利用率、p95 耗时等指标
-- [ ] Java API 纳入 CI + compose `java` profile 集成测试
+- [x] Compose 集成测试与 CI（`integration` job）
 
 **验收：** 失败 Run 可从 checkpoint 重试；控制台展示成本与时间线；Jaeger/Tempo 可见 trace。
 
@@ -77,7 +75,6 @@
 - [ ] Temporal（或 Restate）集成超长 Run
 - [ ] Helm + Terraform；按队列延迟自动扩缩 worker
 - [ ] Agent 级 token/成本配额
-- [ ] 生产默认路径弃用 FastAPI inline（保留开发用途）
 
 **验收：** 双租户演示；审批门控生效；24h+ 工作流在 worker 重启后仍可恢复。
 

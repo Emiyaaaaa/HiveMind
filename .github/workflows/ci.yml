@@ -38,12 +38,53 @@ jobs:
       - name: Lint
         working-directory: backend
         run: uv run ruff check .
-      - name: Migrate
+      - name: Database schema
         working-directory: backend
         run: uv run alembic upgrade head
       - name: Test
         working-directory: backend
         run: uv run pytest -q
+
+  backend-java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Test
+        working-directory: backend-java
+        run: mvn -B verify
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: [backend, backend-java]
+    env:
+      AGENTFLOW_DATABASE_URL: postgresql+asyncpg://agentflow:agentflow@localhost:5432/agentflow
+      AGENTFLOW_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install Python deps
+        working-directory: backend
+        run: uv sync --all-extras
+      - name: Start infrastructure
+        run: docker compose up -d postgres redis
+      - name: Database schema
+        working-directory: backend
+        run: uv run alembic upgrade head
+      - name: Start application stack
+        run: docker compose --profile app up -d --build
+      - name: Wait for API
+        working-directory: backend
+        run: uv run python ../scripts/ci/wait_for_http.py http://localhost:8000/v1/health 240
+      - name: End-to-end smoke test
+        working-directory: backend
+        run: uv run python ../scripts/ci/java_stack_smoke.py http://localhost:8000
 
   frontend:
     runs-on: ubuntu-latest

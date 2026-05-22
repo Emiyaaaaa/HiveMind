@@ -1,11 +1,8 @@
 # Frontend ↔ Backend API Contract (v1)
 
 This document freezes the HTTP surface that the Next.js console relies on
-(see [`frontend/lib/api.ts`](../frontend/lib/api.ts)). Both the legacy Python
-FastAPI server and the new Java/Spring Boot server in
-[`backend-java/`](../backend-java/) MUST implement these endpoints with the
-exact same request/response shapes so the frontend can be pointed at either
-backend without changes.
+(see [`frontend/lib/api.ts`](../frontend/lib/api.ts)). The Java/Spring Boot
+server in [`backend-java/`](../backend-java/) implements these endpoints.
 
 The Next.js dev server proxies `/api/*` → `${AGENTFLOW_API_URL}/*`
 (see [`frontend/next.config.mjs`](../frontend/next.config.mjs)). All paths
@@ -214,7 +211,7 @@ The supported `type` values are:
 }
 ```
 
-## Java ↔ Python protocol (internal)
+## API ↔ worker protocol (internal)
 
 The HTTP contract above is the only surface the frontend sees. Between the
 Java API and the Python worker we use Redis as the broker:
@@ -233,8 +230,7 @@ Java API and the Python worker we use Redis as the broker:
 
   Set `AGENTFLOW_JOBS_IMPL=list` on the Java side and
   `AGENTFLOW_REDIS_QUEUE_IMPL=list` on the Python worker to fall back to
-  the legacy `LPUSH` + `BRPOP` protocol (at-most-once; provided for
-  rollback only).
+  the `LPUSH` + `BRPOP` protocol (at-most-once).
 
   Payload (identical in both modes — the streams mode wraps it in a
   single-field map record `{"payload": "<json>"}` so Python's
