@@ -229,6 +229,16 @@ class RunService:
             )
             self.session.add(step)
             await self.session.commit()
+        elif event_type == "step.updated":
+            step = await self._find_step(run_id, data["index"])
+            if step is not None:
+                if "latency_ms" in data:
+                    step.latency_ms = data["latency_ms"]
+                if "tokens_in" in data:
+                    step.tokens_in = data["tokens_in"]
+                if "tokens_out" in data:
+                    step.tokens_out = data["tokens_out"]
+                await self.session.commit()
         elif event_type == "step.completed":
             step = await self._find_step(run_id, data["index"])
             if step is not None:
@@ -238,6 +248,10 @@ class RunService:
                 step.tokens_in = data.get("tokens_in")
                 step.tokens_out = data.get("tokens_out")
                 await self.session.commit()
+        elif event_type == "token.delta":
+            # SSE-only: avoid per-chunk DB commits during streaming.
+            await self._broadcast(event_type, run_id, data)
+            return
         elif event_type == "step.failed":
             step = await self._find_step(run_id, data["index"])
             if step is not None:

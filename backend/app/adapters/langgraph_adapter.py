@@ -11,6 +11,7 @@ Expected agent.config shape (all optional except when using custom graphs):
 {
   "model": "openai/gpt-4o-mini",
   "system_prompt": "You are a helpful coordinator.",
+  "stream_tokens": true,       // emit token.delta SSE; defer tokens to step.updated
   "tools": ["echo"],           // tool registry keys
   "graph": {
     "nodes": [
@@ -35,6 +36,8 @@ LangGraph ``START`` / ``END``.
 
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -300,16 +303,33 @@ class LangGraphAdapter(OrchestratorAdapter):
             await ctx.emit_message(role="system", content=system_prompt)
             await ctx.emit_message(role="user", content=user_input)
 
-            reply = await self._invoke_model(
+            stream_tokens = run_state.config.get("stream_tokens", True)
+            started = time.monotonic()
+            reply, tokens_in, tokens_out = await self._invoke_model(
+                ctx,
+                step_idx,
                 model,
                 system_prompt,
                 user_input,
                 tool_keys=tool_keys if tool_keys else None,
+                stream_tokens=bool(stream_tokens),
             )
+            latency_ms = int((time.monotonic() - started) * 1000)
 
+            await ctx.emit_step_updated(
+                index=step_idx,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+            )
             await ctx.emit_message(role="assistant", content=reply)
             await ctx.emit_step_completed(
-                index=step_idx, node=spec.id, output={"reply": reply}
+                index=step_idx,
+                node=spec.id,
+                output={"reply": reply},
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
             )
             messages = list(state.get("messages") or [])
             messages.extend(
@@ -325,24 +345,31 @@ class LangGraphAdapter(OrchestratorAdapter):
 
     async def _invoke_model(
         self,
+        ctx: AdapterContext,
+        step_index: int,
         model: str,
         system_prompt: str,
         user_input: str,
         *,
         tool_keys: list[str] | None = None,
-    ) -> str:
-        """Call the configured chat model.
+        stream_tokens: bool = True,
+    ) -> tuple[str, int, int]:
+        """Call the configured chat model, optionally streaming token deltas.
 
-        The MVP routes everything through an OpenAI-compatible Chat
-        Completions endpoint. When ``tool_keys`` are set, tool schemas are
-        attached so the model may request function calls (single round-trip).
+        Returns ``(reply, tokens_in, tokens_out)``. Token counts are taken from
+        provider usage when available; otherwise estimated from text length.
         """
         settings = get_settings()
         if not settings.openai_api_key:
-            suffix = ""
-            if tool_keys:
-                suffix = f" [tools={','.join(tool_keys)}]"
-            return f"[mock:{model}]{suffix} {user_input}"
+            return await self._invoke_mock(
+                ctx,
+                step_index,
+                model,
+                system_prompt,
+                user_input,
+                tool_keys=tool_keys,
+                stream_tokens=stream_tokens,
+            )
 
         import httpx
 
@@ -356,6 +383,11 @@ class LangGraphAdapter(OrchestratorAdapter):
         if tool_keys:
             payload["tools"] = tool_schemas(tool_keys)
 
+        if stream_tokens and not tool_keys:
+            return await self._invoke_openai_streaming(
+                ctx, step_index, settings, payload
+            )
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{settings.openai_base_url}/chat/completions",
@@ -368,5 +400,104 @@ class LangGraphAdapter(OrchestratorAdapter):
             tool_calls = message.get("tool_calls")
             if tool_calls:
                 names = [tc["function"]["name"] for tc in tool_calls]
-                return f"[tool_calls:{','.join(names)}]"
-            return message.get("content") or ""
+                reply = f"[tool_calls:{','.join(names)}]"
+            else:
+                reply = message.get("content") or ""
+            usage = data.get("usage") or {}
+            tokens_in = int(usage.get("prompt_tokens") or _estimate_tokens(system_prompt + user_input))
+            tokens_out = int(usage.get("completion_tokens") or _estimate_tokens(reply))
+            return reply, tokens_in, tokens_out
+
+    async def _invoke_mock(
+        self,
+        ctx: AdapterContext,
+        step_index: int,
+        model: str,
+        system_prompt: str,
+        user_input: str,
+        *,
+        tool_keys: list[str] | None = None,
+        stream_tokens: bool = True,
+    ) -> tuple[str, int, int]:
+        suffix = ""
+        if tool_keys:
+            suffix = f" [tools={','.join(tool_keys)}]"
+        reply = f"[mock:{model}]{suffix} {user_input}"
+        tokens_in = _estimate_tokens(system_prompt + user_input)
+        tokens_out = _estimate_tokens(reply)
+        if stream_tokens:
+            for chunk in _chunk_text(reply):
+                await ctx.emit_token_delta(step_index=step_index, delta=chunk)
+        return reply, tokens_in, tokens_out
+
+    async def _invoke_openai_streaming(
+        self,
+        ctx: AdapterContext,
+        step_index: int,
+        settings: Any,
+        payload: dict[str, Any],
+    ) -> tuple[str, int, int]:
+        import httpx
+
+        payload = {
+            **payload,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        parts: list[str] = []
+        tokens_in = 0
+        tokens_out = 0
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                f"{settings.openai_base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    usage = chunk.get("usage")
+                    if usage:
+                        tokens_in = int(usage.get("prompt_tokens") or tokens_in)
+                        tokens_out = int(
+                            usage.get("completion_tokens") or tokens_out
+                        )
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        content = delta.get("content")
+                        if content:
+                            parts.append(content)
+                            await ctx.emit_token_delta(
+                                step_index=step_index, delta=content
+                            )
+
+        reply = "".join(parts)
+        if not tokens_in:
+            tokens_in = _estimate_tokens(
+                str(payload.get("messages", ""))
+            )
+        if not tokens_out:
+            tokens_out = _estimate_tokens(reply)
+        return reply, tokens_in, tokens_out
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate when the provider omits usage (≈4 chars/token)."""
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def _chunk_text(text: str, *, size: int = 8) -> list[str]:
+    """Split text into small chunks for mock streaming."""
+    return [text[i : i + size] for i in range(0, len(text), size)] or [text]

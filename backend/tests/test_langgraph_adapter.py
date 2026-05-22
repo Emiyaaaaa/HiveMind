@@ -125,3 +125,48 @@ async def test_langgraph_unknown_tool_fails():
     result = await adapter.run(ctx)
     assert result.status == RunStatus.FAILED
     assert "Unknown tool" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_langgraph_streams_token_deltas_and_defers_step_tokens():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {"model": "openai/gpt-4o-mini", "stream_tokens": True}
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+
+    token_events = [
+        data for event, data in ctx.events if event == "token.delta"
+    ]
+    assert len(token_events) > 0
+    assert all(e["step_index"] == 0 for e in token_events)
+    reply = (result.output or {}).get("reply", "")
+    assert "".join(e["delta"] for e in token_events) == reply
+
+    updated = [
+        data for event, data in ctx.events if event == "step.updated"
+    ]
+    assert len(updated) == 1
+    assert updated[0]["tokens_in"] > 0
+    assert updated[0]["tokens_out"] > 0
+    assert updated[0]["latency_ms"] >= 0
+
+    completed = [
+        data
+        for event, data in ctx.events
+        if event == "step.completed" and data["node"] == "call_model"
+    ]
+    assert completed[0]["tokens_in"] == updated[0]["tokens_in"]
+    assert completed[0]["tokens_out"] == updated[0]["tokens_out"]
+
+
+@pytest.mark.asyncio
+async def test_langgraph_stream_tokens_disabled():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "stream_tokens": False,
+    }
+    await adapter.run(ctx)
+    assert not any(event == "token.delta" for event, _ in ctx.events)

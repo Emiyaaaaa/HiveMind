@@ -56,6 +56,39 @@ class AdapterContext:
             "step.failed", {"index": index, "node": node, "error": error, **data}
         )
 
+    async def emit_step_updated(
+        self,
+        *,
+        index: int,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
+        latency_ms: int | None = None,
+        **data: Any,
+    ) -> None:
+        """Flush deferred step metrics (tokens, latency) without completing the step."""
+        payload: dict[str, Any] = {"index": index, **data}
+        if tokens_in is not None:
+            payload["tokens_in"] = tokens_in
+        if tokens_out is not None:
+            payload["tokens_out"] = tokens_out
+        if latency_ms is not None:
+            payload["latency_ms"] = latency_ms
+        await self.emit("step.updated", payload)
+
+    async def emit_token_delta(
+        self,
+        *,
+        step_index: int,
+        delta: str,
+        role: str = "assistant",
+        **data: Any,
+    ) -> None:
+        """Stream an incremental token chunk to SSE subscribers (no DB write)."""
+        await self.emit(
+            "token.delta",
+            {"step_index": step_index, "delta": delta, "role": role, **data},
+        )
+
     async def emit_message(
         self, *, role: str, content: str, name: str | None = None, **extra: Any
     ) -> None:

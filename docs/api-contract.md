@@ -114,8 +114,22 @@ payload below as `data`:
 The supported `type` values are:
 
 `run.created`, `run.started`, `run.completed`, `run.failed`, `run.cancelled`,
-`step.started`, `step.completed`, `step.failed`, `message.created`,
-`tool_call.started`, `tool_call.completed`, `checkpoint.created`, `log`.
+`step.started`, `step.updated`, `step.completed`, `step.failed`, `token.delta`,
+`message.created`, `tool_call.started`, `tool_call.completed`,
+`checkpoint.created`, `log`.
+
+`token.delta` is SSE-only (not persisted). Payload:
+
+```json
+{ "step_index": 0, "delta": "Hel", "role": "assistant" }
+```
+
+`step.updated` flushes deferred metrics on a running step (tokens, latency)
+before `step.completed`:
+
+```json
+{ "index": 0, "tokens_in": 42, "tokens_out": 128, "latency_ms": 1200 }
+```
 
 ## Schemas
 
