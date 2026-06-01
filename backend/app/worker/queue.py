@@ -46,6 +46,56 @@ logger = get_logger("worker.queue")
 _STREAM_PAYLOAD_FIELD = "payload"
 
 
+@dataclass(frozen=True)
+class QueueStats:
+    """Point-in-time snapshot of the run-job Redis stream."""
+
+    stream_length: int
+    lag_count: int
+    pending_count: int
+    oldest_lag_seconds: float | None
+    oldest_pending_idle_seconds: float | None
+    dlq_length: int | None = None
+
+    @property
+    def backlog_count(self) -> int:
+        return self.lag_count + self.pending_count
+
+    @property
+    def consumer_delay_seconds(self) -> float | None:
+        """Worst-case wait among undelivered and in-flight-but-un-ACKed jobs."""
+        candidates = [
+            value
+            for value in (self.oldest_lag_seconds, self.oldest_pending_idle_seconds)
+            if value is not None
+        ]
+        return max(candidates) if candidates else None
+
+
+def _normalize_entry_id(entry_id: str | bytes) -> str:
+    if isinstance(entry_id, bytes):
+        return entry_id.decode()
+    return str(entry_id)
+
+
+def _entry_age_seconds(entry_id: str | bytes) -> float:
+    """Return age in seconds from a Redis stream entry id (``{ms}-{seq}``)."""
+    ms = int(_normalize_entry_id(entry_id).split("-", 1)[0])
+    now_ms = datetime.now(UTC).timestamp() * 1000
+    return max(0.0, (now_ms - ms) / 1000.0)
+
+
+def _field_value(fields: dict[str | bytes, str | bytes], key: str) -> str | None:
+    value = fields.get(key)
+    if value is not None:
+        return value if isinstance(value, str) else value.decode()
+    for field_key, field_value in fields.items():
+        normalized = field_key if isinstance(field_key, str) else field_key.decode()
+        if normalized == key:
+            return field_value if isinstance(field_value, str) else field_value.decode()
+    return None
+
+
 @dataclass
 class RunJob:
     """JSON-serialisable run job payload.
@@ -287,6 +337,87 @@ class RedisStreamsJobQueue:
     async def aclose(self) -> None:
         await self._redis.aclose()
 
+    async def collect_stats(self) -> QueueStats:
+        """Return queue depth, consumer-group lag, and oldest-wait metrics."""
+        stream_length = int(await self._redis.xlen(self._stream))
+        dlq_length = int(await self._redis.xlen(self._dlq))
+
+        lag_count = 0
+        pending_count = 0
+        oldest_lag_seconds: float | None = None
+        oldest_pending_idle_seconds: float | None = None
+        last_delivered_id = "0-0"
+
+        try:
+            groups = await self._redis.xinfo_groups(self._stream)
+        except Exception:  # pragma: no cover - stream may not exist yet
+            groups = []
+
+        group_info = next(
+            (row for row in groups if row.get("name") == self._group),
+            None,
+        )
+        if group_info is not None:
+            lag_count = int(group_info.get("lag") or 0)
+            last_delivered_id = _normalize_entry_id(
+                group_info.get("last-delivered-id") or "0-0"
+            )
+
+        try:
+            pending_summary = await self._redis.xpending(self._stream, self._group)
+            pending_count = int(pending_summary.get("pending") or 0)
+        except Exception:  # pragma: no cover - group may not exist yet
+            pending_count = int(group_info.get("pending") or 0) if group_info else 0
+
+        if pending_count == 0:
+            trailing = await self._redis.xrange(
+                self._stream,
+                min=f"({last_delivered_id}",
+                max="+",
+            )
+            if trailing:
+                computed_lag = len(trailing)
+                if computed_lag > lag_count:
+                    lag_count = computed_lag
+                oldest_lag_seconds = _entry_age_seconds(trailing[0][0])
+        elif lag_count > 0:
+            trailing = await self._redis.xrange(
+                self._stream,
+                min=f"({last_delivered_id}",
+                max="+",
+                count=1,
+            )
+            if trailing:
+                oldest_lag_seconds = _entry_age_seconds(trailing[0][0])
+
+        if pending_count > 0:
+            try:
+                pending_rows = await self._redis.xpending_range(
+                    name=self._stream,
+                    groupname=self._group,
+                    min="-",
+                    max="+",
+                    count=pending_count,
+                )
+            except Exception:  # pragma: no cover - defensive
+                pending_rows = []
+            idle_ms_values = [
+                int(row.get("time_since_delivered") if isinstance(row, dict) else row[2])
+                for row in pending_rows
+                if row is not None
+            ]
+            if idle_ms_values:
+                oldest_pending_idle_seconds = max(idle_ms_values) / 1000.0
+
+        return QueueStats(
+            stream_length=stream_length,
+            lag_count=lag_count,
+            pending_count=pending_count,
+            oldest_lag_seconds=oldest_lag_seconds,
+            oldest_pending_idle_seconds=oldest_pending_idle_seconds,
+            dlq_length=dlq_length,
+        )
+
     # ------------------------------------------------------------------ helpers
 
     async def _reap_stale(self) -> AsyncIterator[JobLease]:
@@ -378,9 +509,10 @@ class RedisStreamsJobQueue:
         )
 
     def _decode_entry(
-        self, entry_id: str, fields: dict[str, str], *, delivery_count: int
+        self, entry_id: str | bytes, fields: dict[str | bytes, str | bytes], *, delivery_count: int
     ) -> JobLease | None:
-        payload = fields.get(_STREAM_PAYLOAD_FIELD)
+        entry_id = _normalize_entry_id(entry_id)
+        payload = _field_value(fields, _STREAM_PAYLOAD_FIELD)
         if payload is None:
             logger.warning(
                 "job.missing_payload_field", stream=self._stream, entry_id=entry_id

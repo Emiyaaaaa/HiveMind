@@ -41,6 +41,10 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_REDIS_URL` | `redis://<host>:6379/0` |
 | `AGENTFLOW_REDIS_QUEUE_IMPL` | `streams` (must match `AGENTFLOW_JOBS_IMPL`) |
 | `AGENTFLOW_WORKER_CONCURRENCY` | `1`–`64`; parallel jobs per worker process (default `1`) |
+| `AGENTFLOW_JOB_QUEUE_MONITOR_ENABLED` | `true`/`false`; emit queue depth metrics and delay alerts (default `true`) |
+| `AGENTFLOW_JOB_QUEUE_MONITOR_INTERVAL_SECONDS` | Poll interval for queue metrics (default `30`) |
+| `AGENTFLOW_JOB_QUEUE_CONSUMER_DELAY_ALERT_SECONDS` | Warn when oldest lagging job exceeds this age (default `300`) |
+| `AGENTFLOW_JOB_QUEUE_DEPTH_ALERT_THRESHOLD` | Warn when `lag + pending` reaches this count (default `100`) |
 
 Optional model-provider keys (`AGENTFLOW_OPENAI_API_KEY`, etc.) are only
 needed when running adapters that call external models.
@@ -98,7 +102,8 @@ GitHub Actions job `integration` (see `.github/workflows/ci.yml`) runs:
   you add shared pub/sub bridging).
 - **Backups:** Postgres holds all durable state; Redis is ephemeral coordination.
 - **Logs:** Java API logs Spring Boot output; worker logs structlog from
-  `app.worker`.
+  `app.worker`. Look for `queue.metrics` (baseline depth/lag), `queue.consumer_delay_alert`
+  (oldest job wait exceeded threshold), and `queue.depth_alert` (backlog count exceeded).
 
 ## What not to run in production
 
