@@ -374,11 +374,9 @@ class RedisStreamsJobQueue:
                 self._stream,
                 min=f"({last_delivered_id}",
                 max="+",
+                count=1,
             )
             if trailing:
-                computed_lag = len(trailing)
-                if computed_lag > lag_count:
-                    lag_count = computed_lag
                 oldest_lag_seconds = _entry_age_seconds(trailing[0][0])
         elif lag_count > 0:
             trailing = await self._redis.xrange(
