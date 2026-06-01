@@ -11,7 +11,9 @@ from app.adapters import (  # noqa: F401 -- registers built-in adapters as a sid
     LangGraphAdapter,
 )
 from app.api.v1.router import api_router
+from app.core.http_metrics import RedMetricsMiddleware
 from app.core.logging import get_logger, setup_logging
+from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_telemetry
 from app.db.base import Base
 from app.db.session import engine
 from app.events import get_event_bus
@@ -22,6 +24,7 @@ logger = get_logger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_telemetry()
     # Ensure tables exist for SQLite dev mode. In production with Postgres,
     # `alembic upgrade head` is the source of truth.
     async with engine.begin() as conn:
@@ -34,6 +37,7 @@ async def lifespan(app: FastAPI):
     finally:
         await bus.aclose()
         await engine.dispose()
+        shutdown_telemetry()
 
 
 app = FastAPI(
@@ -49,8 +53,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RedMetricsMiddleware)
 
 app.include_router(api_router)
+instrument_fastapi(app)
 
 
 @app.get("/", include_in_schema=False)

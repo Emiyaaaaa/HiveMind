@@ -37,6 +37,27 @@ agentflow:
   events:
     channel-prefix: "agentflow:run:"
     sse-heartbeat-seconds: 15
+  otel:
+    enabled: ${AGENTFLOW_OTEL_ENABLED:false}
+    service-name: ${AGENTFLOW_OTEL_SERVICE_NAME:agentflow-api}
+
+management:
+  tracing:
+    enabled: ${AGENTFLOW_OTEL_ENABLED:false}
+    sampling:
+      probability: ${AGENTFLOW_OTEL_TRACE_SAMPLE:1.0}
+  otlp:
+    tracing:
+      endpoint: ${AGENTFLOW_OTEL_EXPORTER_ENDPOINT:http://localhost:4318/v1/traces}
+    metrics:
+      export:
+        enabled: ${AGENTFLOW_OTEL_ENABLED:false}
+        url: ${AGENTFLOW_OTEL_METRICS_ENDPOINT:http://localhost:4318/v1/metrics}
+        step: 15s
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
 
 logging:
   level:

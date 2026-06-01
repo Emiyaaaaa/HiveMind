@@ -109,27 +109,47 @@ class RunJob:
     agent_id: str
     adapter: str
     enqueued_at: str
+    trace_context: dict[str, str] | None = None
 
     @classmethod
-    def new(cls, *, run_id: str, agent_id: str, adapter: str) -> RunJob:
+    def new(
+        cls,
+        *,
+        run_id: str,
+        agent_id: str,
+        adapter: str,
+        trace_context: dict[str, str] | None = None,
+    ) -> RunJob:
+        if trace_context is None:
+            from app.core.telemetry import capture_trace_context
+
+            trace_context = capture_trace_context()
         return cls(
             run_id=run_id,
             agent_id=agent_id,
             adapter=adapter,
             enqueued_at=datetime.now(UTC).isoformat(),
+            trace_context=trace_context,
         )
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self))
+        data = asdict(self)
+        if data.get("trace_context") is None:
+            data.pop("trace_context", None)
+        return json.dumps(data)
 
     @classmethod
     def from_json(cls, payload: str) -> RunJob:
         data = json.loads(payload)
+        trace_context = data.get("trace_context")
+        if trace_context is not None and not isinstance(trace_context, dict):
+            trace_context = None
         return cls(
             run_id=data["run_id"],
             agent_id=data["agent_id"],
             adapter=data["adapter"],
             enqueued_at=data.get("enqueued_at", datetime.now(UTC).isoformat()),
+            trace_context=trace_context,
         )
 
 

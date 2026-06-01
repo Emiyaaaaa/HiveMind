@@ -13,6 +13,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.agentflow.api.config.AgentflowProperties;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -45,7 +47,8 @@ class JobProducerTest {
         when(redis.opsForStream()).thenReturn(stream);
         when(stream.add(anyString(), any(Map.class))).thenReturn(RecordId.of("1-0"));
 
-        JobProducer producer = new JobProducer(redis, objectMapper(), props("streams"));
+        JobProducer producer = new JobProducer(
+                redis, objectMapper(), props("streams"), noopTracer(), noopPropagator());
         producer.enqueue("run-1", "agent-1", "echo");
 
         @SuppressWarnings("unchecked")
@@ -69,7 +72,8 @@ class JobProducerTest {
         when(redis.opsForList()).thenReturn(list);
         when(list.leftPush(anyString(), anyString())).thenReturn(1L);
 
-        JobProducer producer = new JobProducer(redis, objectMapper(), props("list"));
+        JobProducer producer = new JobProducer(
+                redis, objectMapper(), props("list"), noopTracer(), noopPropagator());
         producer.enqueue("run-2", "agent-2", "echo");
 
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
@@ -78,5 +82,13 @@ class JobProducerTest {
         assertThat(keyCaptor.getValue()).isEqualTo("test:agentflow:jobs:runs");
         assertThat(jsonCaptor.getValue()).contains("\"run_id\":\"run-2\"");
         verify(redis, never()).opsForStream();
+    }
+
+    private static Tracer noopTracer() {
+        return mock(Tracer.class);
+    }
+
+    private static Propagator noopPropagator() {
+        return mock(Propagator.class);
     }
 }

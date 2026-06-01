@@ -11,6 +11,7 @@ public class AgentflowProperties {
     private Jobs jobs = new Jobs();
     private Cancel cancel = new Cancel();
     private Events events = new Events();
+    private Otel otel = new Otel();
 
     public String getVersion() {
         return version;
@@ -50,6 +51,35 @@ public class AgentflowProperties {
 
     public void setEvents(Events events) {
         this.events = events;
+    }
+
+    public Otel getOtel() {
+        return otel;
+    }
+
+    public void setOtel(Otel otel) {
+        this.otel = otel;
+    }
+
+    public static class Otel {
+        private boolean enabled = false;
+        private String serviceName = "agentflow-api";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getServiceName() {
+            return serviceName;
+        }
+
+        public void setServiceName(String serviceName) {
+            this.serviceName = serviceName;
+        }
     }
 
     public static class Jobs {

@@ -49,6 +49,28 @@ cd backend && uv run alembic upgrade head
 Optional model-provider keys (`AGENTFLOW_OPENAI_API_KEY`, etc.) are only
 needed when running adapters that call external models.
 
+### OpenTelemetry (optional)
+
+| Variable | Component | Description |
+| --- | --- | --- |
+| `AGENTFLOW_OTEL_ENABLED` | API + worker | `true` to export traces and RED metrics via OTLP |
+| `AGENTFLOW_OTEL_SERVICE_NAME` | API + worker | `service.name` (defaults: `agentflow-api`, `agentflow-worker`) |
+| `AGENTFLOW_OTEL_EXPORTER_ENDPOINT` | API | OTLP HTTP traces URL (default `http://localhost:4318/v1/traces`) |
+| `AGENTFLOW_OTEL_METRICS_ENDPOINT` | API | OTLP HTTP metrics URL (default `http://localhost:4318/v1/metrics`) |
+| `AGENTFLOW_OTEL_EXPORTER_ENDPOINT` | Worker | OTLP HTTP base URL without path (default `http://localhost:4318`) |
+
+RED metric names (both stacks): `agentflow.http.server.*`, `agentflow.worker.job.*`,
+`agentflow.adapter.run.*`. Run jobs carry W3C `trace_context` in the Redis payload so
+worker spans link to the API trace.
+
+Local collector + Prometheus scrape:
+
+```bash
+docker compose --profile observability --profile app up --build
+# OTLP HTTP :4318, Prometheus exporter :8889
+export AGENTFLOW_OTEL_ENABLED=true
+```
+
 ### Frontend
 
 | Variable | Production value |
