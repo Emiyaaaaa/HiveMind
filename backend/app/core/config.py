@@ -135,6 +135,35 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
 
+    otel_enabled: bool = Field(
+        default=False,
+        description="Enable OpenTelemetry traces and RED metrics export via OTLP.",
+    )
+    otel_service_name: str = Field(
+        default="agentflow-worker",
+        description=(
+            "OTel ``service.name`` resource attribute. Override per process "
+            "(e.g. agentflow-api vs agentflow-worker)."
+        ),
+    )
+    otel_service_version: str = Field(
+        default="0.1.0",
+        description="OTel ``service.version`` resource attribute.",
+    )
+    otel_exporter_endpoint: str | None = Field(
+        default=None,
+        description=(
+            "OTLP HTTP base URL (no path). Defaults to http://localhost:4318 "
+            "when unset."
+        ),
+    )
+    otel_metric_export_interval_ms: int = Field(
+        default=15_000,
+        ge=1_000,
+        le=300_000,
+        description="Periodic metric reader export interval in milliseconds.",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

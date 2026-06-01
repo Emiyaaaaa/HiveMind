@@ -21,6 +21,7 @@ import signal
 from app.adapters import EchoAdapter, LangGraphAdapter  # noqa: F401 - register
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
+from app.core.telemetry import setup_telemetry, shutdown_telemetry, trace_worker_job
 from app.db.base import Base
 from app.db.session import engine
 from app.events import get_event_bus
@@ -64,7 +65,12 @@ async def _process_lease(
         deliveries=lease.delivery_count,
     )
     try:
-        await executor.execute(job.run_id, job.adapter)
+        await trace_worker_job(
+            adapter=job.adapter,
+            run_id=job.run_id,
+            trace_context=job.trace_context,
+            coro=executor.execute(job.run_id, job.adapter),
+        )
     except asyncio.CancelledError:
         logger.info("job.cancelled", run_id=job.run_id)
         await queue.ack(lease)
@@ -127,6 +133,7 @@ async def _consume_loop(
 
 async def run_forever() -> None:
     setup_logging()
+    setup_telemetry()
     settings = get_settings()
     concurrency = settings.worker_concurrency
     logger.info("worker.starting", concurrency=concurrency)
@@ -173,6 +180,7 @@ async def run_forever() -> None:
         await cancel_registry.aclose()
         await bus.aclose()
         await engine.dispose()
+        shutdown_telemetry()
 
 
 def main() -> None:

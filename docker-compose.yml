@@ -41,8 +41,23 @@ services:
       AGENTFLOW_REDIS_URL: redis://redis:6379/0
       AGENTFLOW_WORKER_MODE: queue
       AGENTFLOW_LOG_LEVEL: INFO
+      AGENTFLOW_OTEL_ENABLED: ${AGENTFLOW_OTEL_ENABLED:-false}
+      AGENTFLOW_OTEL_EXPORTER_ENDPOINT: ${AGENTFLOW_OTEL_EXPORTER_ENDPOINT:-http://otel-collector:4318}
+      AGENTFLOW_OTEL_SERVICE_NAME: agentflow-worker
     profiles:
       - app
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: agentflow-otel
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./docker/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4318:4318"
+      - "8889:8889"
+    profiles:
+      - observability
 
   api:
     build: ./backend-java
@@ -59,6 +74,10 @@ services:
       AGENTFLOW_REDIS_HOST: redis
       AGENTFLOW_REDIS_PORT: "6379"
       AGENTFLOW_SERVER_PORT: "8000"
+      AGENTFLOW_OTEL_ENABLED: ${AGENTFLOW_OTEL_ENABLED:-false}
+      AGENTFLOW_OTEL_EXPORTER_ENDPOINT: ${AGENTFLOW_OTEL_EXPORTER_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      AGENTFLOW_OTEL_METRICS_ENDPOINT: ${AGENTFLOW_OTEL_METRICS_ENDPOINT:-http://otel-collector:4318/v1/metrics}
+      AGENTFLOW_OTEL_SERVICE_NAME: agentflow-api
     ports:
       - "8000:8000"
     healthcheck:

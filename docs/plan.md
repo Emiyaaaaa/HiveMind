@@ -46,7 +46,7 @@
 - [ ] Adapter 写入 token/成本；Run 级汇总
 - [ ] `POST /v1/runs/{id}/retry` 与 `POST /v1/runs/{id}/resume`
 - [ ] SSE 事件重放（`Last-Event-ID`）
-- [ ] OpenTelemetry 全链路 trace
+- [x] OpenTelemetry 全链路 trace（API → worker → adapter，RED 指标 + trace 传播）
 - [ ] 队列深度、worker 利用率、p95 耗时等指标
 - [x] Compose 集成测试与 CI（`integration` job）
 

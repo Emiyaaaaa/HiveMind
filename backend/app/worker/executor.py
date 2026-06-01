@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.adapters import AdapterContext, get_adapter
 from app.core.logging import get_logger
+from app.core.telemetry import trace_adapter_run
 from app.db.session import SessionLocal
 from app.events import EventBus
 from app.models import Agent, RunStatus
@@ -88,7 +89,9 @@ class RunExecutor:
             watcher = asyncio.create_task(self._cancel_watcher(run.id, task))
             try:
                 try:
-                    result = await adapter.run(ctx)
+                    result = await trace_adapter_run(
+                        adapter_name, run_id, adapter.run(ctx)
+                    )
                 except asyncio.CancelledError:
                     # Cancellation may interrupt a flush; clear the session
                     # so the finalising write can proceed.
