@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     # Redis job queue and a separate worker process (or the Java API server's
     # producer) is responsible for dispatching execution.
     worker_mode: Literal["inline", "queue"] = "inline"
+    worker_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=64,
+        description=(
+            "Maximum number of run jobs this worker process executes in parallel. "
+            "Scale out with additional worker replicas for more throughput."
+        ),
+    )
 
     job_queue_key: str = Field(
         default="agentflow:jobs:runs",
