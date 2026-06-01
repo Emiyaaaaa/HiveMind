@@ -98,6 +98,34 @@ class Settings(BaseSettings):
             "`{job_queue_key}:dlq` when unset."
         ),
     )
+    job_queue_monitor_enabled: bool = Field(
+        default=True,
+        description=(
+            "When true, the worker periodically samples Redis stream depth "
+            "and emits consumer-delay / backlog alerts."
+        ),
+    )
+    job_queue_monitor_interval_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=600,
+        description="How often the worker polls queue depth and lag metrics.",
+    )
+    job_queue_consumer_delay_alert_seconds: float = Field(
+        default=300.0,
+        ge=1.0,
+        description=(
+            "Log a warning when the oldest undelivered or un-ACKed job has "
+            "been waiting at least this many seconds."
+        ),
+    )
+    job_queue_depth_alert_threshold: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Log a warning when lag plus pending entries reaches this count."
+        ),
+    )
     cancel_key_prefix: str = Field(
         default="agentflow:cancel:",
         description="Redis key prefix the API uses to signal cancel for a run id.",

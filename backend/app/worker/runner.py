@@ -26,6 +26,7 @@ from app.db.session import engine
 from app.events import get_event_bus
 from app.worker.cancel import get_cancel_registry
 from app.worker.executor import RunExecutor
+from app.worker.monitor import run_queue_monitor
 from app.worker.queue import JobLease, JobQueue, get_job_queue
 
 logger = get_logger("worker.runner")
@@ -150,6 +151,12 @@ async def run_forever() -> None:
         except NotImplementedError:  # pragma: no cover - Windows
             signal.signal(sig, lambda *_: _request_stop())
 
+    monitor_task: asyncio.Task[None] | None = None
+    if settings.job_queue_monitor_enabled:
+        monitor_task = asyncio.create_task(
+            run_queue_monitor(queue, stop, settings=settings)
+        )
+
     try:
         await _consume_loop(
             executor=executor,
@@ -158,6 +165,9 @@ async def run_forever() -> None:
             concurrency=concurrency,
         )
     finally:
+        if monitor_task is not None:
+            stop.set()
+            await monitor_task
         logger.info("worker.shutting_down")
         await queue.aclose()
         await cancel_registry.aclose()
