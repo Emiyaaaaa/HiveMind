@@ -7,9 +7,10 @@ surfaced through ``RunStatus.FAILED`` and never bring the loop down; a
 crash before ACK leaves the entry in the consumer group's pending list so
 another consumer can ``XAUTOCLAIM`` it once the idle timeout elapses.
 
-The worker is intentionally single-process and concurrency-safe through
-Redis: multiple workers can compete on the same stream within one
-consumer group.
+Within one process, ``Settings.worker_concurrency`` caps how many jobs run
+at once (back-pressure via a semaphore before the next lease is taken).
+Across processes, multiple workers compete on the same Redis stream
+consumer group safely.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import asyncio
 import signal
 
 from app.adapters import EchoAdapter, LangGraphAdapter  # noqa: F401 - register
+from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.db.base import Base
 from app.db.session import engine
@@ -73,9 +75,45 @@ async def _process_lease(
     logger.info("job.completed", run_id=job.run_id)
 
 
+async def _consume_loop(
+    *,
+    executor: RunExecutor,
+    queue: JobQueue,
+    stop: asyncio.Event,
+    concurrency: int,
+) -> None:
+    """Pull leases from the queue and run up to ``concurrency`` jobs at once."""
+    slots = asyncio.Semaphore(concurrency)
+    in_flight: set[asyncio.Task[None]] = set()
+
+    async def _run_job(lease: JobLease) -> None:
+        try:
+            await _process_lease(executor, queue, lease)
+        finally:
+            slots.release()
+
+    try:
+        async for lease in queue.consume():
+            if stop.is_set():
+                break
+            await slots.acquire()
+            if stop.is_set():
+                slots.release()
+                break
+            task = asyncio.create_task(_run_job(lease))
+            in_flight.add(task)
+            task.add_done_callback(in_flight.discard)
+    finally:
+        if in_flight:
+            logger.info("worker.draining", pending=len(in_flight))
+            await asyncio.gather(*in_flight, return_exceptions=True)
+
+
 async def run_forever() -> None:
     setup_logging()
-    logger.info("worker.starting")
+    settings = get_settings()
+    concurrency = settings.worker_concurrency
+    logger.info("worker.starting", concurrency=concurrency)
     await _ensure_schema()
 
     bus = get_event_bus()
@@ -98,10 +136,12 @@ async def run_forever() -> None:
             signal.signal(sig, lambda *_: _request_stop())
 
     try:
-        async for lease in queue.consume():
-            if stop.is_set():
-                break
-            await _process_lease(executor, queue, lease)
+        await _consume_loop(
+            executor=executor,
+            queue=queue,
+            stop=stop,
+            concurrency=concurrency,
+        )
     finally:
         logger.info("worker.shutting_down")
         await queue.aclose()

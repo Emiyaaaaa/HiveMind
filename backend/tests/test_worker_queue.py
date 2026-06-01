@@ -313,3 +313,69 @@ async def test_runner_does_not_ack_on_infrastructure_error(monkeypatch):
     await runner_module._process_lease(_BrokenExecutor(), queue, lease)  # type: ignore[arg-type]
 
     assert queue.acked == []
+
+
+def _leases_for_runs(run_ids: list[str], agent_id: str) -> list[JobLease]:
+    return [
+        JobLease(
+            job=RunJob.new(run_id=run_id, agent_id=agent_id, adapter="echo"),
+            token=f"entry-{index}",
+        )
+        for index, run_id in enumerate(run_ids)
+    ]
+
+
+class _FiniteQueue:
+    """Yields a fixed list of leases then ends, for consume-loop tests."""
+
+    def __init__(self, leases: list[JobLease]) -> None:
+        self._leases = leases
+        self.acked: list[JobLease] = []
+
+    async def ack(self, lease: JobLease) -> None:
+        self.acked.append(lease)
+
+    async def aclose(self) -> None:  # pragma: no cover - unused
+        return None
+
+    async def consume(self):
+        for lease in self._leases:
+            yield lease
+
+
+@pytest.mark.asyncio
+async def test_consume_loop_respects_worker_concurrency():
+    from app.worker import runner as runner_module
+
+    active = [0]
+    hold = asyncio.Event()
+
+    class _BlockingExecutor:
+        async def execute(self, run_id: str, adapter: str) -> None:
+            active[0] += 1
+            try:
+                await hold.wait()
+            finally:
+                active[0] -= 1
+
+    queue = _FiniteQueue(_leases_for_runs(["r1", "r2", "r3"], "agent-1"))
+    stop = asyncio.Event()
+
+    loop_task = asyncio.create_task(
+        runner_module._consume_loop(
+            executor=_BlockingExecutor(),  # type: ignore[arg-type]
+            queue=queue,  # type: ignore[arg-type]
+            stop=stop,
+            concurrency=2,
+        )
+    )
+
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if active[0] >= 2:
+            break
+    assert active[0] == 2
+
+    hold.set()
+    await asyncio.wait_for(loop_task, timeout=2.0)
+    assert len(queue.acked) == 3

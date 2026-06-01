@@ -40,6 +40,7 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_DATABASE_URL` | `postgresql+asyncpg://<user>:<pass>@<host>:5432/agentflow` |
 | `AGENTFLOW_REDIS_URL` | `redis://<host>:6379/0` |
 | `AGENTFLOW_REDIS_QUEUE_IMPL` | `streams` (must match `AGENTFLOW_JOBS_IMPL`) |
+| `AGENTFLOW_WORKER_CONCURRENCY` | `1`–`64`; parallel jobs per worker process (default `1`) |
 
 Optional model-provider keys (`AGENTFLOW_OPENAI_API_KEY`, etc.) are only
 needed when running adapters that call external models.
@@ -62,7 +63,8 @@ docker compose --profile app up --build
 
 This starts Postgres, Redis, the Java API (`localhost:8000`), and a single
 worker. Scale workers horizontally by running additional `worker` containers
-(same Redis consumer group, distinct consumer names).
+(same Redis consumer group, distinct consumer names), or raise
+`AGENTFLOW_WORKER_CONCURRENCY` to run more jobs in parallel inside one process.
 
 Health check: `GET /v1/health` should return `{"status":"ok",...}`.
 
