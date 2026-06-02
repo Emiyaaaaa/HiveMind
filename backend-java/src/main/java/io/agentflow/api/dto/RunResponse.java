@@ -20,10 +20,13 @@ public class RunResponse {
     private List<StepResponse> steps;
     private List<MessageResponse> messages;
     private List<CheckpointResponse> checkpoints;
+    private RunUsage usage = RunUsage.empty();
 
     /** Run header only; nested collections are empty (used by {@code GET /v1/runs}). */
     public static RunResponse fromEntity(RunEntity entity) {
-        return fromEntity(entity, List.of(), List.of(), List.of());
+        RunUsage stored = RunUsage.fromMetadata(entity.getMetadata());
+        RunUsage usage = stored != null ? stored : RunUsage.empty();
+        return fromEntity(entity, List.of(), List.of(), List.of(), usage);
     }
 
     public static RunResponse fromEntity(
@@ -31,6 +34,21 @@ public class RunResponse {
             List<StepResponse> steps,
             List<MessageResponse> messages,
             List<CheckpointResponse> checkpoints) {
+        RunUsage usage = steps.isEmpty()
+                ? RunUsage.fromMetadata(entity.getMetadata())
+                : RunUsage.fromSteps(steps);
+        if (usage == null) {
+            usage = RunUsage.empty();
+        }
+        return fromEntity(entity, steps, messages, checkpoints, usage);
+    }
+
+    public static RunResponse fromEntity(
+            RunEntity entity,
+            List<StepResponse> steps,
+            List<MessageResponse> messages,
+            List<CheckpointResponse> checkpoints,
+            RunUsage usage) {
         RunResponse dto = new RunResponse();
         dto.id = entity.getId();
         dto.agentId = entity.getAgentId();
@@ -44,6 +62,7 @@ public class RunResponse {
         dto.steps = steps;
         dto.messages = messages;
         dto.checkpoints = checkpoints;
+        dto.usage = usage;
         return dto;
     }
 
@@ -93,5 +112,9 @@ public class RunResponse {
 
     public List<CheckpointResponse> getCheckpoints() {
         return checkpoints;
+    }
+
+    public RunUsage getUsage() {
+        return usage;
     }
 }

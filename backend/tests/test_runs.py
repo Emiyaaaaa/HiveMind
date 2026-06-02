@@ -33,6 +33,11 @@ async def test_echo_run_end_to_end(client):
     assert len(body["steps"]) == 3
     assert {step["node"] for step in body["steps"]} == {"plan", "tool", "reply"}
     assert any(msg["role"] == "assistant" for msg in body["messages"])
+    assert body["usage"]["tokens_in"] > 0
+    assert body["usage"]["tokens_out"] > 0
+    reply_step = next(s for s in body["steps"] if s["node"] == "reply")
+    assert reply_step["tokens_in"] is not None
+    assert reply_step["cost_usd"] is not None
 
 
 async def _poll_until(client, run_id: str, statuses: set[str], *, attempts: int = 80):

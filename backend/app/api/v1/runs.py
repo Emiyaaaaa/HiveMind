@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.events import EventBus, get_event_bus
-from app.schemas.run import RunCreate, RunRead, RunResume, RunRetry
+from app.schemas.run import RunCreate, RunRead, RunResume, RunRetry, run_read_from_orm
 from app.services.run_service import (
     AgentNotFound,
     RunConflict,
@@ -32,7 +32,7 @@ async def create_run(
 
     await service.start_run(run.id)
     run = await service.get_run(run.id, with_relations=True)
-    return RunRead.model_validate(run)
+    return run_read_from_orm(run)
 
 
 @router.get("", response_model=list[RunRead])
@@ -40,7 +40,7 @@ async def list_runs(
     limit: int = 50, service: RunService = Depends(get_run_service)
 ) -> list[RunRead]:
     runs = await service.list_runs(limit=limit)
-    return [RunRead.model_validate(run) for run in runs]
+    return [run_read_from_orm(run) for run in runs]
 
 
 @router.get("/{run_id}", response_model=RunRead)
@@ -51,7 +51,7 @@ async def get_run(
         run = await service.get_run(run_id, with_relations=True)
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
-    return RunRead.model_validate(run)
+    return run_read_from_orm(run)
 
 
 @router.post("/{run_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
@@ -76,7 +76,7 @@ async def retry_run(
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
     except RunConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return RunRead.model_validate(run)
+    return run_read_from_orm(run)
 
 
 @router.post("/{run_id}/resume", response_model=RunRead, status_code=status.HTTP_202_ACCEPTED)
@@ -91,4 +91,4 @@ async def resume_run(
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
     except RunConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return RunRead.model_validate(run)
+    return run_read_from_orm(run)

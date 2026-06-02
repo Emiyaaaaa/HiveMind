@@ -18,6 +18,8 @@ from typing import Any
 
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
 from app.models.run import RunStatus
+from app.runtime.pricing import estimate_cost_usd
+from app.runtime.tokens import estimate_tokens
 _STEPS = ("plan", "tool", "reply")
 
 
@@ -103,10 +105,25 @@ class EchoAdapter(OrchestratorAdapter):
                 reply = f"{reply} ({approval})"
 
         idx = _step_index(ctx, 2, start)
+        model = str(ctx.agent_config.get("model", "echo"))
+        tokens_in = estimate_tokens(str(prompt))
+        tokens_out = estimate_tokens(reply)
+        cost_usd = estimate_cost_usd(model, tokens_in, tokens_out)
         await ctx.emit_step_started(index=idx, node="reply")
         await ctx.emit_message(role="assistant", content=reply)
+        await ctx.emit_step_updated(
+            index=idx,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_usd=cost_usd,
+        )
         await ctx.emit_step_completed(
-            index=idx, node="reply", output={"reply": reply}
+            index=idx,
+            node="reply",
+            output={"reply": reply},
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_usd=cost_usd,
         )
 
         return AdapterResult(status=RunStatus.SUCCEEDED, output={"reply": reply})

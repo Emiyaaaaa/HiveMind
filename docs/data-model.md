@@ -43,6 +43,7 @@ erDiagram
         int latency_ms
         int tokens_in
         int tokens_out
+        float cost_usd
     }
     Message {
         string id PK

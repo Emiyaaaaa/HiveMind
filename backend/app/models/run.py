@@ -97,6 +97,7 @@ class Step(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(nullable=True)
 
     run: Mapped[Run] = relationship(back_populates="steps")
     tool_calls: Mapped[list[ToolCall]] = relationship(

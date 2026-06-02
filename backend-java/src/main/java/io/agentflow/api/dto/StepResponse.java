@@ -18,6 +18,7 @@ public class StepResponse {
     private Integer latencyMs;
     private Integer tokensIn;
     private Integer tokensOut;
+    private Double costUsd;
     private List<ToolCallResponse> toolCalls;
     private Instant createdAt;
     private Instant updatedAt;
@@ -34,6 +35,7 @@ public class StepResponse {
         dto.latencyMs = entity.getLatencyMs();
         dto.tokensIn = entity.getTokensIn();
         dto.tokensOut = entity.getTokensOut();
+        dto.costUsd = entity.getCostUsd();
         dto.toolCalls = toolCalls;
         dto.createdAt = entity.getCreatedAt();
         dto.updatedAt = entity.getUpdatedAt();
@@ -78,6 +80,10 @@ public class StepResponse {
 
     public Integer getTokensOut() {
         return tokensOut;
+    }
+
+    public Double getCostUsd() {
+        return costUsd;
     }
 
     public List<ToolCallResponse> getToolCalls() {

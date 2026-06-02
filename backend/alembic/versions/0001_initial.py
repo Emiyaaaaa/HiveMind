@@ -68,6 +68,7 @@ def upgrade() -> None:
         sa.Column("latency_ms", sa.Integer, nullable=True),
         sa.Column("tokens_in", sa.Integer, nullable=True),
         sa.Column("tokens_out", sa.Integer, nullable=True),
+        sa.Column("cost_usd", sa.Float, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )

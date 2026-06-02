@@ -47,6 +47,8 @@ from app.adapters.tool_registry import ToolDefinition, resolve_tools, tool_schem
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.run import RunStatus
+from app.runtime.pricing import estimate_cost_usd
+from app.runtime.tokens import estimate_tokens
 
 logger = get_logger("adapter.langgraph")
 
@@ -321,10 +323,13 @@ class LangGraphAdapter(OrchestratorAdapter):
             )
             latency_ms = int((time.monotonic() - started) * 1000)
 
+            cost_usd = estimate_cost_usd(model, tokens_in, tokens_out)
+
             await ctx.emit_step_updated(
                 index=step_idx,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                cost_usd=cost_usd,
                 latency_ms=latency_ms,
             )
             await ctx.emit_message(role="assistant", content=reply)
@@ -334,6 +339,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 output={"reply": reply},
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                cost_usd=cost_usd,
                 latency_ms=latency_ms,
             )
             messages = list(state.get("messages") or [])
@@ -414,8 +420,8 @@ class LangGraphAdapter(OrchestratorAdapter):
             else:
                 reply = message.get("content") or ""
             usage = data.get("usage") or {}
-            tokens_in = int(usage.get("prompt_tokens") or _estimate_tokens(system_prompt + user_input))
-            tokens_out = int(usage.get("completion_tokens") or _estimate_tokens(reply))
+            tokens_in = int(usage.get("prompt_tokens") or estimate_tokens(system_prompt + user_input))
+            tokens_out = int(usage.get("completion_tokens") or estimate_tokens(reply))
             return reply, tokens_in, tokens_out
 
     async def _invoke_mock(
@@ -433,8 +439,8 @@ class LangGraphAdapter(OrchestratorAdapter):
         if tool_keys:
             suffix = f" [tools={','.join(tool_keys)}]"
         reply = f"[mock:{model}]{suffix} {user_input}"
-        tokens_in = _estimate_tokens(system_prompt + user_input)
-        tokens_out = _estimate_tokens(reply)
+        tokens_in = estimate_tokens(system_prompt + user_input)
+        tokens_out = estimate_tokens(reply)
         if stream_tokens:
             for chunk in _chunk_text(reply):
                 await ctx.emit_token_delta(step_index=step_index, delta=chunk)
@@ -493,19 +499,12 @@ class LangGraphAdapter(OrchestratorAdapter):
 
         reply = "".join(parts)
         if not tokens_in:
-            tokens_in = _estimate_tokens(
+            tokens_in = estimate_tokens(
                 str(payload.get("messages", ""))
             )
         if not tokens_out:
-            tokens_out = _estimate_tokens(reply)
+            tokens_out = estimate_tokens(reply)
         return reply, tokens_in, tokens_out
-
-
-def _estimate_tokens(text: str) -> int:
-    """Rough token estimate when the provider omits usage (≈4 chars/token)."""
-    if not text:
-        return 0
-    return max(1, len(text) // 4)
 
 
 def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
