@@ -65,15 +65,18 @@ class AdapterContext:
         index: int,
         tokens_in: int | None = None,
         tokens_out: int | None = None,
+        cost_usd: float | None = None,
         latency_ms: int | None = None,
         **data: Any,
     ) -> None:
-        """Flush deferred step metrics (tokens, latency) without completing the step."""
+        """Flush deferred step metrics (tokens, cost, latency) without completing the step."""
         payload: dict[str, Any] = {"index": index, **data}
         if tokens_in is not None:
             payload["tokens_in"] = tokens_in
         if tokens_out is not None:
             payload["tokens_out"] = tokens_out
+        if cost_usd is not None:
+            payload["cost_usd"] = cost_usd
         if latency_ms is not None:
             payload["latency_ms"] = latency_ms
         await self.emit("step.updated", payload)

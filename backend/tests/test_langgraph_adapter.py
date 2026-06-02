@@ -149,6 +149,7 @@ async def test_langgraph_streams_token_deltas_and_defers_step_tokens():
     assert len(updated) == 1
     assert updated[0]["tokens_in"] > 0
     assert updated[0]["tokens_out"] > 0
+    assert updated[0]["cost_usd"] >= 0
     assert updated[0]["latency_ms"] >= 0
 
     completed = [

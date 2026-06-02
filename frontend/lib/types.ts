@@ -26,9 +26,17 @@ export interface Step {
   latency_ms: number | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  cost_usd: number | null;
   tool_calls: ToolCall[];
   created_at: string;
   updated_at: string;
+}
+
+export interface RunUsage {
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  latency_ms: number | null;
 }
 
 export interface Message {
@@ -62,6 +70,7 @@ export interface Run {
   steps: Step[];
   messages: Message[];
   checkpoints: Checkpoint[];
+  usage: RunUsage;
 }
 
 export interface Agent {

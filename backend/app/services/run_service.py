@@ -30,6 +30,7 @@ from app.models import (
     Step,
     ToolCall,
 )
+from app.runtime.usage import aggregate_run_usage
 from app.schemas.run import EventType, RunCreate, RunEvent, RunResume, RunRetry
 from app.runtime.resume_context import (
     RunResumeContext,
@@ -283,16 +284,26 @@ class RunService:
         output: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> None:
-        run = await self._get_run(run_id)
+        run = await self._get_run(run_id, with_relations=True)
         run.status = status
         if output is not None:
             run.output = output
         if error is not None:
             run.error = error
+        usage = aggregate_run_usage(run.steps)
+        if usage.tokens_in or usage.tokens_out or usage.cost_usd:
+            meta = dict(run.metadata_ or {})
+            meta["usage"] = usage.model_dump()
+            run.metadata_ = meta
         await self.session.commit()
 
+        usage_payload = usage.model_dump()
         if status == RunStatus.SUCCEEDED:
-            await self._broadcast("run.completed", run_id, {"output": output})
+            await self._broadcast(
+                "run.completed",
+                run_id,
+                {"output": output, "usage": usage_payload},
+            )
         elif status == RunStatus.FAILED:
             await self._broadcast("run.failed", run_id, {"error": error})
         elif status == RunStatus.CANCELLED:
@@ -338,6 +349,8 @@ class RunService:
                     step.tokens_in = data["tokens_in"]
                 if "tokens_out" in data:
                     step.tokens_out = data["tokens_out"]
+                if "cost_usd" in data:
+                    step.cost_usd = data["cost_usd"]
                 await self.session.commit()
         elif event_type == "step.completed":
             step = await self._find_step(run_id, data["index"])
@@ -350,6 +363,8 @@ class RunService:
                     step.tokens_in = data["tokens_in"]
                 if "tokens_out" in data:
                     step.tokens_out = data["tokens_out"]
+                if "cost_usd" in data:
+                    step.cost_usd = data["cost_usd"]
                 await self.session.commit()
         elif event_type == "token.delta":
             # SSE-only: avoid per-chunk DB commits during streaming.

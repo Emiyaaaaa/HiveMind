@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { StatusBadge } from "@/components/StatusBadge";
 import { api } from "@/lib/api";
+import { formatCostUsd, hasUsageMetrics } from "@/lib/usage";
 
 export default function RunsPage() {
   const runs = useQuery({
@@ -31,6 +32,7 @@ export default function RunsPage() {
               <th className="px-4 py-2 font-medium">Run</th>
               <th className="px-4 py-2 font-medium">Adapter</th>
               <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium">Usage</th>
               <th className="px-4 py-2 font-medium">Created</th>
             </tr>
           </thead>
@@ -45,6 +47,18 @@ export default function RunsPage() {
                 <td className="px-4 py-2 font-mono text-xs">{r.adapter}</td>
                 <td className="px-4 py-2">
                   <StatusBadge status={r.status} />
+                </td>
+                <td className="px-4 py-2 text-xs font-mono text-muted">
+                  {hasUsageMetrics(r.usage) ? (
+                    <span>
+                      {r.usage.tokens_in + r.usage.tokens_out} tok ·{" "}
+                      <span className="text-accent">
+                        {formatCostUsd(r.usage.cost_usd)}
+                      </span>
+                    </span>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td className="px-4 py-2 text-xs text-muted">
                   {new Date(r.created_at).toLocaleString()}

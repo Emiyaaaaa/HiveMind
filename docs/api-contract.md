@@ -163,7 +163,7 @@ The supported `type` values are:
 before `step.completed`:
 
 ```json
-{ "index": 0, "tokens_in": 42, "tokens_out": 128, "latency_ms": 1200 }
+{ "index": 0, "tokens_in": 42, "tokens_out": 128, "cost_usd": 0.00012, "latency_ms": 1200 }
 ```
 
 ## Schemas
@@ -198,6 +198,22 @@ before `step.completed`:
   steps: Step[];
   messages: Message[];
   checkpoints: Checkpoint[];
+  usage: RunUsage;
+}
+```
+
+### `RunUsage`
+
+Aggregated token and cost metrics for a run. Computed from `steps` when
+present; otherwise read from `metadata.usage` (written when the run reaches a
+terminal state).
+
+```ts
+{
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  latency_ms: number | null;
 }
 ```
 
@@ -215,6 +231,7 @@ before `step.completed`:
   latency_ms: number | null;
   tokens_in: number | null;
   tokens_out: number | null;
+  cost_usd: number | null;
   tool_calls: ToolCall[];
   created_at: string;
   updated_at: string;

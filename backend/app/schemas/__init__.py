@@ -5,6 +5,7 @@ from app.schemas.run import (
     RunCreate,
     RunEvent,
     RunRead,
+    run_read_from_orm,
     StepRead,
     ToolCallRead,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "RunCreate",
     "RunEvent",
     "RunRead",
+    "run_read_from_orm",
     "StepRead",
     "ToolCallRead",
 ]

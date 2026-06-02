@@ -55,6 +55,9 @@ public class StepEntity {
     @Column(name = "tokens_out")
     private Integer tokensOut;
 
+    @Column(name = "cost_usd")
+    private Double costUsd;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -160,6 +163,14 @@ public class StepEntity {
 
     public void setTokensOut(Integer tokensOut) {
         this.tokensOut = tokensOut;
+    }
+
+    public Double getCostUsd() {
+        return costUsd;
+    }
+
+    public void setCostUsd(Double costUsd) {
+        this.costUsd = costUsd;
     }
 
     public Instant getCreatedAt() {

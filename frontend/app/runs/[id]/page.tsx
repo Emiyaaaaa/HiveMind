@@ -6,6 +6,8 @@ import { use } from "react";
 
 import { EventStream } from "@/components/EventStream";
 import { StatusBadge } from "@/components/StatusBadge";
+import { TokenCostSummary } from "@/components/TokenCostSummary";
+import { formatCostUsd } from "@/lib/usage";
 import { api } from "@/lib/api";
 
 interface PageProps {
@@ -77,6 +79,11 @@ export default function RunDetailPage({ params }: PageProps) {
         </div>
       ) : null}
 
+      <section className="rounded-lg border border-border bg-surface p-4 space-y-3">
+        <h2 className="font-medium">Token &amp; cost</h2>
+        <TokenCostSummary usage={r.usage} steps={r.steps} />
+      </section>
+
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-border bg-surface p-4 space-y-2">
           <h2 className="font-medium">Input</h2>
@@ -106,6 +113,16 @@ export default function RunDetailPage({ params }: PageProps) {
                 <StatusBadge status={s.status} />
                 {s.latency_ms != null && (
                   <span className="text-xs text-muted">{s.latency_ms}ms</span>
+                )}
+                {(s.tokens_in != null || s.tokens_out != null) && (
+                  <span className="text-xs text-muted font-mono">
+                    {s.tokens_in ?? 0}→{s.tokens_out ?? 0} tok
+                  </span>
+                )}
+                {s.cost_usd != null && (
+                  <span className="text-xs text-accent font-mono">
+                    {formatCostUsd(s.cost_usd)}
+                  </span>
                 )}
               </div>
               {s.tool_calls.length > 0 && (

@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.run import RunStatus
+from app.models.run import Run, RunStatus
+from app.runtime.usage import RunUsage, aggregate_run_usage, usage_from_metadata
 
 
 class RunCreate(BaseModel):
@@ -67,6 +68,7 @@ class StepRead(BaseModel):
     latency_ms: int | None
     tokens_in: int | None
     tokens_out: int | None
+    cost_usd: float | None = None
     tool_calls: list[ToolCallRead] = []
     created_at: datetime
     updated_at: datetime
@@ -96,6 +98,24 @@ class RunRead(BaseModel):
     steps: list[StepRead] = []
     messages: list[MessageRead] = []
     checkpoints: list[CheckpointRead] = []
+    usage: RunUsage = Field(default_factory=RunUsage)
+
+    @model_validator(mode="after")
+    def fill_usage(self) -> "RunRead":
+        if self.steps:
+            return self.model_copy(update={"usage": aggregate_run_usage(self.steps)})
+        return self
+
+
+def run_read_from_orm(run: Run) -> RunRead:
+    """Build API run DTO with usage from steps or persisted metadata."""
+    dto = RunRead.model_validate(run)
+    if dto.steps:
+        return dto
+    stored = usage_from_metadata(run.metadata_)
+    if stored is not None:
+        return dto.model_copy(update={"usage": stored})
+    return dto
 
 
 EventType = Literal[

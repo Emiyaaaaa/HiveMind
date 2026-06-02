@@ -43,7 +43,7 @@
 **目标：** 在控制台内完成调试、重试与成本核算。
 
 - [ ] Step 时间线组件（节点延迟与状态）
-- [ ] Adapter 写入 token/成本；Run 级汇总
+- [x] Adapter 写入 token/成本；Run 级汇总
 - [ ] `POST /v1/runs/{id}/retry` 与 `POST /v1/runs/{id}/resume`
 - [ ] SSE 事件重放（`Last-Event-ID`）
 - [x] OpenTelemetry 全链路 trace（API → worker → adapter，RED 指标 + trace 传播）
