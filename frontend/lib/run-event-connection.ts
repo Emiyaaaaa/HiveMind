@@ -35,15 +35,8 @@ export function createRunEventConnection(
   let terminal = false;
   let clientSeq = 0;
 
-  const onEventRef = { current: handlers.onEvent };
-  const onTerminalRef = { current: handlers.onTerminal };
-  const onStatusRef = { current: handlers.onStatusChange };
-  onEventRef.current = handlers.onEvent;
-  onTerminalRef.current = handlers.onTerminal;
-  onStatusRef.current = handlers.onStatusChange;
-
   const setStatus = (status: RunEventConnectionStatus) => {
-    if (!cancelled) onStatusRef.current?.(status);
+    if (!cancelled) handlers.onStatusChange?.(status);
   };
 
   const clearReconnectTimer = () => {
