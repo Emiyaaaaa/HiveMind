@@ -2,24 +2,37 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { useMemo } from "react";
 
 import { StatusBadge } from "@/components/StatusBadge";
 import { api } from "@/lib/api";
+import {
+  liveRunIdsFromRuns,
+  useRunsListLiveSync,
+} from "@/lib/useRunLiveSync";
 import { formatCostUsd, hasUsageMetrics } from "@/lib/usage";
 
 export default function RunsPage() {
   const runs = useQuery({
     queryKey: ["runs"],
     queryFn: api.listRuns,
-    refetchInterval: 3_000,
   });
+
+  const liveRunIds = useMemo(
+    () => liveRunIdsFromRuns(runs.data),
+    [runs.data],
+  );
+
+  useRunsListLiveSync(liveRunIds);
 
   return (
     <div className="max-w-5xl mx-auto space-y-4">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Runs</h1>
         <span className="text-xs text-muted">
-          auto-refreshing every 3s
+          {liveRunIds.length > 0
+            ? `live via SSE (${liveRunIds.length} active)`
+            : "updates on refresh"}
         </span>
       </header>
 

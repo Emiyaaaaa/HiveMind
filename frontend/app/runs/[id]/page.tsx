@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { use } from "react";
 
@@ -10,8 +10,9 @@ import { EventStream } from "@/components/EventStream";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TokenCostSummary } from "@/components/TokenCostSummary";
 import { checkpointsByStep } from "@/lib/checkpoints";
-import { formatCostUsd } from "@/lib/usage";
 import { api } from "@/lib/api";
+import { useRunWithLiveUpdates } from "@/lib/useRunLiveSync";
+import { formatCostUsd } from "@/lib/usage";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -20,15 +21,7 @@ interface PageProps {
 export default function RunDetailPage({ params }: PageProps) {
   const { id } = use(params);
   const queryClient = useQueryClient();
-  const run = useQuery({
-    queryKey: ["run", id],
-    queryFn: () => api.getRun(id),
-    refetchInterval: (q) => {
-      const status = q.state.data?.status;
-      if (status === "running" || status === "pending") return 2_000;
-      return false;
-    },
-  });
+  const run = useRunWithLiveUpdates(id);
 
   const cancel = useMutation({
     mutationFn: () => api.cancelRun(id),
@@ -40,7 +33,6 @@ export default function RunDetailPage({ params }: PageProps) {
     return <p className="text-bad">Failed to load run: {String(run.error)}</p>;
 
   const r = run.data;
-  const isLive = r.status === "running" || r.status === "pending";
   const stepCheckpoints = checkpointsByStep(r.steps, r.checkpoints);
 
   return (
@@ -60,7 +52,7 @@ export default function RunDetailPage({ params }: PageProps) {
           </div>
         </div>
         <div className="flex gap-2">
-          {isLive && (
+          {run.isLive && (
             <button
               className="rounded border border-bad/40 text-bad px-3 py-1.5 text-sm hover:bg-bad/10"
               onClick={() => cancel.mutate()}
@@ -185,10 +177,7 @@ export default function RunDetailPage({ params }: PageProps) {
         </ol>
       </section>
 
-      <EventStream
-        runId={id}
-        onTerminal={() => queryClient.invalidateQueries({ queryKey: ["run", id] })}
-      />
+      <EventStream events={run.events} status={run.streamStatus} />
     </div>
   );
 }
