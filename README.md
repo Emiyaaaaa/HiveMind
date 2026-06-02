@@ -8,7 +8,7 @@
 [License](LICENSE)
 [Python](https://www.python.org)
 
-AgentFlow provides the runtime infrastructure around multi-agent applications.
+AgentFlow provides the runtime infrastructure for multi-agent applications.
 It does not replace frameworks such as LangGraph, AutoGen or CrewAI. Instead,
 it gives them a consistent execution model: agents are invoked as runs, runs
 produce ordered steps and messages, tool calls are recorded, and every state
@@ -16,7 +16,7 @@ change can be streamed to a client.
 
 The project is designed for teams that want to move from an agent prototype to
 an inspectable service without committing to a single orchestration framework
-or rebuilding persistence, event streaming and operational tooling for each
+or rebuilding persistence, event streaming, and operational tooling for each
 new agent.
 
 ## Motivation
@@ -92,7 +92,7 @@ See:
 ## Quick start
 
 Requirements: Docker, [`uv`](https://github.com/astral-sh/uv), Node.js 20+,
-JDK 21 and Maven 3.9+.
+JDK 21, and Maven 3.9+..
 
 ```bash
 # Infrastructure
