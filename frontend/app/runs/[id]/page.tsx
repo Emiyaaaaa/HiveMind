@@ -4,9 +4,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { use } from "react";
 
+import { CheckpointMarker } from "@/components/CheckpointMarker";
+import { CheckpointPanel } from "@/components/CheckpointPanel";
 import { EventStream } from "@/components/EventStream";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TokenCostSummary } from "@/components/TokenCostSummary";
+import { checkpointsByStep } from "@/lib/checkpoints";
 import { formatCostUsd } from "@/lib/usage";
 import { api } from "@/lib/api";
 
@@ -38,6 +41,7 @@ export default function RunDetailPage({ params }: PageProps) {
 
   const r = run.data;
   const isLive = r.status === "running" || r.status === "pending";
+  const stepCheckpoints = checkpointsByStep(r.steps, r.checkpoints);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -84,6 +88,12 @@ export default function RunDetailPage({ params }: PageProps) {
         <TokenCostSummary usage={r.usage} steps={r.steps} />
       </section>
 
+      <CheckpointPanel
+        runId={id}
+        status={r.status}
+        checkpoints={r.checkpoints}
+      />
+
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-border bg-surface p-4 space-y-2">
           <h2 className="font-medium">Input</h2>
@@ -102,15 +112,20 @@ export default function RunDetailPage({ params }: PageProps) {
       <section className="space-y-3">
         <h2 className="font-medium">Steps</h2>
         <ol className="space-y-2">
-          {r.steps.map((s) => (
+          {r.steps.map((s) => {
+            const cps = stepCheckpoints.get(s.id) ?? [];
+            return (
             <li
               key={s.id}
               className="rounded-lg border border-border bg-surface p-3 space-y-2"
             >
-              <div className="flex items-center gap-3 text-sm">
+              <div className="flex flex-wrap items-center gap-3 text-sm">
                 <span className="text-muted font-mono">#{s.index}</span>
                 <span className="font-medium">{s.node}</span>
                 <StatusBadge status={s.status} />
+                {cps.map((cp) => (
+                  <CheckpointMarker key={cp.id} checkpoint={cp} />
+                ))}
                 {s.latency_ms != null && (
                   <span className="text-xs text-muted">{s.latency_ms}ms</span>
                 )}
@@ -147,7 +162,8 @@ export default function RunDetailPage({ params }: PageProps) {
               ) : null}
               {s.error ? <div className="text-bad text-xs">{s.error}</div> : null}
             </li>
-          ))}
+            );
+          })}
         </ol>
       </section>
 

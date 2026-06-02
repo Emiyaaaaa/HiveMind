@@ -12,6 +12,21 @@ interface Props {
 
 const TERMINAL = new Set(["run.completed", "run.failed", "run.cancelled"]);
 
+function formatEventData(type: string, data: Record<string, unknown>): string {
+  if (type === "checkpoint.created") {
+    const label = data.label;
+    const stateKeys =
+      data.state && typeof data.state === "object"
+        ? Object.keys(data.state as Record<string, unknown>).join(", ")
+        : "";
+    const parts = ["checkpoint saved"];
+    if (label) parts.push(`label=${String(label)}`);
+    if (stateKeys) parts.push(`state keys: ${stateKeys}`);
+    return parts.join(" · ");
+  }
+  return JSON.stringify(data);
+}
+
 export function EventStream({ runId, onTerminal }: Props) {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -76,9 +91,17 @@ export function EventStream({ runId, onTerminal }: Props) {
               <span className="text-muted shrink-0">
                 {new Date(e.at).toLocaleTimeString()}
               </span>
-              <span className="text-accent shrink-0">{e.type}</span>
+              <span
+                className={
+                  e.type === "checkpoint.created"
+                    ? "text-warn shrink-0"
+                    : "text-accent shrink-0"
+                }
+              >
+                {e.type}
+              </span>
               <span className="text-muted truncate">
-                {JSON.stringify(e.data)}
+                {formatEventData(e.type, e.data)}
               </span>
             </div>
           ))
