@@ -1,11 +1,11 @@
-"""Per-run pub/sub event bus.
+"""Per-run pub/sub event bus with a durable replay log.
 
 The bus has two implementations selected at runtime:
 
-* `InMemoryEventBus` – per-process asyncio queues. Suitable for single-node
-  development and for tests.
-* `RedisEventBus` – Redis pub/sub channels keyed by `agentflow:run:{id}`.
-  Enabled automatically when `AGENTFLOW_REDIS_URL` is configured.
+* `InMemoryEventBus` – per-process asyncio queues plus an in-process event
+  log. Suitable for single-node development and for tests.
+* `RedisEventBus` – Redis pub/sub for live delivery and a Redis Stream per
+  run for `Last-Event-ID` replay. Enabled when `AGENTFLOW_REDIS_URL` is set.
 
 Both implementations expose the same async interface and are interchangeable.
 """
@@ -25,30 +25,59 @@ from app.schemas.run import RunEvent
 
 logger = get_logger("events")
 
+EventRecord = tuple[str, RunEvent]
+
+
+def _is_after(entry_id: str, after_id: str | None) -> bool:
+    if after_id is None:
+        return True
+    try:
+        return int(entry_id) > int(after_id)
+    except ValueError:
+        return entry_id > after_id
+
 
 class EventBus(Protocol):
-    async def publish(self, event: RunEvent) -> None: ...
+    async def publish(self, event: RunEvent) -> str: ...
+
+    def replay(
+        self, run_id: str, after_id: str | None = None
+    ) -> AsyncIterator[EventRecord]: ...
 
     @asynccontextmanager
-    def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[RunEvent]]: ...
+    def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[EventRecord]]: ...
 
     async def aclose(self) -> None: ...
 
 
 class InMemoryEventBus:
     def __init__(self) -> None:
-        self._subscribers: dict[str, set[asyncio.Queue[RunEvent]]] = defaultdict(set)
+        self._subscribers: dict[str, set[asyncio.Queue[EventRecord]]] = defaultdict(set)
+        self._log: dict[str, list[EventRecord]] = defaultdict(list)
+        self._seq: dict[str, int] = defaultdict(int)
         self._lock = asyncio.Lock()
 
-    async def publish(self, event: RunEvent) -> None:
+    async def publish(self, event: RunEvent) -> str:
         async with self._lock:
+            self._seq[event.run_id] += 1
+            event_id = str(self._seq[event.run_id])
+            record = (event_id, event)
+            self._log[event.run_id].append(record)
             queues = list(self._subscribers.get(event.run_id, ()))
         for queue in queues:
-            await queue.put(event)
+            await queue.put(record)
+        return event_id
+
+    async def replay(
+        self, run_id: str, after_id: str | None = None
+    ) -> AsyncIterator[EventRecord]:
+        for event_id, event in self._log.get(run_id, ()):
+            if _is_after(event_id, after_id):
+                yield event_id, event
 
     @asynccontextmanager
-    async def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[RunEvent]]:
-        queue: asyncio.Queue[RunEvent] = asyncio.Queue()
+    async def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[EventRecord]]:
+        queue: asyncio.Queue[EventRecord] = asyncio.Queue()
         async with self._lock:
             self._subscribers[run_id].add(queue)
         try:
@@ -64,31 +93,51 @@ class InMemoryEventBus:
 
 
 class RedisEventBus:
-    """Redis-backed pub/sub.
-
-    Imported lazily to keep the in-memory path free of redis dependency for
-    unit tests.
-    """
+    """Redis-backed pub/sub with a per-run stream for replay."""
 
     def __init__(self, url: str) -> None:
         import redis.asyncio as redis  # local import
 
         self._redis = redis.from_url(url, decode_responses=True)
+        settings = get_settings()
+        self._channel_prefix = settings.event_channel_prefix
+        self._stream_suffix = settings.event_stream_suffix
+        self._stream_max_len = settings.event_stream_max_len
 
-    @staticmethod
-    def _channel(run_id: str) -> str:
-        return f"agentflow:run:{run_id}"
+    def _channel(self, run_id: str) -> str:
+        return f"{self._channel_prefix}{run_id}"
 
-    async def publish(self, event: RunEvent) -> None:
-        await self._redis.publish(
-            self._channel(event.run_id),
-            event.model_dump_json(),
+    def _stream(self, run_id: str) -> str:
+        return f"{self._channel_prefix}{run_id}{self._stream_suffix}"
+
+    async def publish(self, event: RunEvent) -> str:
+        stream = self._stream(event.run_id)
+        event_id = await self._redis.xadd(
+            stream,
+            {"payload": event.model_dump_json()},
+            maxlen=self._stream_max_len,
+            approximate=True,
         )
+        envelope = json.dumps({"id": event_id, "event": event.model_dump(mode="json")})
+        await self._redis.publish(self._channel(event.run_id), envelope)
+        return event_id
+
+    async def replay(
+        self, run_id: str, after_id: str | None = None
+    ) -> AsyncIterator[EventRecord]:
+        stream = self._stream(run_id)
+        start = f"({after_id}" if after_id else "-"
+        entries = await self._redis.xrange(stream, min=start, max="+")
+        for entry_id, fields in entries:
+            try:
+                yield entry_id, RunEvent(**json.loads(fields["payload"]))
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("event_replay_decode_failed", run_id=run_id)
 
     @asynccontextmanager
-    async def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[RunEvent]]:
+    async def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[EventRecord]]:
         pubsub = self._redis.pubsub()
-        queue: asyncio.Queue[RunEvent] = asyncio.Queue()
+        queue: asyncio.Queue[EventRecord] = asyncio.Queue()
         await pubsub.subscribe(self._channel(run_id))
 
         async def reader() -> None:
@@ -97,7 +146,13 @@ class RedisEventBus:
                     continue
                 try:
                     payload = json.loads(message["data"])
-                    await queue.put(RunEvent(**payload))
+                    if "id" in payload and "event" in payload:
+                        event_id = payload["id"]
+                        event = RunEvent(**payload["event"])
+                    else:
+                        event = RunEvent(**payload)
+                        event_id = ""
+                    await queue.put((event_id, event))
                 except Exception:  # pragma: no cover - defensive
                     logger.exception("event_decode_failed")
 

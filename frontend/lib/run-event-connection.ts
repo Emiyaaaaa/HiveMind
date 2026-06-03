@@ -13,16 +13,24 @@ export type RunEventConnectionStatus =
 
 export interface StoredRunEvent extends RunEvent {
   clientSeq: number;
+  eventId?: string;
 }
 
 export interface RunEventConnectionHandlers {
-  onEvent?: (event: RunEvent, clientSeq: number) => void;
+  onEvent?: (event: RunEvent, clientSeq: number, eventId?: string) => void;
   onTerminal?: (event: RunEvent) => void;
   onStatusChange?: (status: RunEventConnectionStatus) => void;
 }
 
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 30_000;
+
+function streamUrl(runId: string, lastEventId: string | null): string {
+  const base = eventStreamUrl(runId);
+  if (!lastEventId) return base;
+  const params = new URLSearchParams({ last_event_id: lastEventId });
+  return `${base}?${params.toString()}`;
+}
 
 export function createRunEventConnection(
   runId: string,
@@ -34,6 +42,7 @@ export function createRunEventConnection(
   let reconnectAttempt = 0;
   let terminal = false;
   let clientSeq = 0;
+  let lastEventId: string | null = null;
 
   const setStatus = (status: RunEventConnectionStatus) => {
     if (!cancelled) handlers.onStatusChange?.(status);
@@ -58,7 +67,7 @@ export function createRunEventConnection(
     clearReconnectTimer();
     closeSource();
     setStatus("closed");
-    onTerminalRef.current?.(event);
+    handlers.onTerminal?.(event);
   };
 
   const scheduleReconnect = () => {
@@ -77,10 +86,13 @@ export function createRunEventConnection(
 
   const onMessage = (event: MessageEvent) => {
     if (cancelled || terminal) return;
+    if (event.lastEventId) {
+      lastEventId = event.lastEventId;
+    }
     try {
       const data: RunEvent = JSON.parse(event.data);
       clientSeq += 1;
-      onEventRef.current?.(data, clientSeq);
+      handlers.onEvent?.(data, clientSeq, event.lastEventId || undefined);
       if (isTerminalRunEvent(data.type)) {
         finishTerminal(data);
       }
@@ -95,7 +107,7 @@ export function createRunEventConnection(
     closeSource();
     setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
 
-    const next = new EventSource(eventStreamUrl(runId));
+    const next = new EventSource(streamUrl(runId, lastEventId));
     source = next;
 
     next.addEventListener("open", () => {

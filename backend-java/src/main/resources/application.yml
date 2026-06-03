@@ -36,6 +36,8 @@ agentflow:
     ttl-seconds: 86400
   events:
     channel-prefix: "agentflow:run:"
+    stream-suffix: ":log"
+    stream-max-len: 10000
     sse-heartbeat-seconds: 15
   otel:
     enabled: ${AGENTFLOW_OTEL_ENABLED:false}

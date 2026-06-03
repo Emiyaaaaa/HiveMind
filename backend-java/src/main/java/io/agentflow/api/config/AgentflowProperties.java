@@ -135,6 +135,8 @@ public class AgentflowProperties {
 
     public static class Events {
         private String channelPrefix = "agentflow:run:";
+        private String streamSuffix = ":log";
+        private int streamMaxLen = 10_000;
         private long sseHeartbeatSeconds = 15;
 
         public String getChannelPrefix() {
@@ -143,6 +145,22 @@ public class AgentflowProperties {
 
         public void setChannelPrefix(String channelPrefix) {
             this.channelPrefix = channelPrefix;
+        }
+
+        public String getStreamSuffix() {
+            return streamSuffix;
+        }
+
+        public void setStreamSuffix(String streamSuffix) {
+            this.streamSuffix = streamSuffix;
+        }
+
+        public int getStreamMaxLen() {
+            return streamMaxLen;
+        }
+
+        public void setStreamMaxLen(int streamMaxLen) {
+            this.streamMaxLen = streamMaxLen;
         }
 
         public long getSseHeartbeatSeconds() {

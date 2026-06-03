@@ -3,6 +3,10 @@
 Clients subscribe with `GET /v1/events/{run_id}`. The stream stays open
 until the run reaches a terminal state (`succeeded`, `failed`, `cancelled`)
 or the client disconnects.
+
+On reconnect, clients may send the standard `Last-Event-ID` header (or the
+`last_event_id` query parameter) to receive any events published while
+disconnected before resuming the live stream.
 """
 
 from __future__ import annotations
@@ -14,11 +18,30 @@ from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
 from app.events import EventBus, get_event_bus
+from app.events.bus import _is_after
 from app.schemas.run import RunEvent
 
 router = APIRouter(prefix="/events", tags=["events"])
 
 _TERMINAL_TYPES = {"run.completed", "run.failed", "run.cancelled"}
+
+
+def _resolve_last_event_id(request: Request) -> str | None:
+    header = request.headers.get("last-event-id")
+    if header:
+        return header.strip()
+    query = request.query_params.get("last_event_id")
+    if query:
+        return query.strip()
+    return None
+
+
+def _sse_frame(event_id: str, event: RunEvent) -> dict[str, str]:
+    return {
+        "id": event_id,
+        "event": event.type,
+        "data": event.model_dump_json(),
+    }
 
 
 @router.get("/{run_id}")
@@ -27,22 +50,44 @@ async def stream_run_events(
     request: Request,
     bus: EventBus = Depends(get_event_bus),
 ) -> EventSourceResponse:
+    after_id = _resolve_last_event_id(request)
+
     async def generator() -> AsyncIterator[dict[str, str]]:
+        last_id = after_id
+
+        async for event_id, event in bus.replay(run_id, after_id):
+            if await request.is_disconnected():
+                return
+            yield _sse_frame(event_id, event)
+            last_id = event_id
+            if event.type in _TERMINAL_TYPES:
+                return
+
         async with bus.subscribe(run_id) as queue:
+            async for event_id, event in bus.replay(run_id, last_id):
+                if await request.is_disconnected():
+                    return
+                yield _sse_frame(event_id, event)
+                last_id = event_id
+                if event.type in _TERMINAL_TYPES:
+                    return
+
             while True:
                 if await request.is_disconnected():
                     break
 
                 try:
-                    event: RunEvent = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    event_id, event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except TimeoutError:
                     yield {"event": "ping", "data": "{}"}
                     continue
 
-                yield {
-                    "event": event.type,
-                    "data": event.model_dump_json(),
-                }
+                if event_id and last_id and not _is_after(event_id, last_id):
+                    continue
+                if event_id:
+                    last_id = event_id
+
+                yield _sse_frame(event_id or "0", event)
 
                 if event.type in _TERMINAL_TYPES:
                     break
