@@ -36,3 +36,5 @@ htmlcov/
 # Build
 dist/
 build/
+
+.codegraph

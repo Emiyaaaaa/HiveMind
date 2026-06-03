@@ -1,7 +1,0 @@
-feat: add retry and resume functionality for runs
-    
-    - Implemented endpoints to retry failed runs and resume runs waiting for human approval.
-    - Introduced RunRetry and RunResume schemas to handle request payloads.
-    - Enhanced RunService to manage run states and checkpoint handling during retries and resumes.
-    - Updated EchoAdapter and LangGraphAdapter to support retryand resume logic.
-    - Added tests to validate the new functionality and ensure proper handling of run states.
