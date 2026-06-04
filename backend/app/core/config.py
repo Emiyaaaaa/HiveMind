@@ -23,6 +23,19 @@ class Settings(BaseSettings):
         default=None,
         description="Optional redis URL. When unset, the in-memory event bus is used.",
     )
+    event_channel_prefix: str = Field(
+        default="agentflow:run:",
+        description="Redis pub/sub channel prefix for live run events.",
+    )
+    event_stream_suffix: str = Field(
+        default=":log",
+        description="Suffix appended to the channel prefix for the replay stream key.",
+    )
+    event_stream_max_len: int = Field(
+        default=10_000,
+        ge=100,
+        description="Approximate max entries kept in each run's Redis event stream.",
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     default_adapter: str = Field(

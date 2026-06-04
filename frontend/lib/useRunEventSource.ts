@@ -47,8 +47,8 @@ export function useRunEventSource({
 
     const connection = createRunEventConnection(runId, {
       onStatusChange: setStatus,
-      onEvent: (event, clientSeq) => {
-        setEvents((prev) => [...prev, { ...event, clientSeq }]);
+      onEvent: (event, clientSeq, eventId) => {
+        setEvents((prev) => [...prev, { ...event, clientSeq, eventId }]);
         onEventRef.current?.(event);
       },
       onTerminal: (event) => {
