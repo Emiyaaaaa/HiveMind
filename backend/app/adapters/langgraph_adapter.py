@@ -310,7 +310,9 @@ class LangGraphAdapter(OrchestratorAdapter):
             await ctx.emit_message(role="system", content=system_prompt)
             await ctx.emit_message(role="user", content=user_input)
 
-            stream_tokens = run_state.config.get("stream_tokens", True)
+            stream_tokens = _coerce_bool(
+                run_state.config.get("stream_tokens"), default=True
+            )
             started = time.monotonic()
             reply, tokens_in, tokens_out = await self._invoke_model(
                 ctx,
@@ -319,7 +321,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 system_prompt,
                 user_input,
                 tool_keys=tool_keys if tool_keys else None,
-                stream_tokens=bool(stream_tokens),
+                stream_tokens=stream_tokens,
             )
             latency_ms = int((time.monotonic() - started) * 1000)
 
@@ -518,6 +520,24 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
         saved = ctx.resume.checkpoint_state.get("graph_state")
         if isinstance(saved, dict):
             return {**default, **saved}
+    return default
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    """Parse boolean-ish config values without treating arbitrary strings as truthy."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return default
+    if isinstance(value, int):
+        return bool(value)
     return default
 
 

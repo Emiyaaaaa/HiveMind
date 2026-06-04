@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from app.adapters.base import AdapterContext, AdapterResult
+from app.adapters.base import AdapterContext
 from app.adapters.langgraph_adapter import GraphSpec, LangGraphAdapter
 from app.adapters.tool_registry import get_tool, list_tools, register_tool, resolve_tools
 from app.models.run import RunStatus
@@ -171,3 +171,23 @@ async def test_langgraph_stream_tokens_disabled():
     }
     await adapter.run(ctx)
     assert not any(event == "token.delta" for event, _ in ctx.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_value", "should_stream"),
+    [("false", False), ("true", True)],
+)
+async def test_langgraph_stream_tokens_string_values(
+    raw_value: str, should_stream: bool
+):
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "stream_tokens": raw_value,
+    }
+
+    await adapter.run(ctx)
+
+    assert any(event == "token.delta" for event, _ in ctx.events) is should_stream
