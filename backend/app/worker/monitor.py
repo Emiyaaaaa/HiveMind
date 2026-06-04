@@ -3,6 +3,7 @@
 The monitor runs as a background asyncio task alongside the job consume loop.
 It periodically samples the run-job stream and emits:
 
+* ``agentflow.queue.*`` OTel gauges when ``AGENTFLOW_OTEL_ENABLED=true``.
 * ``queue.metrics`` at INFO — baseline depth / lag / pending counters.
 * ``queue.consumer_delay_alert`` at WARNING — oldest undelivered or
   un-ACKed entry exceeds ``Settings.job_queue_consumer_delay_alert_seconds``.
@@ -20,6 +21,7 @@ import asyncio
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import record_queue_metrics
 from app.worker.queue import JobQueue, QueueStats, RedisStreamsJobQueue
 
 logger = get_logger("worker.monitor")
@@ -51,6 +53,7 @@ async def run_queue_monitor(
         try:
             stats = await collect_queue_stats(queue)
             if stats is not None:
+                record_queue_metrics(stats)
                 logger.info(
                     "queue.metrics",
                     stream_length=stats.stream_length,

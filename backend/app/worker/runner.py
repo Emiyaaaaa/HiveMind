@@ -21,7 +21,12 @@ import signal
 from app.adapters import EchoAdapter, LangGraphAdapter  # noqa: F401 - register
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
-from app.core.telemetry import setup_telemetry, shutdown_telemetry, trace_worker_job
+from app.core.telemetry import (
+    set_worker_utilization,
+    setup_telemetry,
+    shutdown_telemetry,
+    trace_worker_job,
+)
 from app.db.base import Base
 from app.db.session import engine
 from app.events import get_event_bus
@@ -93,6 +98,11 @@ async def _consume_loop(
     slots = asyncio.Semaphore(concurrency)
     in_flight: set[asyncio.Task[None]] = set()
 
+    def _report_utilization() -> None:
+        set_worker_utilization(in_flight=len(in_flight), capacity=concurrency)
+
+    _report_utilization()
+
     async def _run_job(lease: JobLease) -> None:
         try:
             await _process_lease(executor, queue, lease)
@@ -122,7 +132,13 @@ async def _consume_loop(
 
             task = asyncio.create_task(_run_job(lease))
             in_flight.add(task)
-            task.add_done_callback(in_flight.discard)
+
+            def _on_job_done(done: asyncio.Task[None]) -> None:
+                in_flight.discard(done)
+                _report_utilization()
+
+            task.add_done_callback(_on_job_done)
+            _report_utilization()
     finally:
         aclose = getattr(consumer, "aclose", None)
         if aclose is not None:

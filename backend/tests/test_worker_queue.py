@@ -344,6 +344,48 @@ class _FiniteQueue:
 
 
 @pytest.mark.asyncio
+async def test_consume_loop_reports_worker_utilization():
+    from unittest.mock import patch
+
+    from app.worker import runner as runner_module
+
+    utilization_samples: list[tuple[int, int]] = []
+
+    def _capture(*, in_flight: int, capacity: int) -> None:
+        utilization_samples.append((in_flight, capacity))
+
+    hold = asyncio.Event()
+
+    class _BlockingExecutor:
+        async def execute(self, run_id: str, adapter: str) -> None:
+            await hold.wait()
+
+    queue = _FiniteQueue(_leases_for_runs(["r1", "r2"], "agent-1"))
+    stop = asyncio.Event()
+
+    with patch.object(runner_module, "set_worker_utilization", side_effect=_capture):
+        loop_task = asyncio.create_task(
+            runner_module._consume_loop(
+                executor=_BlockingExecutor(),  # type: ignore[arg-type]
+                queue=queue,  # type: ignore[arg-type]
+                stop=stop,
+                concurrency=2,
+            )
+        )
+
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if any(n >= 2 for n, _ in utilization_samples):
+                break
+
+        hold.set()
+        await asyncio.wait_for(loop_task, timeout=2.0)
+
+    assert (0, 2) in utilization_samples
+    assert any(n == 2 and cap == 2 for n, cap in utilization_samples)
+
+
+@pytest.mark.asyncio
 async def test_consume_loop_respects_worker_concurrency():
     from app.worker import runner as runner_module
 

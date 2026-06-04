@@ -390,14 +390,15 @@ class RedisStreamsJobQueue:
             pending_count = int(group_info.get("pending") or 0) if group_info else 0
 
         if pending_count == 0:
-            trailing = await self._redis.xrange(
+            undelivered = await self._redis.xrange(
                 self._stream,
                 min=f"({last_delivered_id}",
                 max="+",
-                count=1,
             )
-            if trailing:
-                oldest_lag_seconds = _entry_age_seconds(trailing[0][0])
+            if undelivered:
+                if lag_count == 0:
+                    lag_count = len(undelivered)
+                oldest_lag_seconds = _entry_age_seconds(undelivered[0][0])
         elif lag_count > 0:
             trailing = await self._redis.xrange(
                 self._stream,
