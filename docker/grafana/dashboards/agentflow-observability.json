@@ -1,0 +1,87 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "agentflow_worker_utilization",
+          "legendFormat": "{{service_name}}"
+        }
+      ],
+      "title": "Worker utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "agentflow_queue_backlog", "legendFormat": "backlog" },
+        { "expr": "agentflow_queue_lag", "legendFormat": "lag" },
+        { "expr": "agentflow_queue_pending", "legendFormat": "pending" }
+      ],
+      "title": "Queue depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agentflow_worker_job_duration_bucket[5m])) by (le))",
+          "legendFormat": "worker job p95"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agentflow_http_server_duration_bucket[5m])) by (le))",
+          "legendFormat": "http p95"
+        }
+      ],
+      "title": "p95 duration (worker + HTTP)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "agentflow_queue_consumer_delay",
+          "legendFormat": "consumer delay"
+        }
+      ],
+      "title": "Queue consumer delay",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["agentflow"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "AgentFlow observability",
+  "uid": "agentflow-observability",
+  "version": 1
+}

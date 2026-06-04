@@ -8,6 +8,8 @@ from typing import Any
 import fakeredis.aioredis as fakeredis
 import pytest
 
+from unittest.mock import patch
+
 from app.core.config import Settings
 from app.worker.monitor import (
     _emit_delay_alerts,
@@ -128,6 +130,30 @@ def test_depth_alert_edge_triggering():
     )
     active = _emit_depth_alerts(cleared, threshold=5, active=True)
     assert active is False
+
+
+@pytest.mark.asyncio
+async def test_run_queue_monitor_exports_otel_metrics():
+    redis = fakeredis.FakeRedis(decode_responses=True)
+    queue = _make_queue(redis)
+    await queue.enqueue(RunJob.new(run_id="r1", agent_id="a1", adapter="echo"))
+
+    stop = asyncio.Event()
+    settings = Settings(
+        job_queue_monitor_enabled=True,
+        job_queue_monitor_interval_seconds=5,
+    )
+    with patch("app.worker.monitor.record_queue_metrics") as record:
+        monitor_task = asyncio.create_task(
+            run_queue_monitor(queue, stop, settings=settings)
+        )
+        await asyncio.sleep(0.05)
+        stop.set()
+        await asyncio.wait_for(monitor_task, timeout=1.0)
+
+    assert record.call_count >= 1
+    stats = record.call_args[0][0]
+    assert stats.stream_length >= 1
 
 
 @pytest.mark.asyncio

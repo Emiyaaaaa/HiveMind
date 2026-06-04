@@ -16,9 +16,10 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import contextmanager
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from opentelemetry import metrics, trace
+from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
     OTLPMetricExporter,
 )
@@ -29,7 +30,10 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.metrics import Counter, Histogram, Meter
 from opentelemetry.propagate import extract, inject, set_global_textmap
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.export import (
+    MetricReader,
+    PeriodicExportingMetricReader,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -40,6 +44,9 @@ from opentelemetry.trace.propagation.tracecontext import (
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from app.worker.queue import QueueStats
 
 logger = get_logger("telemetry")
 
@@ -60,6 +67,15 @@ _worker_duration: Histogram | None = None
 _adapter_runs: Counter | None = None
 _adapter_errors: Counter | None = None
 _adapter_duration: Histogram | None = None
+_queue_stream_length: Any | None = None
+_queue_lag: Any | None = None
+_queue_pending: Any | None = None
+_queue_backlog: Any | None = None
+_queue_consumer_delay: Any | None = None
+_queue_dlq_length: Any | None = None
+_worker_utilization: Any | None = None
+_worker_in_flight: Any | None = None
+_worker_capacity: Any | None = None
 
 
 def is_enabled() -> bool:
@@ -80,7 +96,11 @@ def _otlp_endpoint(settings: Settings) -> str:
     return base
 
 
-def setup_telemetry(*, settings: Settings | None = None) -> None:
+def setup_telemetry(
+    *,
+    settings: Settings | None = None,
+    metric_readers: list[MetricReader] | None = None,
+) -> None:
     """Idempotent SDK setup. No-op when ``otel_enabled`` is false."""
     global _initialized, _tracer, _meter
 
@@ -94,18 +114,23 @@ def setup_telemetry(*, settings: Settings | None = None) -> None:
     endpoint = _otlp_endpoint(settings)
 
     tracer_provider = TracerProvider(resource=resource)
-    tracer_provider.add_span_processor(
-        BatchSpanProcessor(
-            OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces"),
+    if metric_readers is None:
+        tracer_provider.add_span_processor(
+            BatchSpanProcessor(
+                OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces"),
+            )
         )
-    )
     trace.set_tracer_provider(tracer_provider)
 
-    metric_reader = PeriodicExportingMetricReader(
-        OTLPMetricExporter(endpoint=f"{endpoint}/v1/metrics"),
-        export_interval_millis=settings.otel_metric_export_interval_ms,
-    )
-    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    if metric_readers is None:
+        metric_reader: MetricReader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=f"{endpoint}/v1/metrics"),
+            export_interval_millis=settings.otel_metric_export_interval_ms,
+        )
+        readers: list[MetricReader] = [metric_reader]
+    else:
+        readers = metric_readers
+    meter_provider = MeterProvider(resource=resource, metric_readers=readers)
     metrics.set_meter_provider(meter_provider)
 
     set_global_textmap(TraceContextTextMapPropagator())
@@ -123,6 +148,12 @@ def setup_telemetry(*, settings: Settings | None = None) -> None:
 def shutdown_telemetry() -> None:
     """Flush exporters on process exit."""
     global _initialized, _tracer, _meter
+    global _http_requests, _http_errors, _http_duration
+    global _worker_jobs, _worker_errors, _worker_duration
+    global _adapter_runs, _adapter_errors, _adapter_duration
+    global _queue_stream_length, _queue_lag, _queue_pending, _queue_backlog
+    global _queue_consumer_delay, _queue_dlq_length
+    global _worker_utilization, _worker_in_flight, _worker_capacity
 
     if not _initialized:
         return
@@ -135,9 +166,31 @@ def shutdown_telemetry() -> None:
     if hasattr(meter_provider, "shutdown"):
         meter_provider.shutdown()  # type: ignore[union-attr]
 
+    # Reset globals so a later setup_telemetry() in tests or respawns can run.
+    trace.set_tracer_provider(TracerProvider())
+    metrics.set_meter_provider(NoOpMeterProvider())
+
     _initialized = False
     _tracer = None
     _meter = None
+    _http_requests = None
+    _http_errors = None
+    _http_duration = None
+    _worker_jobs = None
+    _worker_errors = None
+    _worker_duration = None
+    _adapter_runs = None
+    _adapter_errors = None
+    _adapter_duration = None
+    _queue_stream_length = None
+    _queue_lag = None
+    _queue_pending = None
+    _queue_backlog = None
+    _queue_consumer_delay = None
+    _queue_dlq_length = None
+    _worker_utilization = None
+    _worker_in_flight = None
+    _worker_capacity = None
 
 
 def get_tracer() -> Tracer:
@@ -200,6 +253,114 @@ def _ensure_red_instruments() -> None:
             description="Adapter run duration",
             unit="s",
         )
+
+
+def _ensure_queue_instruments() -> None:
+    global _queue_stream_length, _queue_lag, _queue_pending, _queue_backlog
+    global _queue_consumer_delay, _queue_dlq_length
+
+    if _meter is None:
+        setup_telemetry()
+    meter = _meter or metrics.get_meter(get_settings().otel_service_name)
+
+    if _queue_stream_length is None:
+        _queue_stream_length = meter.create_gauge(
+            "agentflow.queue.stream_length",
+            description="Redis stream entry count (XLEN)",
+            unit="1",
+        )
+        _queue_lag = meter.create_gauge(
+            "agentflow.queue.lag",
+            description="Undelivered entries not yet assigned to a consumer",
+            unit="1",
+        )
+        _queue_pending = meter.create_gauge(
+            "agentflow.queue.pending",
+            description="Entries delivered but not yet XACKed",
+            unit="1",
+        )
+        _queue_backlog = meter.create_gauge(
+            "agentflow.queue.backlog",
+            description="lag + pending (work waiting on workers)",
+            unit="1",
+        )
+        _queue_consumer_delay = meter.create_gauge(
+            "agentflow.queue.consumer_delay",
+            description="Worst-case wait among lag and pending entries",
+            unit="s",
+        )
+        _queue_dlq_length = meter.create_gauge(
+            "agentflow.queue.dlq_length",
+            description="Dead-letter stream length",
+            unit="1",
+        )
+
+
+def _ensure_worker_util_instruments() -> None:
+    global _worker_utilization, _worker_in_flight, _worker_capacity
+
+    if _meter is None:
+        setup_telemetry()
+    meter = _meter or metrics.get_meter(get_settings().otel_service_name)
+
+    if _worker_utilization is None:
+        _worker_utilization = meter.create_gauge(
+            "agentflow.worker.utilization",
+            description=(
+                "Fraction of local concurrency slots busy (in_flight / capacity)"
+            ),
+            unit="1",
+        )
+        _worker_in_flight = meter.create_gauge(
+            "agentflow.worker.in_flight",
+            description="Run jobs currently executing in this worker process",
+            unit="1",
+        )
+        _worker_capacity = meter.create_gauge(
+            "agentflow.worker.capacity",
+            description="Maximum parallel jobs (AGENTFLOW_WORKER_CONCURRENCY)",
+            unit="1",
+        )
+
+
+def record_queue_metrics(stats: "QueueStats") -> None:
+    """Export a queue monitor sample as OTel gauges (``agentflow.queue.*``)."""
+    if not is_enabled():
+        return
+    _ensure_queue_instruments()
+    assert _queue_stream_length is not None
+    assert _queue_lag is not None
+    assert _queue_pending is not None
+    assert _queue_backlog is not None
+    assert _queue_consumer_delay is not None
+    assert _queue_dlq_length is not None
+
+    _queue_stream_length.set(stats.stream_length)
+    _queue_lag.set(stats.lag_count)
+    _queue_pending.set(stats.pending_count)
+    _queue_backlog.set(stats.backlog_count)
+    delay = stats.consumer_delay_seconds
+    if delay is not None:
+        _queue_consumer_delay.set(delay)
+    if stats.dlq_length is not None:
+        _queue_dlq_length.set(stats.dlq_length)
+
+
+def set_worker_utilization(*, in_flight: int, capacity: int) -> None:
+    """Update per-process worker slot usage (``agentflow.worker.*`` gauges)."""
+    if not is_enabled():
+        return
+    _ensure_worker_util_instruments()
+    assert _worker_utilization is not None
+    assert _worker_in_flight is not None
+    assert _worker_capacity is not None
+
+    capped = max(0, in_flight)
+    slots = max(1, capacity)
+    ratio = min(capped, slots) / slots
+    _worker_in_flight.set(capped)
+    _worker_capacity.set(capacity)
+    _worker_utilization.set(ratio)
 
 
 def capture_trace_context() -> dict[str, str] | None:

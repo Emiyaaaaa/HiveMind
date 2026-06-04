@@ -60,7 +60,10 @@ needed when running adapters that call external models.
 | `AGENTFLOW_OTEL_EXPORTER_ENDPOINT` | Worker | OTLP HTTP base URL without path (default `http://localhost:4318`) |
 
 RED metric names (both stacks): `agentflow.http.server.*`, `agentflow.worker.job.*`,
-`agentflow.adapter.run.*`. Run jobs carry W3C `trace_context` in the Redis payload so
+`agentflow.adapter.run.*`. The Python worker also exports queue gauges
+(`agentflow.queue.*`) from the queue monitor and per-process slot usage
+(`agentflow.worker.utilization`, `agentflow.worker.in_flight`,
+`agentflow.worker.capacity`). Run jobs carry W3C `trace_context` in the Redis payload so
 worker spans link to the API trace.
 
 Local collector + Prometheus scrape:
@@ -70,6 +73,10 @@ docker compose --profile observability --profile app up --build
 # OTLP HTTP :4318, Prometheus exporter :8889
 export AGENTFLOW_OTEL_ENABLED=true
 ```
+
+Import `docker/grafana/dashboards/agentflow-observability.json` into Grafana (or add a
+Grafana service to compose) for worker utilization, queue depth, consumer delay, and
+p95 latency panels scraped from `:8889/metrics`.
 
 ### Frontend
 

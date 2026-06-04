@@ -9,7 +9,7 @@
 按投入产出比排序：
 
 1. **事件总线持久化。** Redis pub/sub 无订阅者时会丢消息；支持 `Last-Event-ID` 重放。
-2. **队列 OTel 指标与背压。** 深度/消费者延迟已有日志告警，需导出为 `agentflow.queue.*` 指标；补充 worker 利用率、p95 看板。
+2. **队列 OTel 指标与背压。** 深度/消费者延迟已导出为 `agentflow.queue.*`；worker 利用率见 `agentflow.worker.utilization`；p95 面板见 `docker/grafana/dashboards/agentflow-observability.json`。
 3. **控制台调试体验。** Step 可视化时间线、独立 ToolCall 检查面板。
 4. **LangGraph adapter 扩展。** 更多 graph 模式、MCP 工具协议集成。
 5. **双向流式传输。** WebSocket / WebTransport + SSE 降级，支持双向取消与审批。
@@ -35,7 +35,7 @@
 - [ ] Step 时间线组件（节点延迟与状态流转）
 - [ ] 独立 ToolCall 检查面板（参数/结果/错误结构化浏览）
 - [ ] SSE 事件重放（`Last-Event-ID` / 持久化 event log）
-- [ ] 队列深度、worker 利用率导出为 OTel/Prometheus 指标
+- [x] 队列深度、worker 利用率导出为 OTel/Prometheus 指标
 - [ ] p95 耗时仪表盘与告警
 
 **验收：** 控制台展示可视化时间线；断连 SSE 可补全事件；队列指标可在 Grafana 查看。
