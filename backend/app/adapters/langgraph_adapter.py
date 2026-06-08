@@ -12,7 +12,16 @@ Expected agent.config shape (all optional except when using custom graphs):
   "model": "openai/gpt-4o-mini",
   "system_prompt": "You are a helpful coordinator.",
   "stream_tokens": true,       // emit token.delta SSE; defer tokens to step.updated
-  "tools": ["echo"],           // tool registry keys
+  "tools": ["echo"],           // builtin or MCP keys (mcp/{server}/{tool})
+  "mcp_servers": [             // optional MCP stdio/SSE/HTTP servers
+    {
+      "name": "echo",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["path/to/mcp_server.py"]
+    }
+  ],
+  "mcp_auto_register": false,  // register every tool from mcp_servers
   "graph": {
     "nodes": [
       {"id": "plan", "type": "model"},
@@ -43,7 +52,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
-from app.adapters.tool_registry import ToolDefinition, resolve_tools, tool_schemas
+from app.adapters.mcp_tools import RunToolResolver, resolve_run_tools, tool_schemas_from_definitions
+from app.adapters.tool_registry import ToolDefinition
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.run import RunStatus
@@ -142,6 +152,7 @@ class _RunState:
     ctx: AdapterContext
     config: dict[str, Any]
     tools: list[ToolDefinition]
+    tool_resolver: RunToolResolver
     default_model: str
     default_system_prompt: str
     step_index: int = 0
@@ -169,7 +180,7 @@ class LangGraphAdapter(OrchestratorAdapter):
         config = ctx.agent_config
         tool_keys: list[str] = list(config.get("tools") or [])
         try:
-            tools = resolve_tools(tool_keys) if tool_keys else []
+            run_tools = await resolve_run_tools(config, tool_keys)
         except KeyError as exc:
             message = exc.args[0] if exc.args else str(exc)
             return AdapterResult(status=RunStatus.FAILED, error=str(message))
@@ -177,12 +188,14 @@ class LangGraphAdapter(OrchestratorAdapter):
         try:
             graph_spec = GraphSpec.from_config(config.get("graph"))
         except ValueError as exc:
+            await run_tools.close()
             return AdapterResult(status=RunStatus.FAILED, error=str(exc))
 
         run_state = _RunState(
             ctx=ctx,
             config=config,
-            tools=tools,
+            tools=run_tools.tools,
+            tool_resolver=run_tools,
             default_model=str(config.get("model", "openai/gpt-4o-mini")),
             default_system_prompt=str(
                 config.get("system_prompt", "You are a helpful agent.")
@@ -209,6 +222,8 @@ class LangGraphAdapter(OrchestratorAdapter):
         except Exception as exc:  # pragma: no cover - depends on external model
             logger.exception("langgraph_run_failed", run_id=ctx.run_id)
             return AdapterResult(status=RunStatus.FAILED, error=str(exc))
+        finally:
+            await run_tools.close()
 
         return AdapterResult(
             status=RunStatus.SUCCEEDED,
@@ -243,10 +258,7 @@ class LangGraphAdapter(OrchestratorAdapter):
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx
-            arguments = {
-                "text": state.get("reply") or state.get("input", ""),
-                "input": state.get("input", ""),
-            }
+            arguments = _tool_arguments_for_state(tool_def, state)
             await ctx.emit_step_started(index=step_idx, node=spec.id)
             await ctx.emit_tool_call_started(
                 step_index=step_idx, name=tool_def.name, arguments=arguments
@@ -292,7 +304,7 @@ class LangGraphAdapter(OrchestratorAdapter):
     ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
         system_prompt = spec.system_prompt or run_state.default_system_prompt
         model = spec.model or run_state.default_model
-        tool_keys: list[str] = list(run_state.config.get("tools") or [])
+        resolved_tools = run_state.tools
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             step_idx = run_state.next_step_index(spec.id)
@@ -318,7 +330,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 model,
                 system_prompt,
                 user_input,
-                tool_keys=tool_keys if tool_keys else None,
+                tools=resolved_tools if resolved_tools else None,
                 stream_tokens=bool(stream_tokens),
             )
             latency_ms = int((time.monotonic() - started) * 1000)
@@ -367,7 +379,7 @@ class LangGraphAdapter(OrchestratorAdapter):
         system_prompt: str,
         user_input: str,
         *,
-        tool_keys: list[str] | None = None,
+        tools: list[ToolDefinition] | None = None,
         stream_tokens: bool = True,
     ) -> tuple[str, int, int]:
         """Call the configured chat model, optionally streaming token deltas.
@@ -383,7 +395,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 model,
                 system_prompt,
                 user_input,
-                tool_keys=tool_keys,
+                tools=tools,
                 stream_tokens=stream_tokens,
             )
 
@@ -396,10 +408,10 @@ class LangGraphAdapter(OrchestratorAdapter):
                 {"role": "user", "content": user_input},
             ],
         }
-        if tool_keys:
-            payload["tools"] = tool_schemas(tool_keys)
+        if tools:
+            payload["tools"] = tool_schemas_from_definitions(tools)
 
-        if stream_tokens and not tool_keys:
+        if stream_tokens and not tools:
             return await self._invoke_openai_streaming(
                 ctx, step_index, settings, payload
             )
@@ -432,12 +444,12 @@ class LangGraphAdapter(OrchestratorAdapter):
         system_prompt: str,
         user_input: str,
         *,
-        tool_keys: list[str] | None = None,
+        tools: list[ToolDefinition] | None = None,
         stream_tokens: bool = True,
     ) -> tuple[str, int, int]:
         suffix = ""
-        if tool_keys:
-            suffix = f" [tools={','.join(tool_keys)}]"
+        if tools:
+            suffix = f" [tools={','.join(t.name for t in tools)}]"
         reply = f"[mock:{model}]{suffix} {user_input}"
         tokens_in = estimate_tokens(system_prompt + user_input)
         tokens_out = estimate_tokens(reply)
@@ -519,6 +531,29 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
         if isinstance(saved, dict):
             return {**default, **saved}
     return default
+
+
+def _tool_arguments_for_state(
+    tool_def: ToolDefinition, state: dict[str, Any]
+) -> dict[str, Any]:
+    """Build tool arguments from graph state using the tool parameter schema."""
+    text = str(state.get("reply") or state.get("input", ""))
+    props = (tool_def.parameters or {}).get("properties") or {}
+    if not props:
+        return {"text": text, "input": state.get("input", "")}
+
+    arguments: dict[str, Any] = {}
+    for name, spec in props.items():
+        if name in ("text", "message", "prompt", "query", "input"):
+            arguments[name] = text if name != "input" else state.get("input", "")
+        elif spec.get("type") == "string":
+            arguments[name] = text
+        elif spec.get("type") == "integer":
+            try:
+                arguments[name] = int(text)
+            except (TypeError, ValueError):
+                arguments[name] = 0
+    return arguments or {"text": text, "input": state.get("input", "")}
 
 
 def _chunk_text(text: str, *, size: int = 8) -> list[str]:
