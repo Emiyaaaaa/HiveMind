@@ -22,6 +22,7 @@ dependencies = [
     "python-ulid>=3.0",
     "langgraph>=0.2.50",
     "langchain-core>=0.3",
+    "mcp>=1.0",
     "opentelemetry-api>=1.28",
     "opentelemetry-sdk>=1.28",
     "opentelemetry-exporter-otlp-proto-http>=1.28",

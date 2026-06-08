@@ -15,6 +15,12 @@ from app.adapters.base import (
 from app.adapters import tool_registry as _tool_registry  # noqa: F401 - builtins
 from app.adapters.echo_adapter import EchoAdapter
 from app.adapters.langgraph_adapter import LangGraphAdapter
+from app.adapters.mcp_client import (
+    McpServerConfig,
+    McpSessionManager,
+    parse_mcp_servers,
+)
+from app.adapters.mcp_tools import RunToolResolver, resolve_run_tools
 from app.adapters.tool_registry import (
     ToolDefinition,
     get_tool,
@@ -30,7 +36,12 @@ __all__ = [
     "AdapterContext",
     "EchoAdapter",
     "LangGraphAdapter",
+    "McpServerConfig",
+    "McpSessionManager",
     "OrchestratorAdapter",
+    "RunToolResolver",
+    "parse_mcp_servers",
+    "resolve_run_tools",
     "ToolDefinition",
     "get_adapter",
     "get_tool",
