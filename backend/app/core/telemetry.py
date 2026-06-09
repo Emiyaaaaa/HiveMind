@@ -43,6 +43,7 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 from app.core.config import Settings, get_settings
+from app.core.duration_window import DurationWindow
 from app.core.logging import get_logger
 
 if TYPE_CHECKING:
@@ -76,6 +77,7 @@ _queue_dlq_length: Any | None = None
 _worker_utilization: Any | None = None
 _worker_in_flight: Any | None = None
 _worker_capacity: Any | None = None
+_worker_job_durations = DurationWindow()
 
 
 def is_enabled() -> bool:
@@ -409,12 +411,18 @@ def record_http_red(
         _http_errors.add(1, attributes=attrs)
 
 
+def get_worker_job_duration_window() -> DurationWindow:
+    """Recent worker job durations used for in-process p95 alerting."""
+    return _worker_job_durations
+
+
 def record_worker_red(
     *,
     adapter: str,
     outcome: str,
     duration_seconds: float,
 ) -> None:
+    _worker_job_durations.record(duration_seconds)
     if not is_enabled():
         return
     _ensure_red_instruments()

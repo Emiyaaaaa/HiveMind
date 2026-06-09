@@ -139,6 +139,22 @@ class Settings(BaseSettings):
             "Log a warning when lag plus pending entries reaches this count."
         ),
     )
+    worker_job_p95_alert_seconds: float = Field(
+        default=60.0,
+        ge=0.1,
+        description=(
+            "Log a warning when the rolling worker-job p95 duration meets or "
+            "exceeds this many seconds."
+        ),
+    )
+    worker_job_p95_alert_min_samples: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Minimum completed worker jobs in the rolling window before "
+            "p95 alerting activates."
+        ),
+    )
     cancel_key_prefix: str = Field(
         default="agentflow:cancel:",
         description="Redis key prefix the API uses to signal cancel for a run id.",

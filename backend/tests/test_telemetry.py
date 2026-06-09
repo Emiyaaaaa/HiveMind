@@ -13,8 +13,10 @@ from app.core.config import Settings
 
 from app.core.telemetry import (
     capture_trace_context,
+    get_worker_job_duration_window,
     is_enabled,
     record_queue_metrics,
+    record_worker_red,
     set_worker_utilization,
     setup_telemetry,
     shutdown_telemetry,
@@ -79,6 +81,14 @@ def test_queue_metrics_noop_when_disabled():
 
 def test_worker_utilization_noop_when_disabled():
     set_worker_utilization(in_flight=2, capacity=4)
+
+
+def test_record_worker_red_tracks_duration_window_when_otel_disabled():
+    window = get_worker_job_duration_window()
+    window.clear()
+    record_worker_red(adapter="echo", outcome="ok", duration_seconds=12.5)
+    assert window.count() == 1
+    assert window.p95() == 12.5
 
 
 def _metric_values(reader: InMemoryMetricReader) -> dict[str, float]:

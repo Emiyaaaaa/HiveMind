@@ -1,0 +1,32 @@
+groups:
+  - name: agentflow_latency
+    rules:
+      - alert: AgentFlowWorkerJobP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(agentflow_worker_job_duration_bucket[5m])) by (le)
+          ) > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Worker job p95 latency is high
+          description: >
+            Worker job p95 duration has exceeded 60s for 5 minutes
+            (current value {{ $value | humanizeDuration }}).
+
+      - alert: AgentFlowHttpP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(agentflow_http_server_duration_bucket[5m])) by (le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: HTTP p95 latency is high
+          description: >
+            HTTP server p95 duration has exceeded 5s for 5 minutes
+            (current value {{ $value | humanizeDuration }}).
