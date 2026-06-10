@@ -45,6 +45,8 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_JOB_QUEUE_MONITOR_INTERVAL_SECONDS` | Poll interval for queue metrics (default `30`) |
 | `AGENTFLOW_JOB_QUEUE_CONSUMER_DELAY_ALERT_SECONDS` | Warn when oldest lagging job exceeds this age (default `300`) |
 | `AGENTFLOW_JOB_QUEUE_DEPTH_ALERT_THRESHOLD` | Warn when `lag + pending` reaches this count (default `100`) |
+| `AGENTFLOW_WORKER_JOB_P95_ALERT_SECONDS` | Warn when rolling worker-job p95 meets or exceeds this duration (default `60`) |
+| `AGENTFLOW_WORKER_JOB_P95_ALERT_MIN_SAMPLES` | Minimum completed jobs before p95 alerting activates (default `10`) |
 
 Optional model-provider keys (`AGENTFLOW_OPENAI_API_KEY`, etc.) are only
 needed when running adapters that call external models.
@@ -70,13 +72,17 @@ Local collector + Prometheus scrape:
 
 ```bash
 docker compose --profile observability --profile app up --build
-# OTLP HTTP :4318, Prometheus exporter :8889
+# OTLP HTTP :4318, Prometheus exporter :8889, Prometheus UI :9090
 export AGENTFLOW_OTEL_ENABLED=true
 ```
 
+Prometheus scrapes the OTel collector on `:8889` and evaluates p95 latency rules in
+`docker/prometheus/alerts.yml` (worker job p95 > 60s, HTTP p95 > 5s, both sustained
+for 5 minutes). View firing alerts at `http://localhost:9090/alerts`.
+
 Import `docker/grafana/dashboards/agentflow-observability.json` into Grafana (or add a
 Grafana service to compose) for worker utilization, queue depth, consumer delay, and
-p95 latency panels scraped from `:8889/metrics`.
+p95 latency panels with threshold coloring.
 
 ### Frontend
 
@@ -132,7 +138,8 @@ GitHub Actions job `integration` (see `.github/workflows/ci.yml`) runs:
 - **Backups:** Postgres holds all durable state; Redis is ephemeral coordination.
 - **Logs:** Java API logs Spring Boot output; worker logs structlog from
   `app.worker`. Look for `queue.metrics` (baseline depth/lag), `queue.consumer_delay_alert`
-  (oldest job wait exceeded threshold), and `queue.depth_alert` (backlog count exceeded).
+  (oldest job wait exceeded threshold), `queue.depth_alert` (backlog count exceeded),
+  and `worker.job_p95_alert` (rolling worker-job p95 exceeded threshold).
 
 ## What not to run in production
 

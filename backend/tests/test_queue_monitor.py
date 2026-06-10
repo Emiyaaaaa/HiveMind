@@ -11,9 +11,11 @@ import pytest
 from unittest.mock import patch
 
 from app.core.config import Settings
+from app.core.duration_window import DurationWindow
 from app.worker.monitor import (
     _emit_delay_alerts,
     _emit_depth_alerts,
+    _emit_worker_p95_alerts,
     collect_queue_stats,
     run_queue_monitor,
 )
@@ -103,6 +105,54 @@ def test_delay_alert_edge_triggering():
         oldest_pending_idle_seconds=None,
     )
     active = _emit_delay_alerts(cleared, threshold=60.0, active=True)
+    assert active is False
+
+
+def test_worker_p95_alert_edge_triggering():
+    window = DurationWindow(max_samples=20)
+    for value in range(1, 21):
+        window.record(float(value))
+
+    active = _emit_worker_p95_alerts(
+        window,
+        threshold=15.0,
+        min_samples=10,
+        active=False,
+    )
+    assert active is True
+
+    active = _emit_worker_p95_alerts(
+        window,
+        threshold=15.0,
+        min_samples=10,
+        active=True,
+    )
+    assert active is True
+
+    cleared = DurationWindow(max_samples=20)
+    for value in range(1, 6):
+        cleared.record(float(value))
+
+    active = _emit_worker_p95_alerts(
+        cleared,
+        threshold=15.0,
+        min_samples=10,
+        active=True,
+    )
+    assert active is False
+
+
+def test_worker_p95_alert_waits_for_min_samples():
+    window = DurationWindow(max_samples=20)
+    for value in range(1, 6):
+        window.record(float(value))
+
+    active = _emit_worker_p95_alerts(
+        window,
+        threshold=1.0,
+        min_samples=10,
+        active=False,
+    )
     assert active is False
 
 

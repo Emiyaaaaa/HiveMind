@@ -59,6 +59,22 @@ services:
     profiles:
       - observability
 
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: agentflow-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+    profiles:
+      - observability
+
   api:
     build: ./backend-java
     container_name: agentflow-api

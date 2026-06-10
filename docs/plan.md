@@ -36,7 +36,7 @@
 - [ ] 独立 ToolCall 检查面板（参数/结果/错误结构化浏览）
 - [ ] SSE 事件重放（`Last-Event-ID` / 持久化 event log）
 - [x] 队列深度、worker 利用率导出为 OTel/Prometheus 指标
-- [ ] p95 耗时仪表盘与告警
+- [x] p95 耗时仪表盘与告警
 
 **验收：** 控制台展示可视化时间线；断连 SSE 可补全事件；队列指标可在 Grafana 查看。
 
