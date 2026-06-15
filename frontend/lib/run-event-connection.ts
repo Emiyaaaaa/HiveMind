@@ -25,6 +25,22 @@ export interface RunEventConnectionHandlers {
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 30_000;
 
+/** Mirrors backend `_is_after` — numeric IDs when possible, else lexicographic. */
+function isEventIdAfter(entryId: string, afterId: string): boolean {
+  const entryNum = Number(entryId);
+  const afterNum = Number(afterId);
+  if (!Number.isNaN(entryNum) && !Number.isNaN(afterNum)) {
+    return entryNum > afterNum;
+  }
+  return entryId > afterId;
+}
+
+function reconnectDelayMs(attempt: number): number {
+  const capped = Math.min(INITIAL_RECONNECT_MS * 2 ** attempt, MAX_RECONNECT_MS);
+  // Equal jitter: spread retries without thundering herd.
+  return Math.floor(capped / 2 + Math.random() * (capped / 2));
+}
+
 function streamUrl(runId: string, lastEventId: string | null): string {
   const base = eventStreamUrl(runId);
   if (!lastEventId) return base;
@@ -58,6 +74,7 @@ export function createRunEventConnection(
   const closeSource = () => {
     if (!source) return;
     RUN_EVENT_TYPES.forEach((type) => source!.removeEventListener(type, onMessage));
+    source.onerror = null;
     source.close();
     source = null;
   };
@@ -70,40 +87,10 @@ export function createRunEventConnection(
     handlers.onTerminal?.(event);
   };
 
-  const scheduleReconnect = () => {
-    if (cancelled || terminal) return;
-    setStatus("reconnecting");
-    const delay = Math.min(
-      INITIAL_RECONNECT_MS * 2 ** reconnectAttempt,
-      MAX_RECONNECT_MS,
-    );
-    reconnectAttempt += 1;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay);
-  };
-
-  const onMessage = (event: MessageEvent) => {
-    if (cancelled || terminal) return;
-    if (event.lastEventId) {
-      lastEventId = event.lastEventId;
-    }
-    try {
-      const data: RunEvent = JSON.parse(event.data);
-      clientSeq += 1;
-      handlers.onEvent?.(data, clientSeq, event.lastEventId || undefined);
-      if (isTerminalRunEvent(data.type)) {
-        finishTerminal(data);
-      }
-    } catch {
-      // ignore malformed events
-    }
-  };
-
   const connect = () => {
     if (cancelled || terminal) return;
 
+    clearReconnectTimer();
     closeSource();
     setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
 
@@ -112,7 +99,6 @@ export function createRunEventConnection(
 
     next.addEventListener("open", () => {
       if (cancelled || terminal) return;
-      reconnectAttempt = 0;
       setStatus("connected");
     });
 
@@ -120,9 +106,70 @@ export function createRunEventConnection(
 
     next.onerror = () => {
       if (cancelled || terminal) return;
+      // EventSource may fire onerror while still CONNECTING; only retry once closed.
+      if (next.readyState !== EventSource.CLOSED) return;
       closeSource();
       scheduleReconnect();
     };
+  };
+
+  const scheduleReconnect = () => {
+    if (cancelled || terminal || reconnectTimer != null) return;
+    setStatus("reconnecting");
+    const delay = reconnectDelayMs(reconnectAttempt);
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  };
+
+  const reconnectNow = () => {
+    if (cancelled || terminal) return;
+    if (source?.readyState === EventSource.OPEN) return;
+    reconnectAttempt = 0;
+    connect();
+  };
+
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "visible") {
+      reconnectNow();
+    }
+  };
+
+  const onOnline = () => {
+    reconnectNow();
+  };
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisibilityChange);
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", onOnline);
+  }
+
+  const onMessage = (event: MessageEvent) => {
+    if (cancelled || terminal) return;
+
+    const incomingId = event.lastEventId;
+    if (incomingId) {
+      if (lastEventId && !isEventIdAfter(incomingId, lastEventId)) {
+        return;
+      }
+      lastEventId = incomingId;
+    }
+
+    try {
+      const data: RunEvent = JSON.parse(event.data);
+      reconnectAttempt = 0;
+      clientSeq += 1;
+      handlers.onEvent?.(data, clientSeq, incomingId || undefined);
+      if (isTerminalRunEvent(data.type)) {
+        finishTerminal(data);
+      }
+    } catch {
+      // ignore malformed events
+    }
   };
 
   connect();
@@ -132,6 +179,13 @@ export function createRunEventConnection(
       cancelled = true;
       clearReconnectTimer();
       closeSource();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", onOnline);
+      }
+      setStatus("closed");
     },
   };
 }
