@@ -1,19 +1,8 @@
 """Bridge MCP server tools into adapter tool resolution.
 
-Agent config example::
-
-    {
-      "mcp_servers": [
-        {
-          "name": "echo",
-          "transport": "stdio",
-          "command": "python",
-          "args": ["tests/fixtures/mcp_echo_server.py"]
-        }
-      ],
-      "tools": ["mcp/echo/ping"],
-      "mcp_auto_register": false
-    }
+Adapters should use ``AdapterToolSurface`` from ``adapter_tools`` as the
+primary entry point; this module implements MCP session wiring behind that
+surface.
 
 When ``mcp_auto_register`` is true, every tool exposed by configured MCP
 servers is registered automatically (still filtered by ``tools`` when that
@@ -51,21 +40,6 @@ class RunToolResolver:
     async def close(self) -> None:
         if self.mcp_manager is not None:
             await self.mcp_manager.close()
-
-
-def tool_schemas_from_definitions(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
-    """OpenAI-compatible function schemas from resolved tool definitions."""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description or f"Invoke the {tool.name} tool.",
-                "parameters": tool.parameters,
-            },
-        }
-        for tool in tools
-    ]
 
 
 async def resolve_run_tools(

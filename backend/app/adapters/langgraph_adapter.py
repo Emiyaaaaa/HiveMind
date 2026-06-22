@@ -51,8 +51,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.adapters.adapter_tools import (
+    AdapterToolSurface,
+    build_tool_arguments,
+    tool_schemas_from_definitions,
+)
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
-from app.adapters.mcp_tools import RunToolResolver, resolve_run_tools, tool_schemas_from_definitions
 from app.adapters.tool_registry import ToolDefinition
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -152,7 +156,7 @@ class _RunState:
     ctx: AdapterContext
     config: dict[str, Any]
     tools: list[ToolDefinition]
-    tool_resolver: RunToolResolver
+    tool_surface: AdapterToolSurface
     default_model: str
     default_system_prompt: str
     step_index: int = 0
@@ -180,7 +184,7 @@ class LangGraphAdapter(OrchestratorAdapter):
         config = ctx.agent_config
         tool_keys: list[str] = list(config.get("tools") or [])
         try:
-            run_tools = await resolve_run_tools(config, tool_keys)
+            tool_surface = await AdapterToolSurface.open(config, tool_keys)
         except KeyError as exc:
             message = exc.args[0] if exc.args else str(exc)
             return AdapterResult(status=RunStatus.FAILED, error=str(message))
@@ -188,14 +192,14 @@ class LangGraphAdapter(OrchestratorAdapter):
         try:
             graph_spec = GraphSpec.from_config(config.get("graph"))
         except ValueError as exc:
-            await run_tools.close()
+            await tool_surface.close()
             return AdapterResult(status=RunStatus.FAILED, error=str(exc))
 
         run_state = _RunState(
             ctx=ctx,
             config=config,
-            tools=run_tools.tools,
-            tool_resolver=run_tools,
+            tools=tool_surface.tools,
+            tool_surface=tool_surface,
             default_model=str(config.get("model", "openai/gpt-4o-mini")),
             default_system_prompt=str(
                 config.get("system_prompt", "You are a helpful agent.")
@@ -223,7 +227,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             logger.exception("langgraph_run_failed", run_id=ctx.run_id)
             return AdapterResult(status=RunStatus.FAILED, error=str(exc))
         finally:
-            await run_tools.close()
+            await tool_surface.close()
 
         return AdapterResult(
             status=RunStatus.SUCCEEDED,
@@ -246,29 +250,19 @@ class LangGraphAdapter(OrchestratorAdapter):
         if not tool_name:
             raise ValueError(f"tool node {spec.id!r} has no tool configured")
 
-        tool_def = next(
-            (t for t in run_state.tools if t.name == tool_name),
-            None,
-        )
-        if tool_def is None:
-            from app.adapters.tool_registry import get_tool
-
-            tool_def = get_tool(tool_name)
+        tool_def = run_state.tool_surface.lookup(tool_name)
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx
-            arguments = _tool_arguments_for_state(tool_def, state)
+            arguments = build_tool_arguments(tool_def, state)
             await ctx.emit_step_started(index=step_idx, node=spec.id)
-            await ctx.emit_tool_call_started(
-                step_index=step_idx, name=tool_def.name, arguments=arguments
-            )
             try:
-                result = await tool_def.handler(arguments)
-                if not isinstance(result, dict):
-                    result = {"result": result}
-                await ctx.emit_tool_call_completed(
-                    step_index=step_idx, name=tool_def.name, result=result
+                result = await run_state.tool_surface.execute(
+                    ctx,
+                    step_index=step_idx,
+                    name=tool_def.name,
+                    arguments=arguments,
                 )
                 await ctx.emit_step_completed(
                     index=step_idx,
@@ -287,11 +281,6 @@ class LangGraphAdapter(OrchestratorAdapter):
                 )
                 return next_state
             except Exception as exc:
-                await ctx.emit_tool_call_completed(
-                    step_index=step_idx,
-                    name=tool_def.name,
-                    error=str(exc),
-                )
                 await ctx.emit_step_failed(
                     index=step_idx, node=spec.id, error=str(exc)
                 )
@@ -531,29 +520,6 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
         if isinstance(saved, dict):
             return {**default, **saved}
     return default
-
-
-def _tool_arguments_for_state(
-    tool_def: ToolDefinition, state: dict[str, Any]
-) -> dict[str, Any]:
-    """Build tool arguments from graph state using the tool parameter schema."""
-    text = str(state.get("reply") or state.get("input", ""))
-    props = (tool_def.parameters or {}).get("properties") or {}
-    if not props:
-        return {"text": text, "input": state.get("input", "")}
-
-    arguments: dict[str, Any] = {}
-    for name, spec in props.items():
-        if name in ("text", "message", "prompt", "query", "input"):
-            arguments[name] = text if name != "input" else state.get("input", "")
-        elif spec.get("type") == "string":
-            arguments[name] = text
-        elif spec.get("type") == "integer":
-            try:
-                arguments[name] = int(text)
-            except (TypeError, ValueError):
-                arguments[name] = 0
-    return arguments or {"text": text, "input": state.get("input", "")}
 
 
 def _chunk_text(text: str, *, size: int = 8) -> list[str]:
