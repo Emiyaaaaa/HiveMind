@@ -316,7 +316,12 @@ class RunService:
             )
 
     async def _broadcast(
-        self, event_type: EventType, run_id: str, data: dict[str, Any]
+        self,
+        event_type: EventType,
+        run_id: str,
+        data: dict[str, Any],
+        *,
+        persist: bool = True,
     ) -> None:
         event = RunEvent(
             type=event_type,
@@ -324,7 +329,7 @@ class RunService:
             at=datetime.now(UTC),
             data=data,
         )
-        await self.bus.publish(event)
+        await self.bus.publish(event, persist=persist)
 
     async def _handle_event(
         self, run_id: str, event_type: EventType, data: dict[str, Any]
@@ -367,8 +372,8 @@ class RunService:
                     step.cost_usd = data["cost_usd"]
                 await self.session.commit()
         elif event_type == "token.delta":
-            # SSE-only: avoid per-chunk DB commits during streaming.
-            await self._broadcast(event_type, run_id, data)
+            # SSE-only: live pub/sub without durable replay log or DB writes.
+            await self._broadcast(event_type, run_id, data, persist=False)
             return
         elif event_type == "step.failed":
             step = await self._find_step(run_id, data["index"])

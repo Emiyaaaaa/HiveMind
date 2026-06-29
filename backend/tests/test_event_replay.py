@@ -184,3 +184,44 @@ async def test_redis_event_bus_replay_with_fakeredis():
 
     full = [event.type async for _, event in bus.replay(run_id, None)]
     assert full == ["run.created", "run.started", "run.completed"]
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_events_skip_replay_log():
+    bus = InMemoryEventBus()
+    run_id = "run-ephemeral"
+
+    id1 = await bus.publish(_event("run.created", run_id))
+    await bus.publish(_event("token.delta", run_id, step_index=0, delta="Hi"), persist=False)
+    id2 = await bus.publish(_event("run.completed", run_id, output={}))
+
+    replayed = [event.type async for _, event in bus.replay(run_id, None)]
+    assert replayed == ["run.created", "run.completed"]
+    assert id1 != id2
+
+
+@pytest.mark.asyncio
+async def test_redis_ephemeral_events_skip_stream():
+    redis = fakeredis.FakeRedis(decode_responses=True)
+    bus = RedisEventBus.__new__(RedisEventBus)
+    bus._redis = redis
+    bus._channel_prefix = "agentflow:run:"
+    bus._stream_suffix = ":log"
+    bus._stream_max_len = 1000
+
+    run_id = "run-redis-ephemeral"
+    id1 = await bus.publish(_event("run.created", run_id))
+    await bus.publish(
+        _event("token.delta", run_id, step_index=0, delta="x"),
+        persist=False,
+    )
+    id2 = await bus.publish(_event("run.completed", run_id, output={}))
+
+    stream = bus._stream(run_id)
+    entries = await redis.xrange(stream, min="-", max="+")
+    assert len(entries) == 2
+    assert entries[0][0] == id1
+    assert entries[1][0] == id2
+
+    replayed = [event.type async for _, event in bus.replay(run_id, None)]
+    assert replayed == ["run.created", "run.completed"]

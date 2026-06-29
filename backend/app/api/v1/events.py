@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.core.config import get_settings
 from app.events import EventBus, get_event_bus
 from app.events.bus import _is_after
 from app.schemas.run import RunEvent
@@ -24,6 +25,12 @@ from app.schemas.run import RunEvent
 router = APIRouter(prefix="/events", tags=["events"])
 
 _TERMINAL_TYPES = {"run.completed", "run.failed", "run.cancelled"}
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 def _resolve_last_event_id(request: Request) -> str | None:
@@ -36,12 +43,14 @@ def _resolve_last_event_id(request: Request) -> str | None:
     return None
 
 
-def _sse_frame(event_id: str, event: RunEvent) -> dict[str, str]:
-    return {
-        "id": event_id,
+def _sse_frame(event_id: str | None, event: RunEvent) -> dict[str, str]:
+    frame: dict[str, str] = {
         "event": event.type,
         "data": event.model_dump_json(),
     }
+    if event_id:
+        frame["id"] = event_id
+    return frame
 
 
 @router.get("/{run_id}")
@@ -51,6 +60,7 @@ async def stream_run_events(
     bus: EventBus = Depends(get_event_bus),
 ) -> EventSourceResponse:
     after_id = _resolve_last_event_id(request)
+    heartbeat = float(get_settings().event_sse_heartbeat_seconds)
 
     async def generator() -> AsyncIterator[dict[str, str]]:
         last_id = after_id
@@ -58,8 +68,9 @@ async def stream_run_events(
         async for event_id, event in bus.replay(run_id, after_id):
             if await request.is_disconnected():
                 return
-            yield _sse_frame(event_id, event)
-            last_id = event_id
+            yield _sse_frame(event_id or None, event)
+            if event_id:
+                last_id = event_id
             if event.type in _TERMINAL_TYPES:
                 return
 
@@ -67,8 +78,9 @@ async def stream_run_events(
             async for event_id, event in bus.replay(run_id, last_id):
                 if await request.is_disconnected():
                     return
-                yield _sse_frame(event_id, event)
-                last_id = event_id
+                yield _sse_frame(event_id or None, event)
+                if event_id:
+                    last_id = event_id
                 if event.type in _TERMINAL_TYPES:
                     return
 
@@ -77,7 +89,9 @@ async def stream_run_events(
                     break
 
                 try:
-                    event_id, event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    event_id, event = await asyncio.wait_for(
+                        queue.get(), timeout=heartbeat
+                    )
                 except TimeoutError:
                     yield {"event": "ping", "data": "{}"}
                     continue
@@ -87,9 +101,13 @@ async def stream_run_events(
                 if event_id:
                     last_id = event_id
 
-                yield _sse_frame(event_id or "0", event)
+                yield _sse_frame(event_id or None, event)
 
                 if event.type in _TERMINAL_TYPES:
                     break
 
-    return EventSourceResponse(generator())
+    return EventSourceResponse(
+        generator(),
+        ping=int(heartbeat),
+        headers=_SSE_HEADERS,
+    )

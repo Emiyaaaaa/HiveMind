@@ -38,7 +38,7 @@ def _is_after(entry_id: str, after_id: str | None) -> bool:
 
 
 class EventBus(Protocol):
-    async def publish(self, event: RunEvent) -> str: ...
+    async def publish(self, event: RunEvent, *, persist: bool = True) -> str: ...
 
     def replay(
         self, run_id: str, after_id: str | None = None
@@ -57,12 +57,16 @@ class InMemoryEventBus:
         self._seq: dict[str, int] = defaultdict(int)
         self._lock = asyncio.Lock()
 
-    async def publish(self, event: RunEvent) -> str:
+    async def publish(self, event: RunEvent, *, persist: bool = True) -> str:
         async with self._lock:
-            self._seq[event.run_id] += 1
-            event_id = str(self._seq[event.run_id])
-            record = (event_id, event)
-            self._log[event.run_id].append(record)
+            if persist:
+                self._seq[event.run_id] += 1
+                event_id = str(self._seq[event.run_id])
+                record = (event_id, event)
+                self._log[event.run_id].append(record)
+            else:
+                event_id = ""
+                record = (event_id, event)
             queues = list(self._subscribers.get(event.run_id, ()))
         for queue in queues:
             await queue.put(record)
@@ -110,14 +114,16 @@ class RedisEventBus:
     def _stream(self, run_id: str) -> str:
         return f"{self._channel_prefix}{run_id}{self._stream_suffix}"
 
-    async def publish(self, event: RunEvent) -> str:
-        stream = self._stream(event.run_id)
-        event_id = await self._redis.xadd(
-            stream,
-            {"payload": event.model_dump_json()},
-            maxlen=self._stream_max_len,
-            approximate=True,
-        )
+    async def publish(self, event: RunEvent, *, persist: bool = True) -> str:
+        event_id = ""
+        if persist:
+            stream = self._stream(event.run_id)
+            event_id = await self._redis.xadd(
+                stream,
+                {"payload": event.model_dump_json()},
+                maxlen=self._stream_max_len,
+                approximate=True,
+            )
         envelope = json.dumps({"id": event_id, "event": event.model_dump(mode="json")})
         await self._redis.publish(self._channel(event.run_id), envelope)
         return event_id
