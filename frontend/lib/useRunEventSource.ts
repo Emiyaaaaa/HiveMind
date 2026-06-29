@@ -18,6 +18,7 @@ interface UseRunEventSourceOptions {
   enabled?: boolean;
   onEvent?: (event: RunEvent) => void;
   onTerminal?: (event: RunEvent) => void;
+  onReconnected?: () => void;
 }
 
 export function useRunEventSource({
@@ -25,6 +26,7 @@ export function useRunEventSource({
   enabled = true,
   onEvent,
   onTerminal,
+  onReconnected,
 }: UseRunEventSourceOptions) {
   const [events, setEvents] = useState<StoredRunEvent[]>([]);
   const [status, setStatus] = useState<RunEventConnectionStatus>(
@@ -32,9 +34,11 @@ export function useRunEventSource({
   );
   const onEventRef = useRef(onEvent);
   const onTerminalRef = useRef(onTerminal);
+  const onReconnectedRef = useRef(onReconnected);
 
   onEventRef.current = onEvent;
   onTerminalRef.current = onTerminal;
+  onReconnectedRef.current = onReconnected;
 
   useEffect(() => {
     if (!enabled) {
@@ -54,6 +58,9 @@ export function useRunEventSource({
       onTerminal: (event) => {
         onTerminalRef.current?.(event);
       },
+      onReconnected: () => {
+        onReconnectedRef.current?.();
+      },
     });
 
     return () => connection.close();
@@ -66,18 +73,22 @@ interface UseMultiRunEventSourceOptions {
   runIds: string[];
   onEvent?: (event: RunEvent) => void;
   onTerminal?: (event: RunEvent) => void;
+  onReconnected?: (runId: string) => void;
 }
 
 export function useMultiRunEventSource({
   runIds,
   onEvent,
   onTerminal,
+  onReconnected,
 }: UseMultiRunEventSourceOptions) {
   const onEventRef = useRef(onEvent);
   const onTerminalRef = useRef(onTerminal);
+  const onReconnectedRef = useRef(onReconnected);
 
   onEventRef.current = onEvent;
   onTerminalRef.current = onTerminal;
+  onReconnectedRef.current = onReconnected;
 
   const runKey = runIds.slice().sort().join(",");
 
@@ -92,6 +103,9 @@ export function useMultiRunEventSource({
         },
         onTerminal: (event) => {
           onTerminalRef.current?.(event);
+        },
+        onReconnected: () => {
+          onReconnectedRef.current?.(runId);
         },
       }),
     );

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
         ge=100,
         description="Approximate max entries kept in each run's Redis event stream.",
     )
+    event_sse_heartbeat_seconds: int = Field(
+        default=15,
+        ge=1,
+        le=120,
+        description="SSE keepalive interval (comment + event: ping frames).",
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     default_adapter: str = Field(

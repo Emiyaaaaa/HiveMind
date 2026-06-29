@@ -35,6 +35,9 @@ export function useRunsListLiveSync(liveRunIds: string[]) {
         reconcileRuns();
       }
     },
+    onReconnected: () => {
+      reconcileRuns();
+    },
     onTerminal: () => {
       reconcileRuns.cancel();
       queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -69,6 +72,9 @@ export function useRunWithLiveUpdates(runId: string) {
       if (shouldReconcileRun(event.type)) {
         reconcileRun();
       }
+    },
+    onReconnected: () => {
+      reconcileRun();
     },
     onTerminal: () => {
       reconcileRun.cancel();

@@ -2,6 +2,7 @@ package io.agentflow.api.controller;
 
 import io.agentflow.api.service.EventStreamService;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -21,12 +22,17 @@ public class EventsController {
     }
 
     @GetMapping(value = "/{runId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(
+    public ResponseEntity<SseEmitter> stream(
             @PathVariable String runId,
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
             @RequestParam(value = "last_event_id", required = false) String lastEventIdParam) {
         String after =
                 lastEventId != null && !lastEventId.isBlank() ? lastEventId : lastEventIdParam;
-        return events.subscribe(runId, after);
+        SseEmitter emitter = events.subscribe(runId, after);
+        return ResponseEntity.ok()
+                .header("Cache-Control", "no-cache")
+                .header("Connection", "keep-alive")
+                .header("X-Accel-Buffering", "no")
+                .body(emitter);
     }
 }

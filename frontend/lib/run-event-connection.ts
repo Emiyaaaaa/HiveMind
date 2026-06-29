@@ -20,10 +20,14 @@ export interface RunEventConnectionHandlers {
   onEvent?: (event: RunEvent, clientSeq: number, eventId?: string) => void;
   onTerminal?: (event: RunEvent) => void;
   onStatusChange?: (status: RunEventConnectionStatus) => void;
+  /** Fires when a reconnect attempt succeeds (not the initial connect). */
+  onReconnected?: () => void;
 }
 
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 30_000;
+const CONNECT_TIMEOUT_MS = 30_000;
+const WATCHDOG_INTERVAL_MS = 5_000;
 
 /** Mirrors backend `_is_after` — numeric IDs when possible, else lexicographic. */
 function isEventIdAfter(entryId: string, afterId: string): boolean {
@@ -55,10 +59,14 @@ export function createRunEventConnection(
   let cancelled = false;
   let source: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let reconnectAttempt = 0;
   let terminal = false;
   let clientSeq = 0;
   let lastEventId: string | null = null;
+  let connectStartedAt = 0;
+  let lastActivityAt = 0;
+  let idleTimeoutMs = 45_000;
 
   const setStatus = (status: RunEventConnectionStatus) => {
     if (!cancelled) handlers.onStatusChange?.(status);
@@ -71,9 +79,21 @@ export function createRunEventConnection(
     }
   };
 
+  const stopWatchdog = () => {
+    if (watchdogTimer != null) {
+      clearInterval(watchdogTimer);
+      watchdogTimer = null;
+    }
+  };
+
+  const bumpActivity = () => {
+    lastActivityAt = Date.now();
+  };
+
   const closeSource = () => {
     if (!source) return;
     RUN_EVENT_TYPES.forEach((type) => source!.removeEventListener(type, onMessage));
+    source.removeEventListener("ping", onPing);
     source.onerror = null;
     source.close();
     source = null;
@@ -82,27 +102,64 @@ export function createRunEventConnection(
   const finishTerminal = (event: RunEvent) => {
     terminal = true;
     clearReconnectTimer();
+    stopWatchdog();
     closeSource();
     setStatus("closed");
     handlers.onTerminal?.(event);
   };
 
+  const startWatchdog = () => {
+    stopWatchdog();
+    watchdogTimer = setInterval(() => {
+      if (cancelled || terminal) return;
+
+      const now = Date.now();
+      const state = source?.readyState;
+
+      if (
+        state === EventSource.CONNECTING &&
+        connectStartedAt > 0 &&
+        now - connectStartedAt > CONNECT_TIMEOUT_MS
+      ) {
+        closeSource();
+        scheduleReconnect();
+        return;
+      }
+
+      if (state === EventSource.OPEN && now - lastActivityAt > idleTimeoutMs) {
+        closeSource();
+        scheduleReconnect();
+      }
+    }, WATCHDOG_INTERVAL_MS);
+  };
+
   const connect = () => {
     if (cancelled || terminal) return;
 
+    const isReconnect = reconnectAttempt > 0;
+
     clearReconnectTimer();
     closeSource();
-    setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
+    setStatus(isReconnect ? "reconnecting" : "connecting");
+
+    connectStartedAt = Date.now();
+    bumpActivity();
 
     const next = new EventSource(streamUrl(runId, lastEventId));
     source = next;
 
     next.addEventListener("open", () => {
       if (cancelled || terminal) return;
+      bumpActivity();
+      reconnectAttempt = 0;
       setStatus("connected");
+      if (isReconnect) {
+        handlers.onReconnected?.();
+      }
     });
 
     RUN_EVENT_TYPES.forEach((type) => next.addEventListener(type, onMessage));
+    next.addEventListener("ping", onPing);
 
     next.onerror = () => {
       if (cancelled || terminal) return;
@@ -148,8 +205,16 @@ export function createRunEventConnection(
     window.addEventListener("online", onOnline);
   }
 
+  const onPing = () => {
+    if (cancelled || terminal) return;
+    bumpActivity();
+    reconnectAttempt = 0;
+  };
+
   const onMessage = (event: MessageEvent) => {
     if (cancelled || terminal) return;
+
+    bumpActivity();
 
     const incomingId = event.lastEventId;
     if (incomingId) {
@@ -172,12 +237,15 @@ export function createRunEventConnection(
     }
   };
 
+  idleTimeoutMs = 45_000;
+  startWatchdog();
   connect();
 
   return {
     close: () => {
       cancelled = true;
       clearReconnectTimer();
+      stopWatchdog();
       closeSource();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVisibilityChange);
