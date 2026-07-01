@@ -120,6 +120,12 @@ public class EventStreamService {
             log.warn("Failed catch-up replay for run {}", runId, e);
         }
 
+        try {
+            emitter.send(SseEmitter.event().name("ping").data("{}"));
+        } catch (Exception ignored) {
+            // client may have disconnected before subscribe returns
+        }
+
         long heartbeatSeconds = Math.max(1, props.getEvents().getSseHeartbeatSeconds());
         ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
                 () -> {
