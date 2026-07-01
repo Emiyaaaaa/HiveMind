@@ -32,6 +32,9 @@ _SSE_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 
+# Hint browser / polyfill reconnect interval (milliseconds).
+_SSE_RETRY_MS = 3_000
+
 
 def _resolve_last_event_id(request: Request) -> str | None:
     header = request.headers.get("last-event-id")
@@ -63,6 +66,9 @@ async def stream_run_events(
     heartbeat = float(get_settings().event_sse_heartbeat_seconds)
 
     async def generator() -> AsyncIterator[dict[str, str]]:
+        yield {"retry": _SSE_RETRY_MS}
+        # Immediate heartbeat so clients/proxies know the stream is alive.
+        yield {"event": "ping", "data": "{}"}
         last_id = after_id
 
         async for event_id, event in bus.replay(run_id, after_id):
@@ -110,4 +116,5 @@ async def stream_run_events(
         generator(),
         ping=int(heartbeat),
         headers=_SSE_HEADERS,
+        media_type="text/event-stream",
     )

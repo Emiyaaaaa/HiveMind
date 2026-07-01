@@ -28,6 +28,8 @@ const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
+/** Server heartbeat is 15s; allow several missed pings through proxies. */
+const IDLE_TIMEOUT_MS = 60_000;
 
 /** Mirrors backend `_is_after` — numeric IDs when possible, else lexicographic. */
 function isEventIdAfter(entryId: string, afterId: string): boolean {
@@ -66,7 +68,6 @@ export function createRunEventConnection(
   let lastEventId: string | null = null;
   let connectStartedAt = 0;
   let lastActivityAt = 0;
-  let idleTimeoutMs = 45_000;
 
   const setStatus = (status: RunEventConnectionStatus) => {
     if (!cancelled) handlers.onStatusChange?.(status);
@@ -126,7 +127,7 @@ export function createRunEventConnection(
         return;
       }
 
-      if (state === EventSource.OPEN && now - lastActivityAt > idleTimeoutMs) {
+      if (state === EventSource.OPEN && now - lastActivityAt > IDLE_TIMEOUT_MS) {
         closeSource();
         scheduleReconnect();
       }
@@ -163,8 +164,8 @@ export function createRunEventConnection(
 
     next.onerror = () => {
       if (cancelled || terminal) return;
-      // EventSource may fire onerror while still CONNECTING; only retry once closed.
-      if (next.readyState !== EventSource.CLOSED) return;
+      // Close proactively so the browser does not auto-reconnect with a stale URL.
+      if (source !== next) return;
       closeSource();
       scheduleReconnect();
     };
@@ -237,7 +238,6 @@ export function createRunEventConnection(
     }
   };
 
-  idleTimeoutMs = 45_000;
   startWatchdog();
   connect();
 
