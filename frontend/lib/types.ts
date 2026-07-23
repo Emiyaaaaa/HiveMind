@@ -37,6 +37,10 @@ export interface RunUsage {
   tokens_out: number;
   cost_usd: number;
   latency_ms: number | null;
+  step_count: number;
+  failed_step_count: number;
+  tool_call_count: number;
+  failed_tool_call_count: number;
 }
 
 export interface Message {

@@ -1,4 +1,5 @@
 import type { Agent, Run } from "./types";
+import { normalizeUsage } from "./usage";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -17,23 +18,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function normalizeRun(run: Run): Run {
+  return { ...run, usage: normalizeUsage(run.usage) };
+}
+
 export const api = {
-  listRuns: () => request<Run[]>("/v1/runs"),
-  getRun: (id: string) => request<Run>(`/v1/runs/${id}`),
+  listRuns: async () => {
+    const runs = await request<Run[]>("/v1/runs");
+    return runs.map(normalizeRun);
+  },
+  getRun: async (id: string) => normalizeRun(await request<Run>(`/v1/runs/${id}`)),
   cancelRun: (id: string) =>
     request<void>(`/v1/runs/${id}/cancel`, { method: "POST" }),
-  retryRun: (id: string, body?: { checkpoint_index?: number }) =>
-    request<Run>(`/v1/runs/${id}/retry`, {
-      method: "POST",
-      body: JSON.stringify(body ?? {}),
-    }),
-  resumeRun: (id: string, body?: { input?: Record<string, unknown> }) =>
-    request<Run>(`/v1/runs/${id}/resume`, {
-      method: "POST",
-      body: JSON.stringify(body ?? {}),
-    }),
-  createRun: (body: { agent_id: string; input: Record<string, unknown> }) =>
-    request<Run>("/v1/runs", { method: "POST", body: JSON.stringify(body) }),
+  retryRun: async (id: string, body?: { checkpoint_index?: number }) =>
+    normalizeRun(
+      await request<Run>(`/v1/runs/${id}/retry`, {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+      }),
+    ),
+  resumeRun: async (id: string, body?: { input?: Record<string, unknown> }) =>
+    normalizeRun(
+      await request<Run>(`/v1/runs/${id}/resume`, {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+      }),
+    ),
+  createRun: async (body: {
+    agent_id: string;
+    input: Record<string, unknown>;
+  }) =>
+    normalizeRun(
+      await request<Run>("/v1/runs", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    ),
   listAgents: () => request<Agent[]>("/v1/agents"),
   createAgent: (body: {
     name: string;

@@ -2,18 +2,17 @@
 
 架构与数据模型见 [architecture.md](architecture.md) 与 [data-model.md](data-model.md)。
 
-**最后核对：** 2026-06-03
+**最后核对：** 2026-07-23
 
 ## 优化方向
 
 按投入产出比排序：
 
 1. **事件总线持久化。** Redis pub/sub 无订阅者时会丢消息；支持 `Last-Event-ID` 重放。
-2. **队列 OTel 指标与背压。** 深度/消费者延迟已导出为 `agentflow.queue.*`；worker 利用率见 `agentflow.worker.utilization`；p95 面板见 `docker/grafana/dashboards/agentflow-observability.json`。
+2. **队列 / LLM / Run OTel 指标与背压。** 深度/消费者延迟已导出为 `agentflow.queue.*`；worker 利用率见 `agentflow.worker.utilization`；LLM token/cost、Run 结局、Step/ToolCall RED 见 `agentflow.llm.*` / `agentflow.run.outcomes` / `agentflow.step.*` / `agentflow.tool.*`；面板见 `docker/grafana/dashboards/agentflow-observability.json`。
 3. **控制台调试体验。** Step 可视化时间线、独立 ToolCall 检查面板。
 4. **LangGraph adapter 扩展。** 更多 graph 模式、MCP 工具协议集成。
 5. **双向流式传输。** WebSocket / WebTransport + SSE 降级，支持双向取消与审批。
-
 ## 可引入的先进技术
 
 | 领域 | 候选方案 | 价值 |
@@ -37,6 +36,8 @@
 - [ ] SSE 事件重放（`Last-Event-ID` / 持久化 event log）
 - [x] 队列深度、worker 利用率导出为 OTel/Prometheus 指标
 - [x] p95 耗时仪表盘与告警
+- [x] LLM token/cost、Run 成功率、Step/ToolCall 指标 + Grafana 面板
+- [x] RunUsage 扩展：step/tool 计数（控制台列表与详情）
 
 **验收：** 控制台展示可视化时间线；断连 SSE 可补全事件；队列指标可在 Grafana 查看。
 

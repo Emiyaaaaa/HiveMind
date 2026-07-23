@@ -209,9 +209,9 @@ before `step.completed`:
 
 ### `RunUsage`
 
-Aggregated token and cost metrics for a run. Computed from `steps` when
-present; otherwise read from `metadata.usage` (written when the run reaches a
-terminal state).
+Aggregated token, cost, and structural metrics for a run. Computed from
+`steps` when present; otherwise read from `metadata.usage` (written when the
+run reaches a terminal state).
 
 ```ts
 {
@@ -219,9 +219,16 @@ terminal state).
   tokens_out: number;
   cost_usd: number;
   latency_ms: number | null;
+  step_count: number;
+  failed_step_count: number;
+  tool_call_count: number;
+  failed_tool_call_count: number;
 }
 ```
 
+`step_count` / `tool_call_count` (and their failed counterparts) summarize
+graph shape without opening the full step list — useful for run lists and
+ops dashboards.
 ### `Step`
 
 ```ts

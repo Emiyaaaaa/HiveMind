@@ -56,7 +56,9 @@ function asUsage(value: unknown): RunUsage | null {
   if (
     typeof raw.tokens_in !== "number" &&
     typeof raw.tokens_out !== "number" &&
-    typeof raw.cost_usd !== "number"
+    typeof raw.cost_usd !== "number" &&
+    typeof raw.step_count !== "number" &&
+    typeof raw.tool_call_count !== "number"
   ) {
     return null;
   }
@@ -65,6 +67,15 @@ function asUsage(value: unknown): RunUsage | null {
     tokens_out: typeof raw.tokens_out === "number" ? raw.tokens_out : 0,
     cost_usd: typeof raw.cost_usd === "number" ? raw.cost_usd : 0,
     latency_ms: typeof raw.latency_ms === "number" ? raw.latency_ms : null,
+    step_count: typeof raw.step_count === "number" ? raw.step_count : 0,
+    failed_step_count:
+      typeof raw.failed_step_count === "number" ? raw.failed_step_count : 0,
+    tool_call_count:
+      typeof raw.tool_call_count === "number" ? raw.tool_call_count : 0,
+    failed_tool_call_count:
+      typeof raw.failed_tool_call_count === "number"
+        ? raw.failed_tool_call_count
+        : 0,
   };
 }
 
@@ -74,14 +85,28 @@ export function aggregateUsageFromSteps(steps: Step[]): RunUsage {
   let costUsd = 0;
   let latencyMs = 0;
   let hasLatency = false;
+  let stepCount = 0;
+  let failedStepCount = 0;
+  let toolCallCount = 0;
+  let failedToolCallCount = 0;
 
   for (const step of steps) {
+    stepCount += 1;
     tokensIn += step.tokens_in ?? 0;
     tokensOut += step.tokens_out ?? 0;
     costUsd += step.cost_usd ?? 0;
     if (step.latency_ms != null) {
       latencyMs += step.latency_ms;
       hasLatency = true;
+    }
+    if (step.status === "failed") {
+      failedStepCount += 1;
+    }
+    for (const call of step.tool_calls ?? []) {
+      toolCallCount += 1;
+      if (call.error) {
+        failedToolCallCount += 1;
+      }
     }
   }
 
@@ -90,6 +115,10 @@ export function aggregateUsageFromSteps(steps: Step[]): RunUsage {
     tokens_out: tokensOut,
     cost_usd: costUsd,
     latency_ms: hasLatency ? latencyMs : null,
+    step_count: stepCount,
+    failed_step_count: failedStepCount,
+    tool_call_count: toolCallCount,
+    failed_tool_call_count: failedToolCallCount,
   };
 }
 

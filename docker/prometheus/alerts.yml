@@ -30,3 +30,47 @@ groups:
           description: >
             HTTP server p95 duration has exceeded 5s for 5 minutes
             (current value {{ $value | humanizeDuration }}).
+
+  - name: agentflow_reliability
+    rules:
+      - alert: AgentFlowDlqGrowing
+        expr: agentflow_queue_dlq_length > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Dead-letter queue has entries
+          description: >
+            DLQ length is {{ $value }} for 10 minutes — failed jobs need triage.
+
+      - alert: AgentFlowRunFailureRateHigh
+        expr: |
+          (
+            sum(rate(agentflow_run_outcomes_total{status="failed"}[5m]))
+            /
+            clamp_min(sum(rate(agentflow_run_outcomes_total[5m])), 1e-9)
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Run failure rate is high
+          description: >
+            More than 20% of terminal runs failed over the last 5 minutes
+            (current ratio {{ $value | humanizePercentage }}).
+
+      - alert: AgentFlowToolErrorRateHigh
+        expr: |
+          (
+            sum(rate(agentflow_tool_errors_total[5m]))
+            /
+            clamp_min(sum(rate(agentflow_tool_calls_total[5m])), 1e-9)
+          ) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Tool call error rate is high
+          description: >
+            More than 30% of tool calls are failing
+            (current ratio {{ $value | humanizePercentage }}).

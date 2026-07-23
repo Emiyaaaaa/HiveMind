@@ -61,6 +61,26 @@ export function TokenCostSummary({
               : "—"}
           </dd>
         </div>
+        <div>
+          <dt className="text-xs text-muted uppercase tracking-wide">Steps</dt>
+          <dd className="font-mono tabular-nums">
+            {formatTokenCount(usage.step_count)}
+            {usage.failed_step_count > 0
+              ? ` (${usage.failed_step_count} failed)`
+              : ""}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted uppercase tracking-wide">
+            Tool calls
+          </dt>
+          <dd className="font-mono tabular-nums">
+            {formatTokenCount(usage.tool_call_count)}
+            {usage.failed_tool_call_count > 0
+              ? ` (${usage.failed_tool_call_count} failed)`
+              : ""}
+          </dd>
+        </div>
       </dl>
 
       {!compact && steps.some(stepHasMetrics) ? (

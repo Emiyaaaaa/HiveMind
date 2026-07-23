@@ -30,7 +30,8 @@
       "targets": [
         { "expr": "agentflow_queue_backlog", "legendFormat": "backlog" },
         { "expr": "agentflow_queue_lag", "legendFormat": "lag" },
-        { "expr": "agentflow_queue_pending", "legendFormat": "pending" }
+        { "expr": "agentflow_queue_pending", "legendFormat": "pending" },
+        { "expr": "agentflow_queue_dlq_length", "legendFormat": "dlq" }
       ],
       "title": "Queue depth",
       "type": "timeseries"
@@ -78,9 +79,13 @@
         {
           "expr": "histogram_quantile(0.95, sum(rate(agentflow_http_server_duration_bucket[5m])) by (le))",
           "legendFormat": "http p95"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agentflow_step_duration_bucket[5m])) by (le))",
+          "legendFormat": "step p95"
         }
       ],
-      "title": "p95 duration (worker + HTTP)",
+      "title": "p95 duration (worker + HTTP + step)",
       "type": "timeseries"
     },
     {
@@ -95,6 +100,101 @@
         }
       ],
       "title": "Queue consumer delay",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(agentflow_run_outcomes_total[5m])) by (status)",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "title": "Run outcomes /s",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum(rate(agentflow_run_outcomes_total{status=\"succeeded\"}[5m])) / clamp_min(sum(rate(agentflow_run_outcomes_total[5m])), 1e-9)",
+          "legendFormat": "success rate"
+        }
+      ],
+      "title": "Run success rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(agentflow_llm_tokens_total{direction=\"in\"}[5m])) by (adapter)",
+          "legendFormat": "in {{adapter}}"
+        },
+        {
+          "expr": "sum(rate(agentflow_llm_tokens_total{direction=\"out\"}[5m])) by (adapter)",
+          "legendFormat": "out {{adapter}}"
+        }
+      ],
+      "title": "LLM tokens /s",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum(rate(agentflow_llm_cost_usd_total[5m])) by (adapter)",
+          "legendFormat": "{{adapter}}"
+        }
+      ],
+      "title": "LLM cost USD /s",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(agentflow_tool_calls_total[5m])) by (outcome)",
+          "legendFormat": "{{outcome}}"
+        },
+        {
+          "expr": "sum(rate(agentflow_tool_errors_total[5m]))",
+          "legendFormat": "errors"
+        }
+      ],
+      "title": "Tool calls /s",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agentflow_tool_duration_bucket[5m])) by (le))",
+          "legendFormat": "tool p95"
+        }
+      ],
+      "title": "Tool call p95 duration",
       "type": "timeseries"
     }
   ],
@@ -113,5 +213,5 @@
   "time": { "from": "now-1h", "to": "now" },
   "title": "AgentFlow observability",
   "uid": "agentflow-observability",
-  "version": 1
+  "version": 2
 }

@@ -64,7 +64,12 @@ export default function RunsPage() {
                 <td className="px-4 py-2 text-xs font-mono text-muted">
                   {hasUsageMetrics(r.usage) ? (
                     <span>
-                      {r.usage.tokens_in + r.usage.tokens_out} tok ·{" "}
+                      {r.usage.tokens_in + r.usage.tokens_out > 0
+                        ? `${r.usage.tokens_in + r.usage.tokens_out} tok · `
+                        : ""}
+                      {r.usage.step_count > 0
+                        ? `${r.usage.step_count} steps · `
+                        : ""}
                       <span className="text-accent">
                         {formatCostUsd(r.usage.cost_usd)}
                       </span>

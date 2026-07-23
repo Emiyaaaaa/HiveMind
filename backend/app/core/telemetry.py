@@ -6,6 +6,7 @@ is true. Instrumentation spans:
 * HTTP API (FastAPI middleware)
 * Worker job processing (``worker.process_job``)
 * Adapter execution (``adapter.run``)
+* LLM usage, run outcomes, step/tool call RED (via ``run_service``)
 
 Trace context is propagated from API → Redis job payload → worker via W3C
 ``traceparent`` / ``tracestate`` in ``RunJob.trace_context``.
@@ -27,7 +28,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter,
 )
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.metrics import Counter, Histogram, Meter
+from opentelemetry.metrics import Counter, Histogram, Meter, Observation
 from opentelemetry.propagate import extract, inject, set_global_textmap
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import (
@@ -77,6 +78,17 @@ _queue_dlq_length: Any | None = None
 _worker_utilization: Any | None = None
 _worker_in_flight: Any | None = None
 _worker_capacity: Any | None = None
+# Last-value store for observable gauges. Synchronous Gauge drops samples when
+# mixed with Counters/Histograms on the same MeterProvider (OTel Python SDK).
+_gauge_values: dict[str, float] = {}
+_llm_tokens: Counter | None = None
+_llm_cost: Counter | None = None
+_run_outcomes: Counter | None = None
+_step_outcomes: Counter | None = None
+_step_duration: Histogram | None = None
+_tool_calls: Counter | None = None
+_tool_errors: Counter | None = None
+_tool_duration: Histogram | None = None
 _worker_job_durations = DurationWindow()
 
 
@@ -156,6 +168,8 @@ def shutdown_telemetry() -> None:
     global _queue_stream_length, _queue_lag, _queue_pending, _queue_backlog
     global _queue_consumer_delay, _queue_dlq_length
     global _worker_utilization, _worker_in_flight, _worker_capacity
+    global _llm_tokens, _llm_cost, _run_outcomes
+    global _step_outcomes, _step_duration, _tool_calls, _tool_errors, _tool_duration
 
     if not _initialized:
         return
@@ -193,6 +207,15 @@ def shutdown_telemetry() -> None:
     _worker_utilization = None
     _worker_in_flight = None
     _worker_capacity = None
+    _gauge_values.clear()
+    _llm_tokens = None
+    _llm_cost = None
+    _run_outcomes = None
+    _step_outcomes = None
+    _step_duration = None
+    _tool_calls = None
+    _tool_errors = None
+    _tool_duration = None
 
 
 def get_tracer() -> Tracer:
@@ -257,6 +280,18 @@ def _ensure_red_instruments() -> None:
         )
 
 
+def _observe_gauge(name: str):
+    def _callback(_options: Any):
+        if name in _gauge_values:
+            yield Observation(_gauge_values[name])
+
+    return _callback
+
+
+def _set_gauge(name: str, value: float) -> None:
+    _gauge_values[name] = float(value)
+
+
 def _ensure_queue_instruments() -> None:
     global _queue_stream_length, _queue_lag, _queue_pending, _queue_backlog
     global _queue_consumer_delay, _queue_dlq_length
@@ -266,33 +301,39 @@ def _ensure_queue_instruments() -> None:
     meter = _meter or metrics.get_meter(get_settings().otel_service_name)
 
     if _queue_stream_length is None:
-        _queue_stream_length = meter.create_gauge(
+        _queue_stream_length = meter.create_observable_gauge(
             "agentflow.queue.stream_length",
+            callbacks=[_observe_gauge("agentflow.queue.stream_length")],
             description="Redis stream entry count (XLEN)",
             unit="1",
         )
-        _queue_lag = meter.create_gauge(
+        _queue_lag = meter.create_observable_gauge(
             "agentflow.queue.lag",
+            callbacks=[_observe_gauge("agentflow.queue.lag")],
             description="Undelivered entries not yet assigned to a consumer",
             unit="1",
         )
-        _queue_pending = meter.create_gauge(
+        _queue_pending = meter.create_observable_gauge(
             "agentflow.queue.pending",
+            callbacks=[_observe_gauge("agentflow.queue.pending")],
             description="Entries delivered but not yet XACKed",
             unit="1",
         )
-        _queue_backlog = meter.create_gauge(
+        _queue_backlog = meter.create_observable_gauge(
             "agentflow.queue.backlog",
+            callbacks=[_observe_gauge("agentflow.queue.backlog")],
             description="lag + pending (work waiting on workers)",
             unit="1",
         )
-        _queue_consumer_delay = meter.create_gauge(
+        _queue_consumer_delay = meter.create_observable_gauge(
             "agentflow.queue.consumer_delay",
+            callbacks=[_observe_gauge("agentflow.queue.consumer_delay")],
             description="Worst-case wait among lag and pending entries",
             unit="s",
         )
-        _queue_dlq_length = meter.create_gauge(
+        _queue_dlq_length = meter.create_observable_gauge(
             "agentflow.queue.dlq_length",
+            callbacks=[_observe_gauge("agentflow.queue.dlq_length")],
             description="Dead-letter stream length",
             unit="1",
         )
@@ -306,20 +347,23 @@ def _ensure_worker_util_instruments() -> None:
     meter = _meter or metrics.get_meter(get_settings().otel_service_name)
 
     if _worker_utilization is None:
-        _worker_utilization = meter.create_gauge(
+        _worker_utilization = meter.create_observable_gauge(
             "agentflow.worker.utilization",
+            callbacks=[_observe_gauge("agentflow.worker.utilization")],
             description=(
                 "Fraction of local concurrency slots busy (in_flight / capacity)"
             ),
             unit="1",
         )
-        _worker_in_flight = meter.create_gauge(
+        _worker_in_flight = meter.create_observable_gauge(
             "agentflow.worker.in_flight",
+            callbacks=[_observe_gauge("agentflow.worker.in_flight")],
             description="Run jobs currently executing in this worker process",
             unit="1",
         )
-        _worker_capacity = meter.create_gauge(
+        _worker_capacity = meter.create_observable_gauge(
             "agentflow.worker.capacity",
+            callbacks=[_observe_gauge("agentflow.worker.capacity")],
             description="Maximum parallel jobs (AGENTFLOW_WORKER_CONCURRENCY)",
             unit="1",
         )
@@ -330,22 +374,15 @@ def record_queue_metrics(stats: "QueueStats") -> None:
     if not is_enabled():
         return
     _ensure_queue_instruments()
-    assert _queue_stream_length is not None
-    assert _queue_lag is not None
-    assert _queue_pending is not None
-    assert _queue_backlog is not None
-    assert _queue_consumer_delay is not None
-    assert _queue_dlq_length is not None
-
-    _queue_stream_length.set(stats.stream_length)
-    _queue_lag.set(stats.lag_count)
-    _queue_pending.set(stats.pending_count)
-    _queue_backlog.set(stats.backlog_count)
+    _set_gauge("agentflow.queue.stream_length", stats.stream_length)
+    _set_gauge("agentflow.queue.lag", stats.lag_count)
+    _set_gauge("agentflow.queue.pending", stats.pending_count)
+    _set_gauge("agentflow.queue.backlog", stats.backlog_count)
     delay = stats.consumer_delay_seconds
     if delay is not None:
-        _queue_consumer_delay.set(delay)
+        _set_gauge("agentflow.queue.consumer_delay", delay)
     if stats.dlq_length is not None:
-        _queue_dlq_length.set(stats.dlq_length)
+        _set_gauge("agentflow.queue.dlq_length", stats.dlq_length)
 
 
 def set_worker_utilization(*, in_flight: int, capacity: int) -> None:
@@ -353,16 +390,137 @@ def set_worker_utilization(*, in_flight: int, capacity: int) -> None:
     if not is_enabled():
         return
     _ensure_worker_util_instruments()
-    assert _worker_utilization is not None
-    assert _worker_in_flight is not None
-    assert _worker_capacity is not None
 
     capped = max(0, in_flight)
     slots = max(1, capacity)
     ratio = min(capped, slots) / slots
-    _worker_in_flight.set(capped)
-    _worker_capacity.set(capacity)
-    _worker_utilization.set(ratio)
+    _set_gauge("agentflow.worker.in_flight", capped)
+    _set_gauge("agentflow.worker.capacity", capacity)
+    _set_gauge("agentflow.worker.utilization", ratio)
+
+
+def _ensure_run_instruments() -> None:
+    global _llm_tokens, _llm_cost, _run_outcomes
+    global _step_outcomes, _step_duration, _tool_calls, _tool_errors, _tool_duration
+
+    if _meter is None:
+        setup_telemetry()
+    meter = _meter or metrics.get_meter(get_settings().otel_service_name)
+
+    if _llm_tokens is None:
+        _llm_tokens = meter.create_counter(
+            "agentflow.llm.tokens",
+            description="LLM tokens consumed (direction=in|out)",
+            unit="1",
+        )
+        _llm_cost = meter.create_counter(
+            "agentflow.llm.cost_usd",
+            description="Estimated LLM spend in USD",
+            unit="USD",
+        )
+        _run_outcomes = meter.create_counter(
+            "agentflow.run.outcomes",
+            description="Terminal run outcomes by status",
+            unit="1",
+        )
+        _step_outcomes = meter.create_counter(
+            "agentflow.step.outcomes",
+            description="Step completions by outcome",
+            unit="1",
+        )
+        _step_duration = meter.create_histogram(
+            "agentflow.step.duration",
+            description="Step wall-clock duration",
+            unit="s",
+        )
+        _tool_calls = meter.create_counter(
+            "agentflow.tool.calls",
+            description="Tool call completions (rate)",
+            unit="1",
+        )
+        _tool_errors = meter.create_counter(
+            "agentflow.tool.errors",
+            description="Tool call failures",
+            unit="1",
+        )
+        _tool_duration = meter.create_histogram(
+            "agentflow.tool.duration",
+            description="Tool call duration",
+            unit="s",
+        )
+
+
+def record_llm_usage(
+    *,
+    adapter: str,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    cost_usd: float = 0.0,
+) -> None:
+    """Export aggregated LLM usage for a finished run."""
+    if not is_enabled():
+        return
+    if tokens_in <= 0 and tokens_out <= 0 and cost_usd <= 0:
+        return
+    _ensure_run_instruments()
+    assert _llm_tokens is not None
+    assert _llm_cost is not None
+    base = {"adapter": adapter}
+    if tokens_in > 0:
+        _llm_tokens.add(tokens_in, attributes={**base, "direction": "in"})
+    if tokens_out > 0:
+        _llm_tokens.add(tokens_out, attributes={**base, "direction": "out"})
+    if cost_usd > 0:
+        _llm_cost.add(cost_usd, attributes=base)
+
+
+def record_run_outcome(*, adapter: str, status: str) -> None:
+    """Count a terminal run status (succeeded / failed / cancelled / …)."""
+    if not is_enabled():
+        return
+    _ensure_run_instruments()
+    assert _run_outcomes is not None
+    _run_outcomes.add(1, attributes={"adapter": adapter, "status": status})
+
+
+def record_step_outcome(
+    *,
+    adapter: str,
+    outcome: str,
+    latency_ms: int | None = None,
+) -> None:
+    """Count a step completion and optionally record its duration."""
+    if not is_enabled():
+        return
+    _ensure_run_instruments()
+    assert _step_outcomes is not None
+    attrs = {"adapter": adapter, "outcome": outcome}
+    _step_outcomes.add(1, attributes=attrs)
+    if latency_ms is not None and latency_ms >= 0:
+        assert _step_duration is not None
+        _step_duration.record(latency_ms / 1000.0, attributes=attrs)
+
+
+def record_tool_call(
+    *,
+    adapter: str,
+    tool: str,
+    outcome: str,
+    latency_ms: int | None = None,
+) -> None:
+    """Count a tool call completion (and duration when available)."""
+    if not is_enabled():
+        return
+    _ensure_run_instruments()
+    assert _tool_calls is not None
+    attrs = {"adapter": adapter, "tool": tool, "outcome": outcome}
+    _tool_calls.add(1, attributes=attrs)
+    if outcome == "error":
+        assert _tool_errors is not None
+        _tool_errors.add(1, attributes=attrs)
+    if latency_ms is not None and latency_ms >= 0:
+        assert _tool_duration is not None
+        _tool_duration.record(latency_ms / 1000.0, attributes=attrs)
 
 
 def capture_trace_context() -> dict[str, str] | None:
