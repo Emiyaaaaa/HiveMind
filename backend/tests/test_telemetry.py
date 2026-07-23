@@ -15,7 +15,11 @@ from app.core.telemetry import (
     capture_trace_context,
     get_worker_job_duration_window,
     is_enabled,
+    record_llm_usage,
     record_queue_metrics,
+    record_run_outcome,
+    record_step_outcome,
+    record_tool_call,
     record_worker_red,
     set_worker_utilization,
     setup_telemetry,
@@ -102,10 +106,19 @@ def _metric_values(reader: InMemoryMetricReader) -> dict[str, float]:
     for resource_metrics in data.resource_metrics:
         for scope_metrics in resource_metrics.scope_metrics:
             for metric in scope_metrics.metrics:
+                total = 0.0
+                counted = False
                 for point in metric.data.data_points:
-                    values[metric.name] = float(point.value)  # type: ignore[attr-defined]
+                    value = getattr(point, "value", None)
+                    if value is None:
+                        value = getattr(point, "sum", None)
+                    if value is None:
+                        continue
+                    total += float(value)
+                    counted = True
+                if counted:
+                    values[metric.name] = total
     return values
-
 
 def test_otel_queue_and_worker_gauges_export():
     reader = InMemoryMetricReader()
@@ -123,8 +136,28 @@ def test_otel_queue_and_worker_gauges_export():
             )
         )
         set_worker_utilization(in_flight=3, capacity=4)
+        record_run_outcome(adapter="echo", status="succeeded")
+        record_llm_usage(
+            adapter="echo",
+            tokens_in=10,
+            tokens_out=20,
+            cost_usd=0.001,
+        )
+        record_step_outcome(adapter="echo", outcome="ok", latency_ms=250)
+        record_tool_call(
+            adapter="echo",
+            tool="search",
+            outcome="error",
+            latency_ms=40,
+        )
         exported = _metric_values(reader)
         assert exported["agentflow.queue.backlog"] == 5.0
         assert exported["agentflow.queue.consumer_delay"] == 30.0
         assert exported["agentflow.worker.in_flight"] == 3.0
         assert exported["agentflow.worker.utilization"] == 0.75
+        assert exported["agentflow.run.outcomes"] == 1.0
+        assert exported["agentflow.llm.tokens"] == 30.0
+        assert exported["agentflow.llm.cost_usd"] == pytest.approx(0.001)
+        assert exported["agentflow.step.outcomes"] == 1.0
+        assert exported["agentflow.tool.calls"] == 1.0
+        assert exported["agentflow.tool.errors"] == 1.0

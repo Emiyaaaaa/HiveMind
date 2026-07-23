@@ -30,6 +30,12 @@ from app.models import (
     Step,
     ToolCall,
 )
+from app.core.telemetry import (
+    record_llm_usage,
+    record_run_outcome,
+    record_step_outcome,
+    record_tool_call,
+)
 from app.runtime.usage import aggregate_run_usage
 from app.schemas.run import EventType, RunCreate, RunEvent, RunResume, RunRetry
 from app.runtime.resume_context import (
@@ -291,11 +297,30 @@ class RunService:
         if error is not None:
             run.error = error
         usage = aggregate_run_usage(run.steps)
-        if usage.tokens_in or usage.tokens_out or usage.cost_usd:
+        if (
+            usage.tokens_in
+            or usage.tokens_out
+            or usage.cost_usd
+            or usage.step_count
+            or usage.tool_call_count
+        ):
             meta = dict(run.metadata_ or {})
             meta["usage"] = usage.model_dump()
             run.metadata_ = meta
         await self.session.commit()
+
+        if status in (
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        ):
+            record_run_outcome(adapter=run.adapter, status=status.value)
+            record_llm_usage(
+                adapter=run.adapter,
+                tokens_in=usage.tokens_in,
+                tokens_out=usage.tokens_out,
+                cost_usd=usage.cost_usd,
+            )
 
         usage_payload = usage.model_dump()
         if status == RunStatus.SUCCEEDED:
@@ -371,6 +396,12 @@ class RunService:
                 if "cost_usd" in data:
                     step.cost_usd = data["cost_usd"]
                 await self.session.commit()
+                run = await self._get_run(run_id)
+                record_step_outcome(
+                    adapter=run.adapter,
+                    outcome="ok",
+                    latency_ms=step.latency_ms,
+                )
         elif event_type == "token.delta":
             # SSE-only: live pub/sub without durable replay log or DB writes.
             await self._broadcast(event_type, run_id, data, persist=False)
@@ -381,6 +412,12 @@ class RunService:
                 step.status = RunStatus.FAILED
                 step.error = data.get("error")
                 await self.session.commit()
+                run = await self._get_run(run_id)
+                record_step_outcome(
+                    adapter=run.adapter,
+                    outcome="error",
+                    latency_ms=step.latency_ms,
+                )
         elif event_type == "message.created":
             index = await self._next_message_index(run_id)
             message = Message(
@@ -420,6 +457,13 @@ class RunService:
                     call.error = data.get("error")
                     call.latency_ms = data.get("latency_ms")
                     await self.session.commit()
+                    run = await self._get_run(run_id)
+                    record_tool_call(
+                        adapter=run.adapter,
+                        tool=call.name,
+                        outcome="error" if call.error else "ok",
+                        latency_ms=call.latency_ms,
+                    )
         elif event_type == "checkpoint.created":
             cp_index = await self._next_checkpoint_index(run_id)
             cp = Checkpoint(
