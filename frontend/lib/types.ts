@@ -83,8 +83,32 @@ export interface Agent {
   description: string | null;
   adapter: string;
   config: Record<string, unknown>;
+  version: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentVersion {
+  id: string;
+  agent_id: string;
+  version: number;
+  description: string | null;
+  adapter: string;
+  config: Record<string, unknown>;
+  note: string | null;
+  created_at: string;
+}
+
+export interface AgentVersionDiff {
+  from_version: number;
+  to_version: number;
+  adapter: { from: string; to: string } | null;
+  description: { from: string | null; to: string | null } | null;
+  config: {
+    added: Record<string, unknown>;
+    removed: Record<string, unknown>;
+    changed: Record<string, { from: unknown; to: unknown }>;
+  };
 }
 
 export interface RunEvent {

@@ -9,6 +9,7 @@ agent system.
 ```mermaid
 erDiagram
     Agent ||--o{ Run : has
+    Agent ||--o{ AgentVersion : versions
     Run ||--o{ Step : has
     Run ||--o{ Message : has
     Run ||--o{ Checkpoint : has
@@ -20,6 +21,15 @@ erDiagram
         string name UK
         string adapter
         json config
+        int version
+    }
+    AgentVersion {
+        string id PK
+        string agent_id FK
+        int version
+        string adapter
+        json config
+        string note
     }
     Run {
         string id PK
@@ -93,9 +103,9 @@ stateDiagram-v2
 
 ## Design notes
 
-- **IDs are ULIDs** (26-character strings). They are sortable by time, easy
-  to log, and safer than auto-increment ids when the runtime fans out to
-  multiple workers.
+- **`Agent.version`** is a monotonic integer. Each bump also writes an
+  immutable ``agent_versions`` snapshot (adapter + config + description).
+  Restore creates a new version rather than rewriting history.
 - **`metadata` is a JSON column** named `metadata_` in Python because
   `metadata` is reserved on `DeclarativeBase`. The column on disk is still
   `metadata`.
@@ -118,3 +128,5 @@ stateDiagram-v2
 | `ix_messages_run_index` | stream messages in order |
 | `ix_tool_calls_step` | render tool calls inside a step |
 | `ix_checkpoints_run_index` | replay from the latest checkpoint |
+| `ix_agent_versions_agent_id` | list version history for an agent |
+| `uq_agent_versions_agent_version` | one snapshot per (agent, version) |

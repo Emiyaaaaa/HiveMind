@@ -1,30 +1,30 @@
 package io.agentflow.api.dto;
 
-import io.agentflow.api.entity.AgentEntity;
+import io.agentflow.api.entity.AgentVersionEntity;
 import java.time.Instant;
 import java.util.Map;
 
-public class AgentResponse {
+public class AgentVersionResponse {
 
     private String id;
-    private String name;
+    private String agentId;
+    private int version;
     private String description;
     private String adapter;
     private Map<String, Object> config;
-    private int version;
+    private String note;
     private Instant createdAt;
-    private Instant updatedAt;
 
-    public static AgentResponse fromEntity(AgentEntity entity) {
-        AgentResponse dto = new AgentResponse();
+    public static AgentVersionResponse fromEntity(AgentVersionEntity entity) {
+        AgentVersionResponse dto = new AgentVersionResponse();
         dto.id = entity.getId();
-        dto.name = entity.getName();
+        dto.agentId = entity.getAgentId();
+        dto.version = entity.getVersion();
         dto.description = entity.getDescription();
         dto.adapter = entity.getAdapter();
         dto.config = entity.getConfig();
-        dto.version = entity.getVersion();
+        dto.note = entity.getNote();
         dto.createdAt = entity.getCreatedAt();
-        dto.updatedAt = entity.getUpdatedAt();
         return dto;
     }
 
@@ -32,8 +32,12 @@ public class AgentResponse {
         return id;
     }
 
-    public String getName() {
-        return name;
+    public String getAgentId() {
+        return agentId;
+    }
+
+    public int getVersion() {
+        return version;
     }
 
     public String getDescription() {
@@ -48,15 +52,11 @@ public class AgentResponse {
         return config;
     }
 
-    public int getVersion() {
-        return version;
+    public String getNote() {
+        return note;
     }
 
     public Instant getCreatedAt() {
         return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
     }
 }

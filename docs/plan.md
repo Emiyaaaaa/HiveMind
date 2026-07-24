@@ -50,7 +50,7 @@
 - [ ] MCP tool adapter
 - [ ] OpenAPI 规范 + Python/TypeScript SDK 自动生成
 - [ ] Webhook 出站事件（`run.completed` 等）
-- [ ] Agent 版本管理与配置 diff
+- [x] Agent 版本管理与配置 diff
 
 **验收：** 新 adapter 以包形式发布；SDK 覆盖 create-run + subscribe-events；MCP 调用写入 ToolCall。
 
