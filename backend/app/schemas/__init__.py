@@ -1,4 +1,10 @@
-from app.schemas.agent import AgentCreate, AgentRead
+from app.schemas.agent import (
+    AgentCreate,
+    AgentRead,
+    AgentUpdate,
+    AgentVersionDiff,
+    AgentVersionRead,
+)
 from app.schemas.run import (
     CheckpointRead,
     MessageRead,
@@ -13,6 +19,9 @@ from app.schemas.run import (
 __all__ = [
     "AgentCreate",
     "AgentRead",
+    "AgentUpdate",
+    "AgentVersionDiff",
+    "AgentVersionRead",
     "CheckpointRead",
     "MessageRead",
     "RunCreate",

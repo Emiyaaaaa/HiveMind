@@ -54,6 +54,44 @@ Response: `Agent[]` ordered by `created_at` descending.
 
 Response: `Agent`. 404 if missing.
 
+### `PATCH /v1/agents/{id}` → 200
+
+Partial update. When `adapter`, `config`, or `description` change, `version`
+increments and a row is appended to `agent_versions`. Name-only updates do
+not bump the version. Optional `note` is stored on the new snapshot.
+
+Request (all fields optional):
+
+```json
+{
+  "name": "writer-v2",
+  "description": "optional",
+  "adapter": "langgraph",
+  "config": { "model": "openai/gpt-4o-mini" },
+  "note": "enable langgraph"
+}
+```
+
+Response: updated `Agent`. 404 if missing; 409 if `name` collides.
+
+### `GET /v1/agents/{id}/versions` → 200
+
+Response: `AgentVersion[]` ordered by `version` descending.
+
+### `GET /v1/agents/{id}/versions/{version}` → 200
+
+Response: `AgentVersion`. 404 if agent or version missing.
+
+### `GET /v1/agents/{id}/versions/diff?from=1&to=2` → 200
+
+Response: `AgentVersionDiff` comparing two snapshots (adapter / description /
+config added·removed·changed).
+
+### `POST /v1/agents/{id}/versions/{version}/restore` → 200
+
+Copy the snapshot's adapter/config/description onto the live agent as a **new**
+version (does not delete history). No-op (no bump) when already identical.
+
 ### `POST /v1/runs` → 202
 
 Request:
@@ -182,8 +220,40 @@ before `step.completed`:
   description: string | null;
   adapter: string;
   config: Record<string, unknown>;
+  version: number;
   created_at: string;
   updated_at: string;
+}
+```
+
+### `AgentVersion`
+
+```ts
+{
+  id: string;
+  agent_id: string;
+  version: number;
+  description: string | null;
+  adapter: string;
+  config: Record<string, unknown>;
+  note: string | null;
+  created_at: string;
+}
+```
+
+### `AgentVersionDiff`
+
+```ts
+{
+  from_version: number;
+  to_version: number;
+  adapter: { from: string; to: string } | null;
+  description: { from: string | null; to: string | null } | null;
+  config: {
+    added: Record<string, unknown>;
+    removed: Record<string, unknown>;
+    changed: Record<string, { from: unknown; to: unknown }>;
+  };
 }
 ```
 

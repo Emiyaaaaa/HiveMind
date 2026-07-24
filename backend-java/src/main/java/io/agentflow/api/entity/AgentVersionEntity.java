@@ -8,33 +8,42 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
 @Entity
-@Table(name = "agents")
-public class AgentEntity {
+@Table(
+        name = "agent_versions",
+        uniqueConstraints =
+                @UniqueConstraint(
+                        name = "uq_agent_versions_agent_version",
+                        columnNames = {"agent_id", "version"}))
+public class AgentVersionEntity {
 
     @Id
     @Column(length = 26)
     private String id;
 
-    @Column(nullable = false, unique = true, length = 128)
-    private String name;
+    @Column(name = "agent_id", nullable = false, length = 26)
+    private String agentId;
+
+    @Column(nullable = false)
+    private int version;
 
     @Column(length = 1024)
     private String description;
 
     @Column(nullable = false, length = 64)
-    private String adapter = "echo";
+    private String adapter;
 
     @Column(name = "config", nullable = false, columnDefinition = "TEXT")
     @Convert(converter = JsonMapConverter.class)
     private Map<String, Object> config = new HashMap<>();
 
-    @Column(nullable = false)
-    private int version = 1;
+    @Column(length = 512)
+    private String note;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -67,12 +76,20 @@ public class AgentEntity {
         this.id = id;
     }
 
-    public String getName() {
-        return name;
+    public String getAgentId() {
+        return agentId;
     }
 
-    public void setName(String name) {
-        this.name = name;
+    public void setAgentId(String agentId) {
+        this.agentId = agentId;
+    }
+
+    public int getVersion() {
+        return version;
+    }
+
+    public void setVersion(int version) {
+        this.version = version;
     }
 
     public String getDescription() {
@@ -99,12 +116,12 @@ public class AgentEntity {
         this.config = config == null ? new HashMap<>() : config;
     }
 
-    public int getVersion() {
-        return version;
+    public String getNote() {
+        return note;
     }
 
-    public void setVersion(int version) {
-        this.version = version;
+    public void setNote(String note) {
+        this.note = note;
     }
 
     public Instant getCreatedAt() {

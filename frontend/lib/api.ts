@@ -1,4 +1,4 @@
-import type { Agent, Run } from "./types";
+import type { Agent, AgentVersion, AgentVersionDiff, Run } from "./types";
 import { normalizeUsage } from "./usage";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -64,6 +64,32 @@ export const api = {
     request<Agent>("/v1/agents", {
       method: "POST",
       body: JSON.stringify({ adapter: "echo", config: {}, ...body }),
+    }),
+  updateAgent: (
+    id: string,
+    body: {
+      name?: string;
+      description?: string | null;
+      adapter?: string;
+      config?: Record<string, unknown>;
+      note?: string;
+    },
+  ) =>
+    request<Agent>(`/v1/agents/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  listAgentVersions: (id: string) =>
+    request<AgentVersion[]>(`/v1/agents/${id}/versions`),
+  getAgentVersion: (id: string, version: number) =>
+    request<AgentVersion>(`/v1/agents/${id}/versions/${version}`),
+  diffAgentVersions: (id: string, from: number, to: number) =>
+    request<AgentVersionDiff>(
+      `/v1/agents/${id}/versions/diff?from=${from}&to=${to}`,
+    ),
+  restoreAgentVersion: (id: string, version: number) =>
+    request<Agent>(`/v1/agents/${id}/versions/${version}/restore`, {
+      method: "POST",
     }),
 };
 

@@ -2,6 +2,7 @@ package io.agentflow.api.controller;
 
 import io.agentflow.api.service.AgentNameConflictException;
 import io.agentflow.api.service.AgentNotFoundException;
+import io.agentflow.api.service.AgentVersionNotFoundException;
 import io.agentflow.api.service.RunConflictException;
 import io.agentflow.api.service.RunNotFoundException;
 import java.util.Map;
@@ -19,6 +20,12 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AgentNotFoundException.class)
     public ResponseEntity<Map<String, String>> handleAgentNotFound(AgentNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AgentVersionNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleAgentVersionNotFound(
+            AgentVersionNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
     }
 
