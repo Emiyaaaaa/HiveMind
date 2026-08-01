@@ -18,7 +18,8 @@ from __future__ import annotations
 import asyncio
 import signal
 
-from app.adapters import EchoAdapter, LangGraphAdapter  # noqa: F401 - register
+# Importing the package registers the built-in adapters as a side effect.
+from app.adapters import load_adapter_plugins
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.core.telemetry import (
@@ -149,6 +150,7 @@ async def _consume_loop(
 
 async def run_forever() -> None:
     setup_logging()
+    load_adapter_plugins()
     setup_telemetry()
     settings = get_settings()
     concurrency = settings.worker_concurrency

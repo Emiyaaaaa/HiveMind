@@ -6,10 +6,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.adapters import (  # noqa: F401 -- registers built-in adapters as a side effect
-    EchoAdapter,
-    LangGraphAdapter,
-)
+
+# Importing the package registers the built-in adapters as a side effect.
+from app.adapters import load_adapter_plugins
 from app.api.v1.router import api_router
 from app.core.http_metrics import RedMetricsMiddleware
 from app.core.logging import get_logger, setup_logging
@@ -24,6 +23,7 @@ logger = get_logger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    load_adapter_plugins()
     setup_telemetry()
     # Ensure tables exist for SQLite dev mode. In production with Postgres,
     # `alembic upgrade head` is the source of truth.

@@ -81,10 +81,38 @@ that created a run must not share a session with the background adapter work.
 
 ## Adding an adapter
 
+Built-in adapters:
+
 1. Subclass `OrchestratorAdapter` in `app/adapters/`.
 2. Implement `async def run(self, ctx: AdapterContext) -> AdapterResult`.
 3. Emit events through `ctx.emit_step_started`, `ctx.emit_message`, etc.
 4. Register it in `app/adapters/__init__.py` via `register_adapter`.
+
+`register_adapter` refuses to rebind a name that is already taken, and refuses
+to register one adapter instance under two names — the runtime resolves a run
+by name and then reads `adapter.name` back to dispatch it, so the two must
+agree.
+
+Third-party adapters can be distributed as separate Python packages. Expose a
+zero-argument factory through the `agentflow.adapters` entry-point group:
+
+```toml
+[project.entry-points."agentflow.adapters"]
+crewai = "agentflow_crewai:create_adapter"
+```
+
+```python
+def create_adapter() -> OrchestratorAdapter:
+    return CrewAIAdapter()
+```
+
+The entry-point name becomes the adapter name. Plugin packages must be
+installed in the Python worker environment before it starts. Duplicate names,
+load failures, and factories that do not return an `OrchestratorAdapter` stop
+startup. Because loading a plugin imports third-party code that may register
+adapters of its own, conflicts are only settled once every factory has run:
+the discovered batch is registered atomically, so a failure leaves the registry
+exactly as it was.
 
 No changes are needed in the DB schema, the `/v1` contract, or the frontend.
 Workers pick up new adapters through the shared Python adapter registry.
