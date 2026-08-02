@@ -19,6 +19,7 @@ from app.adapters.base import (
     get_adapter,
     register_adapter,
 )
+from app.adapters.discovery import AdapterPluginError, load_adapter_plugins
 from app.adapters.echo_adapter import EchoAdapter
 from app.adapters.langgraph_adapter import LangGraphAdapter
 from app.adapters.mcp_client import (
@@ -40,6 +41,7 @@ register_adapter("langgraph", LangGraphAdapter())
 
 __all__ = [
     "AdapterContext",
+    "AdapterPluginError",
     "AdapterToolSurface",
     "EchoAdapter",
     "LangGraphAdapter",
@@ -52,6 +54,7 @@ __all__ = [
     "get_adapter",
     "get_tool",
     "list_tools",
+    "load_adapter_plugins",
     "open_tool_surface",
     "parse_mcp_servers",
     "register_adapter",

@@ -45,7 +45,7 @@
 
 **目标：** 第三方框架与工具可插拔，无需 fork runtime。
 
-- [ ] Adapter 插件注册表（entry points / 动态加载）
+- [x] Adapter 插件注册表（entry points / 动态加载）
 - [ ] 官方 adapter：AutoGen、CrewAI、PydanticAI（按需求选 2 个）
 - [ ] MCP tool adapter
 - [ ] OpenAPI 规范 + Python/TypeScript SDK 自动生成

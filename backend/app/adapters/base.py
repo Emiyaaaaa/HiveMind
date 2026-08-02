@@ -9,7 +9,7 @@ sync. Adapters must not import SQLAlchemy or hit the event bus directly.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -197,8 +197,34 @@ _registry: dict[str, OrchestratorAdapter] = {}
 
 
 def register_adapter(name: str, adapter: OrchestratorAdapter) -> None:
+    """Bind `name` to `adapter`.
+
+    The runtime resolves a run's adapter by name and then reads `adapter.name`
+    back to dispatch it (`RunService.start_run`), so names and instances must
+    map one-to-one. Both directions are rejected rather than silently aliased.
+    """
+    if name in _registry:
+        raise ValueError(f"Adapter already registered: {name!r}")
+    for registered_name, registered in _registry.items():
+        if registered is adapter:
+            raise ValueError(
+                f"Adapter instance already registered as {registered_name!r}, "
+                f"cannot also register as {name!r}"
+            )
     adapter.name = name
     _registry[name] = adapter
+
+
+def register_adapters(adapters: Iterable[tuple[str, OrchestratorAdapter]]) -> None:
+    """Register a batch atomically: on any failure the registry is left unchanged."""
+    snapshot = dict(_registry)
+    try:
+        for name, adapter in adapters:
+            register_adapter(name, adapter)
+    except Exception:
+        _registry.clear()
+        _registry.update(snapshot)
+        raise
 
 
 def get_adapter(name: str) -> OrchestratorAdapter:

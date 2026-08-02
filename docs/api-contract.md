@@ -30,6 +30,9 @@ Health probe.
 }
 ```
 
+`adapters` lists whatever is registered at runtime, so it also contains any
+adapter plugin installed through the `agentflow.adapters` entry-point group.
+
 ### `POST /v1/agents` → 201
 
 Request:
