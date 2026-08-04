@@ -4,15 +4,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { use } from "react";
 
-import { CheckpointMarker } from "@/components/CheckpointMarker";
 import { CheckpointPanel } from "@/components/CheckpointPanel";
 import { EventStream } from "@/components/EventStream";
 import { StatusBadge } from "@/components/StatusBadge";
+import { StepTimeline } from "@/components/StepTimeline";
 import { TokenCostSummary } from "@/components/TokenCostSummary";
 import { checkpointsByStep } from "@/lib/checkpoints";
 import { api } from "@/lib/api";
 import { useRunWithLiveUpdates } from "@/lib/useRunLiveSync";
-import { formatCostUsd } from "@/lib/usage";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -101,63 +100,10 @@ export default function RunDetailPage({ params }: PageProps) {
         </div>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="font-medium">Steps</h2>
-        <ol className="space-y-2">
-          {r.steps.map((s) => {
-            const cps = stepCheckpoints.get(s.id) ?? [];
-            return (
-            <li
-              key={s.id}
-              className="rounded-lg border border-border bg-surface p-3 space-y-2"
-            >
-              <div className="flex flex-wrap items-center gap-3 text-sm">
-                <span className="text-muted font-mono">#{s.index}</span>
-                <span className="font-medium">{s.node}</span>
-                <StatusBadge status={s.status} />
-                {cps.map((cp) => (
-                  <CheckpointMarker key={cp.id} checkpoint={cp} />
-                ))}
-                {s.latency_ms != null && (
-                  <span className="text-xs text-muted">{s.latency_ms}ms</span>
-                )}
-                {(s.tokens_in != null || s.tokens_out != null) && (
-                  <span className="text-xs text-muted font-mono">
-                    {s.tokens_in ?? 0}→{s.tokens_out ?? 0} tok
-                  </span>
-                )}
-                {s.cost_usd != null && (
-                  <span className="text-xs text-accent font-mono">
-                    {formatCostUsd(s.cost_usd)}
-                  </span>
-                )}
-              </div>
-              {s.tool_calls.length > 0 && (
-                <ul className="space-y-1 text-xs font-mono">
-                  {s.tool_calls.map((c) => (
-                    <li key={c.id} className="text-muted">
-                      <span className="text-accent">{c.name}(</span>
-                      {JSON.stringify(c.arguments)}
-                      <span className="text-accent">)</span>
-                      {c.result ? ` → ${JSON.stringify(c.result)}` : ""}
-                      {c.error ? (
-                        <span className="text-bad"> error: {c.error}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {s.output ? (
-                <pre className="text-xs font-mono whitespace-pre-wrap text-muted">
-                  {JSON.stringify(s.output, null, 2)}
-                </pre>
-              ) : null}
-              {s.error ? <div className="text-bad text-xs">{s.error}</div> : null}
-            </li>
-            );
-          })}
-        </ol>
-      </section>
+      <StepTimeline
+        steps={r.steps}
+        checkpointsByStepId={stepCheckpoints}
+      />
 
       <section className="space-y-3">
         <h2 className="font-medium">Messages</h2>
