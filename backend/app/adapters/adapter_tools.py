@@ -23,6 +23,7 @@ Agent config example::
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -107,23 +108,40 @@ class AdapterToolSurface:
         step_index: int,
         name: str,
         arguments: dict[str, Any],
+        call_id: str | None = None,
     ) -> dict[str, Any]:
-        """Invoke a tool and emit standardized ToolCall lifecycle events."""
+        """Invoke a tool and emit standardized ToolCall lifecycle events.
+
+        ``call_id`` links ``started`` ↔ ``completed`` so parallel (or same-name)
+        invocations do not clobber each other. When omitted a ULID is allocated.
+        """
         tool = self.lookup(name)
-        await ctx.emit_tool_call_started(
-            step_index=step_index, name=tool.name, arguments=arguments
+        cid = await ctx.emit_tool_call_started(
+            step_index=step_index,
+            name=tool.name,
+            arguments=arguments,
+            call_id=call_id,
         )
+        started = time.monotonic()
         try:
             result = await tool.handler(arguments)
             if not isinstance(result, dict):
                 result = {"result": result}
             await ctx.emit_tool_call_completed(
-                step_index=step_index, name=tool.name, result=result
+                step_index=step_index,
+                name=tool.name,
+                call_id=cid,
+                result=result,
+                latency_ms=int((time.monotonic() - started) * 1000),
             )
             return result
         except Exception as exc:
             await ctx.emit_tool_call_completed(
-                step_index=step_index, name=tool.name, error=str(exc)
+                step_index=step_index,
+                name=tool.name,
+                call_id=cid,
+                error=str(exc),
+                latency_ms=int((time.monotonic() - started) * 1000),
             )
             raise
 

@@ -212,6 +212,22 @@ before `step.completed`:
 { "index": 0, "tokens_in": 42, "tokens_out": 128, "cost_usd": 0.00012, "latency_ms": 1200 }
 ```
 
+`tool_call.started` / `tool_call.completed` share a stable ``call_id`` (ULID,
+also the persisted ``ToolCall.id``) so parallel or same-name invocations
+within one step associate correctly:
+
+```json
+{ "step_index": 0, "name": "echo", "arguments": { "text": "hi" }, "call_id": "01HZ..." }
+```
+
+```json
+{ "step_index": 0, "name": "echo", "call_id": "01HZ...", "result": { "text": "hi" }, "error": null, "latency_ms": 12 }
+```
+
+Adapters should pass the ``call_id`` returned from ``emit_tool_call_started``
+into ``emit_tool_call_completed``. When ``call_id`` is omitted on completed,
+the runtime falls back to the oldest incomplete call with a matching name.
+
 ## Schemas
 
 ### `Agent`

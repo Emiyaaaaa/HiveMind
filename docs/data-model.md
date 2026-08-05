@@ -117,6 +117,10 @@ stateDiagram-v2
 - **`Message.step_id` is optional** so an adapter can attach a message to a
   specific node tick when it makes sense, while keeping the run-level
   ordering authoritative.
+- **`ToolCall.id` is the lifecycle association key.** SSE
+  ``tool_call.started`` / ``tool_call.completed`` carry the same ``call_id``
+  (equal to ``ToolCall.id``) so parallel or same-name tool invocations within
+  one step do not clobber each other.
 
 ## Indexes
 

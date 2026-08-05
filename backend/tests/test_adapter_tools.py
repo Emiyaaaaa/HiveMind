@@ -62,8 +62,11 @@ async def test_adapter_tool_surface_builtin_execute():
         completed = [d for e, d in ctx.events if e == "tool_call.completed"]
         assert len(started) == 1
         assert started[0]["name"] == "echo"
+        assert "call_id" in started[0]
         assert len(completed) == 1
         assert completed[0]["result"] == {"text": "ping"}
+        assert completed[0]["call_id"] == started[0]["call_id"]
+        assert isinstance(completed[0].get("latency_ms"), int)
     finally:
         await surface.close()
 

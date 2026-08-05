@@ -20,6 +20,7 @@ from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
 from app.models.run import RunStatus
 from app.runtime.pricing import estimate_cost_usd
 from app.runtime.tokens import estimate_tokens
+
 _STEPS = ("plan", "tool", "reply")
 
 
@@ -78,12 +79,15 @@ class EchoAdapter(OrchestratorAdapter):
                 )
 
             await ctx.emit_step_started(index=idx, node="tool")
-            await ctx.emit_tool_call_started(
+            call_id = await ctx.emit_tool_call_started(
                 step_index=idx, name="echo", arguments={"text": prompt}
             )
             await asyncio.sleep(delay)
             await ctx.emit_tool_call_completed(
-                step_index=idx, name="echo", result={"text": prompt}
+                step_index=idx,
+                name="echo",
+                call_id=call_id,
+                result={"text": prompt},
             )
             await ctx.emit_step_completed(
                 index=idx, node="tool", output={"echo": prompt}

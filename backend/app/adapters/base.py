@@ -14,11 +14,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from ulid import ULID
+
 from app.models.run import RunStatus
-from app.schemas.run import EventType
 from app.runtime.resume_context import RunResumeContext
+from app.schemas.run import EventType
 
 EmitCallback = Callable[[EventType, dict[str, Any]], Awaitable[None]]
+
+
+def new_tool_call_id() -> str:
+    """Stable id linking ``tool_call.started`` ↔ ``tool_call.completed``."""
+    return str(ULID())
 
 
 @dataclass
@@ -104,30 +111,52 @@ class AdapterContext:
         )
 
     async def emit_tool_call_started(
-        self, *, step_index: int, name: str, arguments: dict[str, Any]
-    ) -> None:
+        self,
+        *,
+        step_index: int,
+        name: str,
+        arguments: dict[str, Any],
+        call_id: str | None = None,
+    ) -> str:
+        """Emit ``tool_call.started`` and return the association ``call_id``.
+
+        Pass the returned id (or the same ``call_id``) to
+        ``emit_tool_call_completed`` so parallel / same-name tool calls are
+        matched correctly. When omitted, a new ULID is generated.
+        """
+        cid = call_id or new_tool_call_id()
         await self.emit(
             "tool_call.started",
-            {"step_index": step_index, "name": name, "arguments": arguments},
+            {
+                "step_index": step_index,
+                "name": name,
+                "arguments": arguments,
+                "call_id": cid,
+            },
         )
+        return cid
 
     async def emit_tool_call_completed(
         self,
         *,
         step_index: int,
         name: str,
+        call_id: str | None = None,
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        latency_ms: int | None = None,
     ) -> None:
-        await self.emit(
-            "tool_call.completed",
-            {
-                "step_index": step_index,
-                "name": name,
-                "result": result,
-                "error": error,
-            },
-        )
+        payload: dict[str, Any] = {
+            "step_index": step_index,
+            "name": name,
+            "result": result,
+            "error": error,
+        }
+        if call_id is not None:
+            payload["call_id"] = call_id
+        if latency_ms is not None:
+            payload["latency_ms"] = latency_ms
+        await self.emit("tool_call.completed", payload)
 
     async def emit_log(self, message: str, **fields: Any) -> None:
         await self.emit(
