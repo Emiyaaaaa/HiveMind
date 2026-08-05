@@ -434,29 +434,33 @@ class RunService:
         elif event_type == "tool_call.started":
             step = await self._find_step(run_id, data["step_index"])
             if step is not None:
-                call = ToolCall(
-                    step_id=step.id,
-                    name=data["name"],
-                    arguments=data.get("arguments", {}),
-                )
+                call_kwargs: dict[str, Any] = {
+                    "step_id": step.id,
+                    "name": data["name"],
+                    "arguments": data.get("arguments", {}),
+                }
+                call_id = data.get("call_id")
+                if isinstance(call_id, str) and call_id:
+                    call_kwargs["id"] = call_id
+                call = ToolCall(**call_kwargs)
                 self.session.add(call)
                 await self.session.commit()
+                # Ensure SSE clients always receive the persisted association key.
+                data = {**data, "call_id": call.id}
         elif event_type == "tool_call.completed":
             step = await self._find_step(run_id, data["step_index"])
             if step is not None:
-                stmt = (
-                    select(ToolCall)
-                    .where(ToolCall.step_id == step.id, ToolCall.name == data["name"])
-                    .order_by(ToolCall.created_at.desc())
-                    .limit(1)
+                call = await self._find_tool_call(
+                    step_id=step.id,
+                    name=data["name"],
+                    call_id=data.get("call_id"),
                 )
-                result = await self.session.execute(stmt)
-                call = result.scalar_one_or_none()
                 if call is not None:
                     call.result = data.get("result")
                     call.error = data.get("error")
                     call.latency_ms = data.get("latency_ms")
                     await self.session.commit()
+                    data = {**data, "call_id": call.id}
                     run = await self._get_run(run_id)
                     record_tool_call(
                         adapter=run.adapter,
@@ -490,6 +494,43 @@ class RunService:
 
     async def _find_step(self, run_id: str, index: int) -> Step | None:
         stmt = select(Step).where(Step.run_id == run_id, Step.index == index)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _find_tool_call(
+        self,
+        *,
+        step_id: str,
+        name: str,
+        call_id: Any = None,
+    ) -> ToolCall | None:
+        """Resolve a ToolCall for ``tool_call.completed``.
+
+        Prefer ``call_id`` (``ToolCall.id``) so parallel / same-name invocations
+        associate correctly. Fall back to the oldest incomplete row with a
+        matching name for legacy emitters that omit ``call_id``.
+        """
+        if isinstance(call_id, str) and call_id:
+            stmt = select(ToolCall).where(
+                ToolCall.id == call_id,
+                ToolCall.step_id == step_id,
+            )
+            result = await self.session.execute(stmt)
+            call = result.scalar_one_or_none()
+            if call is not None:
+                return call
+
+        stmt = (
+            select(ToolCall)
+            .where(
+                ToolCall.step_id == step_id,
+                ToolCall.name == name,
+                ToolCall.result.is_(None),
+                ToolCall.error.is_(None),
+            )
+            .order_by(ToolCall.created_at.asc())
+            .limit(1)
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

@@ -57,6 +57,7 @@ LangGraph ``START`` / ``END``. Conditional edges use ``condition`` + ``routes``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -544,7 +545,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                                 ],
                             }
                         )
-                        for tc in response.tool_calls:
+
+                        async def _run_tool(tc: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
                             name = str(tc.get("name") or "")
                             arguments = dict(tc.get("arguments") or {})
                             result = await run_state.tool_surface.execute(
@@ -553,6 +555,15 @@ class LangGraphAdapter(OrchestratorAdapter):
                                 name=name,
                                 arguments=arguments,
                             )
+                            return tc, result
+
+                        # Parallel tool calls share one step; call_id keeps
+                        # started/completed pairs associated correctly.
+                        pairs = await asyncio.gather(
+                            *[_run_tool(tc) for tc in response.tool_calls]
+                        )
+                        for tc, result in pairs:
+                            name = str(tc.get("name") or "")
                             tool_results[name] = result
                             messages.append(
                                 {

@@ -181,8 +181,12 @@ function appendMessage(messages: Message[], data: Record<string, unknown>, at: s
 }
 
 function appendToolCall(step: Step, data: Record<string, unknown>): ToolCall {
+  const callId =
+    typeof data.call_id === "string" && data.call_id
+      ? data.call_id
+      : `sse-tc-${step.index}-${step.tool_calls.length}`;
   return {
-    id: `sse-tc-${step.index}-${step.tool_calls.length}`,
+    id: callId,
     name: typeof data.name === "string" ? data.name : "tool",
     arguments: asRecord(data.arguments),
     result: null,
@@ -191,33 +195,81 @@ function appendToolCall(step: Step, data: Record<string, unknown>): ToolCall {
   };
 }
 
-function patchToolCall(
+function isPendingToolCall(call: ToolCall): boolean {
+  return call.result == null && call.error == null;
+}
+
+function applyToolCallPatch(
+  call: ToolCall,
+  data: Record<string, unknown>,
+): ToolCall {
+  return {
+    ...call,
+    result:
+      "result" in data
+        ? (data.result as Record<string, unknown> | null)
+        : call.result,
+    error: typeof data.error === "string" ? data.error : call.error,
+    latency_ms:
+      typeof data.latency_ms === "number" ? data.latency_ms : call.latency_ms,
+  };
+}
+
+/** Always append on started so parallel / same-name tools stay distinct. */
+function startToolCall(
   step: Step,
   data: Record<string, unknown>,
   at: string,
 ): Step {
-  const name = typeof data.name === "string" ? data.name : "";
+  const callId =
+    typeof data.call_id === "string" && data.call_id ? data.call_id : null;
+  if (callId) {
+    const existing = step.tool_calls.findIndex((call) => call.id === callId);
+    if (existing !== -1) {
+      const toolCalls = [...step.tool_calls];
+      toolCalls[existing] = {
+        ...toolCalls[existing],
+        name: typeof data.name === "string" ? data.name : toolCalls[existing].name,
+        arguments:
+          "arguments" in data
+            ? asRecord(data.arguments)
+            : toolCalls[existing].arguments,
+      };
+      return { ...step, tool_calls: toolCalls, updated_at: at };
+    }
+  }
+  return {
+    ...step,
+    tool_calls: [...step.tool_calls, appendToolCall(step, data)],
+    updated_at: at,
+  };
+}
+
+/** Match completed events by call_id, else oldest pending same-name call. */
+function completeToolCall(
+  step: Step,
+  data: Record<string, unknown>,
+  at: string,
+): Step {
+  const callId =
+    typeof data.call_id === "string" && data.call_id ? data.call_id : null;
   const toolCalls = [...step.tool_calls];
-  let index = toolCalls.findIndex((call) => call.name === name);
+  let index = -1;
+  if (callId) {
+    index = toolCalls.findIndex((call) => call.id === callId);
+  }
+  if (index === -1) {
+    const name = typeof data.name === "string" ? data.name : "";
+    index = toolCalls.findIndex(
+      (call) => call.name === name && isPendingToolCall(call),
+    );
+  }
   if (index === -1) {
     toolCalls.push(appendToolCall(step, data));
     index = toolCalls.length - 1;
   }
 
-  toolCalls[index] = {
-    ...toolCalls[index],
-    result:
-      "result" in data
-        ? (data.result as Record<string, unknown> | null)
-        : toolCalls[index].result,
-    error:
-      typeof data.error === "string" ? data.error : toolCalls[index].error,
-    latency_ms:
-      typeof data.latency_ms === "number"
-        ? data.latency_ms
-        : toolCalls[index].latency_ms,
-  };
-
+  toolCalls[index] = applyToolCallPatch(toolCalls[index], data);
   return { ...step, tool_calls: toolCalls, updated_at: at };
 }
 
@@ -368,7 +420,7 @@ export function applyRunEvent(run: Run, event: RunEvent): Run {
       if (typeof stepIndex !== "number") return next;
       const step = findStep(run.steps, stepIndex);
       if (!step) return next;
-      const updated = patchToolCall(step, data, at);
+      const updated = startToolCall(step, data, at);
       return {
         ...next,
         steps: upsertStep(run.steps, updated),
@@ -379,7 +431,7 @@ export function applyRunEvent(run: Run, event: RunEvent): Run {
       if (typeof stepIndex !== "number") return next;
       const step = findStep(run.steps, stepIndex);
       if (!step) return next;
-      const updated = patchToolCall(step, data, at);
+      const updated = completeToolCall(step, data, at);
       return {
         ...next,
         steps: upsertStep(run.steps, updated),

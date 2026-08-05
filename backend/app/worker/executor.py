@@ -27,15 +27,16 @@ from app.adapters.base import (
     OrchestratorAdapter,
     get_adapter,
 )
-from app.runtime.resume_context import (
-    parse_resume_context,
-    without_resume_metadata,
-)
 from app.core.logging import get_logger
 from app.core.telemetry import trace_adapter_run
 from app.db.session import SessionLocal
 from app.events import EventBus
 from app.models import Agent, RunStatus
+from app.runtime.resume_context import (
+    parse_resume_context,
+    without_resume_metadata,
+)
+from app.schemas.run import EventType
 from app.worker.cancel import CancelRegistry, InMemoryCancelRegistry
 
 logger = get_logger("worker.executor")
@@ -90,6 +91,14 @@ class RunExecutor:
             await session.commit()
             await service._broadcast("run.started", run.id, {})
 
+            # Serialize DB writes: adapters may emit from concurrent tasks
+            # (e.g. parallel tool calls) while sharing one AsyncSession.
+            emit_lock = asyncio.Lock()
+
+            async def _emit(event_type: EventType, data: dict[str, Any]) -> None:
+                async with emit_lock:
+                    await service._handle_event(run.id, event_type, data)
+
             ctx = AdapterContext(
                 run_id=run.id,
                 agent_id=agent.id,
@@ -98,9 +107,7 @@ class RunExecutor:
                 metadata=run.metadata_,
                 resume=resume_ctx,
                 step_index_base=step_index_base,
-                emit=lambda event_type, data: service._handle_event(
-                    run.id, event_type, data
-                ),
+                emit=_emit,
             )
 
             adapter = get_adapter(adapter_name)
