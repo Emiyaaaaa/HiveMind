@@ -9,6 +9,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent, AgentVersion
 
+INTERNAL_METADATA_KEY = "_agentflow"
+AGENT_VERSION_METADATA_KEY = "agent_version"
+
+
+class InvalidAgentVersionMetadata(ValueError):
+    """A run contains an agent-version pin that cannot identify a snapshot."""
+
+
+def agent_version_from_metadata(metadata: dict[str, Any] | None) -> int | None:
+    """Read a run's version pin, returning ``None`` only for legacy runs."""
+    if not metadata or INTERNAL_METADATA_KEY not in metadata:
+        return None
+
+    internal = metadata[INTERNAL_METADATA_KEY]
+    if not isinstance(internal, dict):
+        raise InvalidAgentVersionMetadata(
+            f"{INTERNAL_METADATA_KEY} must be an object"
+        )
+    if AGENT_VERSION_METADATA_KEY not in internal:
+        return None
+
+    version = internal[AGENT_VERSION_METADATA_KEY]
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise InvalidAgentVersionMetadata(
+            f"{INTERNAL_METADATA_KEY}.{AGENT_VERSION_METADATA_KEY} "
+            "must be a positive integer"
+        )
+    return version
+
 
 def snapshot_agent(
     agent: Agent,

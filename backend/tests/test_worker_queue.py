@@ -26,6 +26,7 @@ from app.db.session import SessionLocal, engine
 from app.events import get_event_bus
 from app.models import Agent, Run, RunStatus, Step
 from app.schemas.run import RunCreate
+from app.services.agent_versions import snapshot_agent
 from app.services.run_service import RunService
 from app.worker.cancel import InMemoryCancelRegistry
 from app.worker.executor import RunExecutor
@@ -150,6 +151,41 @@ class _SlowAdapter(OrchestratorAdapter):
             await asyncio.sleep(0.05)
             await ctx.emit_step_completed(index=i, node=f"step-{i}")
         return AdapterResult(status=RunStatus.SUCCEEDED, output={})
+
+
+class _ConfigCaptureAdapter(OrchestratorAdapter):
+    async def run(self, ctx: AdapterContext) -> AdapterResult:
+        return AdapterResult(
+            status=RunStatus.SUCCEEDED,
+            output={"agent_config": ctx.agent_config},
+        )
+
+
+@pytest.mark.asyncio
+async def test_executor_uses_pinned_agent_snapshot():
+    adapter_name = "version-config-test"
+    register_adapter(adapter_name, _ConfigCaptureAdapter())
+    async with SessionLocal() as session:
+        agent = Agent(name="version-agent", adapter=adapter_name, config={"revision": "v1"})
+        session.add(agent)
+        await session.flush()
+        version = snapshot_agent(agent, note="initial")
+        agent.config = {"revision": "v2"}
+        agent.version = 2
+        run = Run(
+            agent_id=agent.id,
+            adapter=adapter_name,
+            metadata_={"_agentflow": {"agent_version": 1}},
+        )
+        session.add_all([version, run])
+        await session.commit()
+
+    executor = RunExecutor(bus=get_event_bus(), cancel_registry=InMemoryCancelRegistry())
+    await executor.execute(run.id, adapter_name)
+
+    async with SessionLocal() as session:
+        loaded = await session.get(Run, run.id)
+        assert loaded.output == {"agent_config": {"revision": "v1"}}
 
 
 @pytest.mark.asyncio

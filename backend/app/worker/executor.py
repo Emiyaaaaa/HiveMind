@@ -37,6 +37,11 @@ from app.runtime.resume_context import (
     without_resume_metadata,
 )
 from app.schemas.run import EventType
+from app.services.agent_versions import (
+    InvalidAgentVersionMetadata,
+    agent_version_from_metadata,
+    get_agent_version,
+)
 from app.worker.cancel import CancelRegistry, InMemoryCancelRegistry
 
 logger = get_logger("worker.executor")
@@ -79,6 +84,32 @@ class RunExecutor:
                 await self._safe_clear_cancel(run_id)
                 return
 
+            try:
+                agent_version = agent_version_from_metadata(run.metadata_)
+            except InvalidAgentVersionMetadata as exc:
+                await service._finalize(
+                    run_id,
+                    RunStatus.FAILED,
+                    error=f"invalid agent version metadata: {exc}",
+                )
+                return
+
+            if agent_version is None:
+                agent_config = dict(agent.config or {})
+            else:
+                snapshot = await get_agent_version(session, run.agent_id, agent_version)
+                if snapshot is None:
+                    await service._finalize(
+                        run_id,
+                        RunStatus.FAILED,
+                        error=(
+                            "agent version snapshot missing: "
+                            f"agent_id={run.agent_id}, version={agent_version}"
+                        ),
+                    )
+                    return
+                agent_config = dict(snapshot.config or {})
+
             resume_ctx = parse_resume_context(run.metadata_)
             if resume_ctx is not None:
                 run.metadata_ = without_resume_metadata(dict(run.metadata_ or {}))
@@ -102,7 +133,7 @@ class RunExecutor:
             ctx = AdapterContext(
                 run_id=run.id,
                 agent_id=agent.id,
-                agent_config=agent.config or {},
+                agent_config=agent_config,
                 input=run.input,
                 metadata=run.metadata_,
                 resume=resume_ctx,

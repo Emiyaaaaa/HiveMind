@@ -21,6 +21,7 @@ import io.agentflow.api.repository.MessageRepository;
 import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
 import io.agentflow.api.repository.ToolCallRepository;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +40,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  */
 @Service
 public class RunService {
+
+    private static final String INTERNAL_METADATA_KEY = "_agentflow";
+    private static final String AGENT_VERSION_METADATA_KEY = "agent_version";
 
     private final RunRepository runs;
     private final StepRepository steps;
@@ -80,11 +84,43 @@ public class RunService {
         run.setAdapter(adapter);
         run.setStatus(RunStatus.PENDING);
         run.setInput(new HashMap<>(req.getInput()));
-        run.setMetadata(new HashMap<>(req.getMetadata()));
+        Map<String, Object> metadata = new HashMap<>(req.getMetadata());
+        metadata.put(
+                INTERNAL_METADATA_KEY,
+                Map.of(AGENT_VERSION_METADATA_KEY, agent.getVersion()));
+        run.setMetadata(metadata);
         RunEntity saved = runs.save(run);
         enqueueJobAfterCommit(saved.getId(), agent.getId(), adapter);
 
         return toResponse(saved);
+    }
+
+    /** Persist server-pinned candidate Runs without dispatching them yet. */
+    @Transactional
+    public List<RunEntity> createPinnedCopies(
+            String agentId,
+            String adapter,
+            int agentVersion,
+            List<Map<String, Object>> inputs) {
+        List<RunEntity> candidates = new ArrayList<>(inputs.size());
+        for (Map<String, Object> input : inputs) {
+            RunEntity run = new RunEntity();
+            run.setAgentId(agentId);
+            run.setAdapter(adapter);
+            run.setStatus(RunStatus.PENDING);
+            run.setInput(new HashMap<>(input));
+            run.setMetadata(Map.of(
+                    INTERNAL_METADATA_KEY,
+                    Map.of(AGENT_VERSION_METADATA_KEY, agentVersion)));
+            candidates.add(run);
+        }
+        return List.copyOf(runs.saveAll(candidates));
+    }
+
+    /** Dispatch already-committed candidate Runs after their Redis manifest exists. */
+    public void enqueueCandidates(List<RunEntity> candidates) {
+        candidates.forEach(run ->
+                jobProducer.enqueue(run.getId(), run.getAgentId(), run.getAdapter()));
     }
 
     @Transactional(readOnly = true)
