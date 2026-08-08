@@ -91,6 +91,6 @@
 | 事件重放 | `backend/app/events/bus.py`、`backend/app/api/v1/events.py` |
 | 修控制台 | `frontend/app/runs/`、`frontend/components/` |
 | 新 adapter | `backend/app/adapters/` + `__init__.py` 注册 |
-| 扩展 API | 先改 [api-contract.md](api-contract.md)，再同步 Java + Python |
+| 扩展 API | 先改 [api-contract.md](api-contract.md)，再实现 Java API；涉及执行协议时同步 Python Worker |
 | 队列可靠性 | `backend/app/worker/queue.py`、`backend/app/worker/monitor.py` |
 | 可观测性 | `backend/app/core/telemetry.py`、Java `RedMetricsFilter` |

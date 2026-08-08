@@ -3,6 +3,8 @@ package io.agentflow.api.controller;
 import io.agentflow.api.service.AgentNameConflictException;
 import io.agentflow.api.service.AgentNotFoundException;
 import io.agentflow.api.service.AgentVersionNotFoundException;
+import io.agentflow.api.service.RegressionExecutionException;
+import io.agentflow.api.service.RunComparisonValidationException;
 import io.agentflow.api.service.RunConflictException;
 import io.agentflow.api.service.RunNotFoundException;
 import java.util.Map;
@@ -42,5 +44,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(RunConflictException.class)
     public ResponseEntity<Map<String, String>> handleRunConflict(RunConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(RunComparisonValidationException.class)
+    public ResponseEntity<Map<String, String>> handleRunComparisonValidation(
+            RunComparisonValidationException ex) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(RegressionExecutionException.class)
+    public ResponseEntity<Map<String, String>> handleRegressionExecution(
+            RegressionExecutionException ex) {
+        return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
     }
 }

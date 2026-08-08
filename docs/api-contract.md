@@ -109,7 +109,16 @@ Request:
 ```
 
 `metadata` and `adapter` are optional. When `adapter` is omitted the agent's
-default adapter is used.
+default adapter is used. The server replaces the reserved `_agentflow`
+metadata namespace and records the agent's current version as
+`_agentflow.agent_version`; client-supplied values in that namespace are never
+trusted.
+
+The Python worker resolves a pinned run through
+`agent_id + _agentflow.agent_version` and executes the corresponding immutable
+`AgentVersion.config` snapshot. A pinned run fails explicitly if that snapshot
+is missing. Only legacy runs without a version pin fall back to the agent's
+current config.
 
 Response: a full `Run` record. The run is created with status `pending` and
 a background job is dispatched to a worker; the response returns before the
@@ -166,6 +175,88 @@ Request (optional body):
 
 Response: a full `Run` record with status `pending`. Returns **404** if missing,
 **409** if status is not `waiting_human`.
+
+### `POST /v1/run-comparisons/preview` → 200
+
+Returns a read-only summary comparison of two terminal runs. It does not
+persist a comparison or execute either run again.
+
+Request:
+
+```json
+{
+  "baseline_run_id": "01HZ...A",
+  "candidate_run_id": "01HZ...B"
+}
+```
+
+Both runs must exist, have different IDs, belong to the same Agent, and be in
+`succeeded`, `failed`, or `cancelled`. The response contains each Run's ID,
+Agent ID, pinned AgentVersion, status and error, plus boolean flags indicating
+whether the version, status, error, input or output changed. A `null` version
+identifies a historical Run without a version pin. Output changes are
+diagnostic only and do not fail regression cases.
+
+The endpoint intentionally does not compute field-level JSON changes, align
+Steps, or aggregate token, cost and latency metrics. Those records remain
+available from the normal Run read endpoint.
+
+Returns **404** when either run is missing, **409** while either run is not
+terminal, and **422** for identical run IDs or runs owned by different agents.
+
+### `POST /v1/regression-executions` → 202
+
+Starts an ephemeral regression execution from 1–100 terminal baseline Runs.
+All baselines must belong to the same Agent. The Java API resolves that
+Agent's current immutable version snapshot once, copies each baseline input
+into a new candidate Run pinned to that one version, and dispatches the
+candidates through the normal Python Worker queue.
+
+Request:
+
+```json
+{
+  "baseline_run_ids": ["01HZ...A", "01HZ...B"]
+}
+```
+
+Candidate version metadata is server-owned and cannot be supplied by the
+client. Duplicate IDs are rejected and a request is limited to 100 Runs to
+avoid accidentally flooding the worker queue.
+
+The response contains one temporary `execution_id`, the fixed candidate Agent
+version, total/completed counts, and baseline/candidate Run ID pairs. The
+execution manifest is JSON stored at
+`agentflow:regression:execution:{execution_id}` in Redis and expires after 30
+days. Runs, Steps, outputs, metrics, and AgentVersion snapshots remain in
+Postgres. No regression database table is created.
+
+Returns **404** if a baseline Run or current AgentVersion snapshot is missing,
+**409** if a baseline is non-terminal, **422** for duplicate IDs or mixed
+Agents, and **503** if the temporary Redis manifest cannot be stored.
+
+### `GET /v1/regression-executions/{execution_id}` → 200
+
+Loads the Run pairs from Redis, reads candidate Run states from Postgres, and
+returns current progress. Redis is not treated as the source of truth for Run
+status. Overall status is `pending`, `running`, or `completed`, with only total
+and completed counts returned. Failed and cancelled candidates are terminal
+and therefore count as completed cases.
+
+Returns **404** when the manifest is missing or has expired.
+
+### `GET /v1/regression-executions/{execution_id}/results` → 200
+
+Available after every candidate Run is terminal. Each pair is evaluated with
+the existing Run-comparison service. A case passes when status and error are
+unchanged; output differences remain diagnostic and do not fail LLM-backed
+cases. The response includes per-case pass/fail reasons and total passed and
+failed counts; callers can use the standalone comparison endpoint for the
+simple version, status, error, input and output change summary.
+
+Returns **409** while any candidate Run is non-terminal and **404** when the
+manifest is missing or expired. Results are computed from Postgres on demand;
+they are not persisted separately.
 
 ### `GET /v1/events/{run_id}` → 200 `text/event-stream`
 
