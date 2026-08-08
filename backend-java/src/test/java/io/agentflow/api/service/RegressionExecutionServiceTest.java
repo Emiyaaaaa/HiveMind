@@ -1,8 +1,11 @@
 package io.agentflow.api.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -68,6 +71,45 @@ class RegressionExecutionServiceTest {
 
         assertThat(results.passedCases()).isEqualTo(1);
         assertThat(results.failedCases()).isZero();
+    }
+
+    @Test
+    void deletesCandidatesWhenManifestSaveFails() {
+        RunRepository runs = mock(RunRepository.class);
+        AgentVersionRepository versions = mock(AgentVersionRepository.class);
+        AgentService agents = mock(AgentService.class);
+        RunService runService = mock(RunService.class);
+        RegressionExecutionStore store = mock(RegressionExecutionStore.class);
+        RegressionExecutionService service = new RegressionExecutionService(
+                runs,
+                versions,
+                agents,
+                runService,
+                store,
+                mock(RunComparisonService.class));
+        RunEntity baseline = run("base-1", RunStatus.SUCCEEDED, Map.of("prompt", "one"));
+        RunEntity candidate = run("candidate-1", RunStatus.PENDING, Map.of("prompt", "one"));
+        AgentEntity agent = new AgentEntity();
+        agent.setId("agent-1");
+        agent.setVersion(4);
+        AgentVersionEntity snapshot = new AgentVersionEntity();
+        snapshot.setAdapter("echo");
+        RegressionExecutionException failure = RegressionExecutionException.unavailable(
+                "Failed to store temporary regression execution manifest",
+                new RuntimeException("Redis unavailable"));
+        when(runs.findAllById(List.of("base-1"))).thenReturn(List.of(baseline));
+        when(agents.getEntity("agent-1")).thenReturn(agent);
+        when(versions.findByAgentIdAndVersion("agent-1", 4)).thenReturn(Optional.of(snapshot));
+        when(runService.createPinnedCopies(any(), any(), any(Integer.class), any()))
+                .thenReturn(List.of(candidate));
+        doThrow(failure).when(store).save(any());
+
+        assertThatThrownBy(() ->
+                        service.create(new RegressionExecutionCreateRequest(List.of("base-1"))))
+                .isSameAs(failure);
+
+        verify(runs).deleteAll(List.of(candidate));
+        verify(runService, never()).enqueueCandidates(any());
     }
 
     private static RunEntity run(String id, RunStatus status, Map<String, Object> input) {

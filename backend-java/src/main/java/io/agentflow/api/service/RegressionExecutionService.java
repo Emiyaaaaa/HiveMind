@@ -88,7 +88,12 @@ public class RegressionExecutionService {
                 "reg_" + UlidCreator.getUlid(),
                 candidateVersion,
                 List.copyOf(cases));
-        store.save(manifest);
+        try {
+            store.save(manifest);
+        } catch (RuntimeException ex) {
+            runs.deleteAll(candidates);
+            throw ex;
+        }
         runService.enqueueCandidates(candidates);
         return response(manifest, byId(candidates));
     }
