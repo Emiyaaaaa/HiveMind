@@ -31,8 +31,24 @@ const WATCHDOG_INTERVAL_MS = 5_000;
 /** Server heartbeat is 15s; allow several missed pings through proxies. */
 const IDLE_TIMEOUT_MS = 60_000;
 
-/** Mirrors backend `_is_after` — numeric IDs when possible, else lexicographic. */
+/** Mirrors backend `is_after` — ints, Redis Stream `ms-seq`, else lexicographic. */
 function isEventIdAfter(entryId: string, afterId: string): boolean {
+  if (entryId.includes("-") || afterId.includes("-")) {
+    const parse = (id: string): [number, number] | null => {
+      const [ms, seq] = id.split("-", 2);
+      if (seq == null) return null;
+      const msNum = Number(ms);
+      const seqNum = Number(seq);
+      if (Number.isNaN(msNum) || Number.isNaN(seqNum)) return null;
+      return [msNum, seqNum];
+    };
+    const left = parse(entryId);
+    const right = parse(afterId);
+    if (left && right) {
+      if (left[0] !== right[0]) return left[0] > right[0];
+      return left[1] > right[1];
+    }
+  }
   const entryNum = Number(entryId);
   const afterNum = Number(afterId);
   if (!Number.isNaN(entryNum) && !Number.isNaN(afterNum)) {

@@ -225,3 +225,68 @@ async def test_redis_ephemeral_events_skip_stream():
 
     replayed = [event.type async for _, event in bus.replay(run_id, None)]
     assert replayed == ["run.created", "run.completed"]
+
+
+@pytest.mark.asyncio
+async def test_is_after_supports_redis_stream_ids():
+    from app.events.bus import is_after
+
+    assert is_after("2", "1")
+    assert not is_after("1", "1")
+    assert is_after("1000-1", "999-99")
+    assert is_after("1000-2", "1000-1")
+    assert not is_after("1000-1", "1000-2")
+    assert is_after("1", None)
+    assert is_after("1", "")
+
+
+@pytest.mark.asyncio
+async def test_redis_publish_envelope_reuses_event_body():
+    redis = fakeredis.FakeRedis(decode_responses=True)
+    bus = RedisEventBus.__new__(RedisEventBus)
+    bus._redis = redis
+    bus._channel_prefix = "agentflow:run:"
+    bus._stream_suffix = ":log"
+    bus._stream_max_len = 1000
+
+    run_id = "run-envelope"
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(bus._channel(run_id))
+
+    # Drain subscription confirmation.
+    while True:
+        message = await pubsub.get_message(ignore_subscribe_messages=False, timeout=0.2)
+        if message and message.get("type") == "subscribe":
+            break
+
+    event_id = await bus.publish(_event("run.created", run_id, hello="world"))
+    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+    assert message is not None
+    import json
+
+    envelope = json.loads(message["data"])
+    assert envelope["id"] == event_id
+    assert envelope["event"]["type"] == "run.created"
+    assert envelope["event"]["data"]["hello"] == "world"
+
+    await bus.publish(_event("token.delta", run_id, delta="x"), persist=False)
+    ephemeral = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+    assert ephemeral is not None
+    ephemeral_envelope = json.loads(ephemeral["data"])
+    assert ephemeral_envelope["id"] is None
+
+    await pubsub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bounded_queue_drops_oldest_under_backpressure():
+    from app.events.bus import _SUBSCRIBE_QUEUE_MAXSIZE
+
+    bus = InMemoryEventBus()
+    run_id = "run-backpressure"
+    async with bus.subscribe(run_id) as queue:
+        for i in range(_SUBSCRIBE_QUEUE_MAXSIZE + 50):
+            await bus.publish(_event("token.delta", run_id, delta=str(i)), persist=False)
+        assert queue.qsize() == _SUBSCRIBE_QUEUE_MAXSIZE
+        _, first = queue.get_nowait()
+        assert first.data["delta"] == "50"
