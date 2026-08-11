@@ -51,7 +51,10 @@ def is_after(entry_id: str, after_id: str | None) -> bool:
     if after_id is None or after_id == "":
         return True
     if "-" in entry_id or "-" in after_id:
-        return _stream_id_key(entry_id) > _stream_id_key(after_id)
+        left = _stream_id_key(entry_id)
+        right = _stream_id_key(after_id)
+        if isinstance(left, tuple) and isinstance(right, tuple):
+            return left > right
     try:
         return int(entry_id) > int(after_id)
     except ValueError:
