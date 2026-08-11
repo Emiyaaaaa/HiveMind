@@ -39,9 +39,10 @@ and persist state to Postgres.
 ┌────────────────────────┐    ┌──────────────────────────────┐
 │ Adapters               │    │ Event bus                    │
 │   adapters/base.py     │    │   events/bus.py              │
-│   adapters/echo.py     │    │     - redis pub/sub (prod)   │
-│   adapters/langgraph.py│    │     - in-memory (unit tests) │
-└────────────────────────┘    └──────────────────────────────┘
+│   adapters/echo.py     │    │     - redis pub/sub (live)   │
+│   adapters/langgraph.py│    │     - redis stream (replay)  │
+└────────────────────────┘    │     - in-memory (unit tests) │
+                              └──────────────────────────────┘
                     │
                     ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -63,9 +64,11 @@ API↔worker Redis protocol.
 3. A Python worker `XREADGROUP`s the job, opens its own DB session, and
    invokes the configured `OrchestratorAdapter` via `RunExecutor`.
 4. The adapter emits lifecycle events via `AdapterContext.emit_*`. The worker
-   writes each event to Postgres and publishes a `RunEvent` on the Redis
-   channel `agentflow:run:{run_id}`.
-5. The Java SSE controller relays those events to subscribers of
+   writes each event to Postgres, appends durable frames to Redis Stream
+   `agentflow:run:{run_id}:log`, and publishes live `RunEvent`s on channel
+   `agentflow:run:{run_id}` (`token.delta` is live-only).
+5. The Java SSE controller replays from the stream when clients send
+   `Last-Event-ID`, then relays live pub/sub events on
    `GET /v1/events/{run_id}`.
 6. When the adapter returns, the worker writes the terminal status. The API
    and console observe the same rows and events.

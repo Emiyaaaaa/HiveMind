@@ -19,12 +19,12 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.core.config import get_settings
 from app.events import EventBus, get_event_bus
-from app.events.bus import _is_after
+from app.events.bus import is_after
 from app.schemas.run import RunEvent
 
 router = APIRouter(prefix="/events", tags=["events"])
 
-_TERMINAL_TYPES = {"run.completed", "run.failed", "run.cancelled"}
+_TERMINAL_TYPES = frozenset({"run.completed", "run.failed", "run.cancelled"})
 
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -39,10 +39,10 @@ _SSE_RETRY_MS = 3_000
 def _resolve_last_event_id(request: Request) -> str | None:
     header = request.headers.get("last-event-id")
     if header:
-        return header.strip()
+        return header.strip() or None
     query = request.query_params.get("last_event_id")
     if query:
-        return query.strip()
+        return query.strip() or None
     return None
 
 
@@ -54,6 +54,22 @@ def _sse_frame(event_id: str | None, event: RunEvent) -> dict[str, str]:
     if event_id:
         frame["id"] = event_id
     return frame
+
+
+async def _iter_replay(
+    bus: EventBus,
+    request: Request,
+    run_id: str,
+    after_id: str | None,
+) -> AsyncIterator[tuple[str | None, RunEvent, bool]]:
+    """Yield ``(event_id, event, terminal)`` frames from the durable log."""
+    async for event_id, event in bus.replay(run_id, after_id):
+        if await request.is_disconnected():
+            return
+        terminal = event.type in _TERMINAL_TYPES
+        yield event_id or None, event, terminal
+        if terminal:
+            return
 
 
 @router.get("/{run_id}")
@@ -71,24 +87,32 @@ async def stream_run_events(
         yield {"event": "ping", "data": "{}"}
         last_id = after_id
 
-        async for event_id, event in bus.replay(run_id, after_id):
-            if await request.is_disconnected():
-                return
-            yield _sse_frame(event_id or None, event)
+        async for event_id, event, terminal in _iter_replay(
+            bus, request, run_id, after_id
+        ):
+            yield _sse_frame(event_id, event)
             if event_id:
                 last_id = event_id
-            if event.type in _TERMINAL_TYPES:
+            if terminal:
                 return
 
+        if await request.is_disconnected():
+            return
+
+        # Subscribe first, then catch up from the log so frames published
+        # between the initial replay and subscribe are not lost.
         async with bus.subscribe(run_id) as queue:
-            async for event_id, event in bus.replay(run_id, last_id):
-                if await request.is_disconnected():
-                    return
-                yield _sse_frame(event_id or None, event)
+            async for event_id, event, terminal in _iter_replay(
+                bus, request, run_id, last_id
+            ):
+                yield _sse_frame(event_id, event)
                 if event_id:
                     last_id = event_id
-                if event.type in _TERMINAL_TYPES:
+                if terminal:
                     return
+
+            if await request.is_disconnected():
+                return
 
             while True:
                 if await request.is_disconnected():
@@ -102,7 +126,8 @@ async def stream_run_events(
                     yield {"event": "ping", "data": "{}"}
                     continue
 
-                if event_id and last_id and not _is_after(event_id, last_id):
+                # Ephemeral frames (empty id) always pass; persisted ids dedupe.
+                if event_id and last_id and not is_after(event_id, last_id):
                     continue
                 if event_id:
                     last_id = event_id

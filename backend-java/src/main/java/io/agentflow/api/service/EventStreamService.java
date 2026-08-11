@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentflow.api.config.AgentflowProperties;
 import io.agentflow.api.dto.RunEvent;
+import jakarta.annotation.PreDestroy;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -64,6 +66,11 @@ public class EventStreamService {
         this.props = props;
     }
 
+    @PreDestroy
+    void shutdown() {
+        heartbeatExecutor.shutdownNow();
+    }
+
     public SseEmitter subscribe(String runId) {
         return subscribe(runId, null);
     }
@@ -72,11 +79,16 @@ public class EventStreamService {
         SseEmitter emitter = new SseEmitter(0L);
         ChannelTopic topic = new ChannelTopic(props.getEvents().getChannelPrefix() + runId);
         String streamKey = streamKey(runId);
-        AtomicReference<String> lastSentId = new AtomicReference<>(afterEventId);
+        String after = normalizeEventId(afterEventId);
+        AtomicReference<String> lastSentId = new AtomicReference<>(after);
+        // Serializes catch-up replay and live pub/sub delivery for one emitter.
+        final Object deliveryLock = new Object();
 
         try {
-            if (!replay(emitter, streamKey, afterEventId, lastSentId)) {
-                return emitter;
+            synchronized (deliveryLock) {
+                if (!replay(emitter, streamKey, after, lastSentId)) {
+                    return emitter;
+                }
             }
         } catch (Exception e) {
             log.warn("Failed to replay SSE events for run {}", runId, e);
@@ -85,46 +97,33 @@ public class EventStreamService {
         }
 
         org.springframework.data.redis.connection.MessageListener listener = (message, pattern) -> {
-            try {
-                DeliveredEvent delivered = parseEnvelope(new String(message.getBody()));
-                if (delivered.eventId() != null
-                        && lastSentId.get() != null
-                        && !isAfter(delivered.eventId(), lastSentId.get())) {
-                    return;
+            synchronized (deliveryLock) {
+                try {
+                    DeliveredEvent delivered =
+                            parseEnvelope(new String(message.getBody(), StandardCharsets.UTF_8));
+                    if (shouldSkip(delivered.eventId(), lastSentId.get())) {
+                        return;
+                    }
+                    send(emitter, delivered);
+                    if (delivered.eventId() != null) {
+                        lastSentId.set(delivered.eventId());
+                    }
+                    if (TERMINAL_TYPES.contains(delivered.event().type())) {
+                        emitter.complete();
+                    }
+                } catch (IllegalStateException ignored) {
+                    // emitter already completed
+                } catch (IOException e) {
+                    log.debug("SSE send failed for run {}: {}", runId, e.toString());
+                    emitter.completeWithError(e);
+                } catch (Exception e) {
+                    log.warn("Failed to deliver SSE message for run {}", runId, e);
                 }
-                if (!send(emitter, delivered)) {
-                    return;
-                }
-                if (delivered.eventId() != null) {
-                    lastSentId.set(delivered.eventId());
-                }
-                if (TERMINAL_TYPES.contains(delivered.event().type())) {
-                    emitter.complete();
-                }
-            } catch (IllegalStateException ignored) {
-                // emitter already completed
-            } catch (IOException e) {
-                log.debug("SSE send failed for run {}: {}", runId, e.toString());
-                emitter.completeWithError(e);
-            } catch (Exception e) {
-                log.warn("Failed to deliver SSE message for run {}", runId, e);
             }
         };
 
         listenerContainer.addMessageListener(listener, topic);
         active.put(emitter, listener);
-
-        try {
-            replay(emitter, streamKey, lastSentId.get(), lastSentId);
-        } catch (Exception e) {
-            log.warn("Failed catch-up replay for run {}", runId, e);
-        }
-
-        try {
-            emitter.send(SseEmitter.event().name("ping").data("{}"));
-        } catch (Exception ignored) {
-            // client may have disconnected before subscribe returns
-        }
 
         long heartbeatSeconds = Math.max(1, props.getEvents().getSseHeartbeatSeconds());
         ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
@@ -146,9 +145,28 @@ public class EventStreamService {
                 listenerContainer.removeMessageListener(removed, topic);
             }
         };
+        // Register before catch-up so complete() during replay still cleans up.
         emitter.onCompletion(cleanup);
         emitter.onTimeout(cleanup);
         emitter.onError(t -> cleanup.run());
+
+        try {
+            synchronized (deliveryLock) {
+                if (!replay(emitter, streamKey, lastSentId.get(), lastSentId)) {
+                    return emitter;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed catch-up replay for run {}", runId, e);
+            emitter.completeWithError(e);
+            return emitter;
+        }
+
+        try {
+            emitter.send(SseEmitter.event().name("ping").data("{}"));
+        } catch (Exception ignored) {
+            // client may have disconnected before subscribe returns
+        }
 
         return emitter;
     }
@@ -181,11 +199,12 @@ public class EventStreamService {
                 continue;
             }
             RunEvent event = mapper.readValue(payload.toString(), RunEvent.class);
-            DeliveredEvent delivered = new DeliveredEvent(record.getId().getValue(), event);
-            if (!send(emitter, delivered)) {
-                return false;
+            String eventId = record.getId().getValue();
+            if (shouldSkip(eventId, lastSentId.get())) {
+                continue;
             }
-            lastSentId.set(delivered.eventId());
+            send(emitter, new DeliveredEvent(eventId, event));
+            lastSentId.set(eventId);
             if (TERMINAL_TYPES.contains(event.type())) {
                 emitter.complete();
                 return false;
@@ -194,7 +213,7 @@ public class EventStreamService {
         return true;
     }
 
-    private boolean send(SseEmitter emitter, DeliveredEvent delivered) throws IOException {
+    private void send(SseEmitter emitter, DeliveredEvent delivered) throws IOException {
         String body = mapper.writeValueAsString(delivered.event());
         SseEmitter.SseEventBuilder builder =
                 SseEmitter.event().name(delivered.event().type()).data(body);
@@ -202,25 +221,60 @@ public class EventStreamService {
             builder.id(delivered.eventId());
         }
         emitter.send(builder);
-        return true;
     }
 
     private DeliveredEvent parseEnvelope(String body) throws IOException {
         JsonNode root = mapper.readTree(body);
-        if (root.has("id") && root.has("event")) {
-            String eventId = root.get("id").asText();
+        if (root.has("event")) {
+            String eventId = normalizeEventId(root.path("id").asText(null));
             RunEvent event = mapper.treeToValue(root.get("event"), RunEvent.class);
             return new DeliveredEvent(eventId, event);
         }
         return new DeliveredEvent(null, mapper.readValue(body, RunEvent.class));
     }
 
-    private static boolean isAfter(String candidate, String lastId) {
+    /** Ephemeral frames (null/blank id) always pass; persisted ids are deduped. */
+    static boolean shouldSkip(String candidateId, String lastId) {
+        if (candidateId == null || lastId == null) {
+            return false;
+        }
+        return !isAfter(candidateId, lastId);
+    }
+
+    static String normalizeEventId(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    static boolean isAfter(String candidate, String lastId) {
+        if (candidate.contains("-") || lastId.contains("-")) {
+            return compareStreamId(candidate, lastId) > 0;
+        }
         try {
             return Long.parseLong(candidate) > Long.parseLong(lastId);
         } catch (NumberFormatException ex) {
             return candidate.compareTo(lastId) > 0;
         }
+    }
+
+    private static int compareStreamId(String left, String right) {
+        String[] leftParts = left.split("-", 2);
+        String[] rightParts = right.split("-", 2);
+        if (leftParts.length == 2 && rightParts.length == 2) {
+            try {
+                int ms = Long.compare(Long.parseLong(leftParts[0]), Long.parseLong(rightParts[0]));
+                if (ms != 0) {
+                    return ms;
+                }
+                return Long.compare(Long.parseLong(leftParts[1]), Long.parseLong(rightParts[1]));
+            } catch (NumberFormatException ignored) {
+                // fall through
+            }
+        }
+        return left.compareTo(right);
     }
 
     private record DeliveredEvent(String eventId, RunEvent event) {}

@@ -509,9 +509,12 @@ Java API and the Python worker we use Redis as the broker:
   emission; on the cancellation signal it stops the adapter and writes
   `RunStatus.CANCELLED`.
 
-- **Event bus** — Redis pub/sub channel `agentflow:run:{run_id}`. The worker
-  publishes `RunEvent` JSON payloads on every state change. The API server
-  subscribes to forward them to SSE clients.
+- **Event bus** — Redis pub/sub channel `agentflow:run:{run_id}` for live
+  delivery, plus Redis Stream `agentflow:run:{run_id}:log` for durable
+  `Last-Event-ID` replay. The worker `XADD`s persisted events (skipping
+  ephemeral `token.delta`) then `PUBLISH`es an `{id, event}` envelope. The
+  API server replays the stream on subscribe/reconnect, then forwards live
+  pub/sub frames to SSE clients.
 
 - **State of truth** — Postgres. All run/step/message/tool_call/checkpoint
   rows are written by the worker; the API server reads them on GET endpoints.

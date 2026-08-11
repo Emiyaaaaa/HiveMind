@@ -16,8 +16,8 @@ import asyncio
 import json
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import Protocol
+from contextlib import asynccontextmanager, suppress
+from typing import Any, Protocol
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -27,14 +27,53 @@ logger = get_logger("events")
 
 EventRecord = tuple[str, RunEvent]
 
+# Cap live fan-out queues so a slow SSE client cannot retain unbounded
+# token.delta traffic in memory.
+_SUBSCRIBE_QUEUE_MAXSIZE = 1_024
 
-def _is_after(entry_id: str, after_id: str | None) -> bool:
-    if after_id is None:
+
+def _stream_id_key(event_id: str) -> tuple[int, int] | str:
+    """Parse a Redis Stream ID (`ms-seq`) for ordered comparison."""
+    ms_str, _, seq_str = event_id.partition("-")
+    if not seq_str:
+        return event_id
+    try:
+        return (int(ms_str), int(seq_str))
+    except ValueError:
+        return event_id
+
+
+def is_after(entry_id: str, after_id: str | None) -> bool:
+    """Return True when ``entry_id`` should be delivered after ``after_id``.
+
+    Supports in-memory monotonic integers and Redis Stream IDs (`ms-seq`).
+    """
+    if after_id is None or after_id == "":
         return True
+    if "-" in entry_id or "-" in after_id:
+        return _stream_id_key(entry_id) > _stream_id_key(after_id)
     try:
         return int(entry_id) > int(after_id)
     except ValueError:
         return entry_id > after_id
+
+
+# Backwards-compatible alias used by older call sites / tests.
+_is_after = is_after
+
+
+def _normalize_event_id(raw: Any) -> str:
+    if raw is None:
+        return ""
+    text = str(raw).strip()
+    return text
+
+
+def _decode_envelope(payload: dict[str, Any]) -> EventRecord:
+    if "event" in payload:
+        event = RunEvent(**payload["event"])
+        return _normalize_event_id(payload.get("id")), event
+    return "", RunEvent(**payload)
 
 
 class EventBus(Protocol):
@@ -69,19 +108,32 @@ class InMemoryEventBus:
                 record = (event_id, event)
             queues = list(self._subscribers.get(event.run_id, ()))
         for queue in queues:
-            await queue.put(record)
+            self._enqueue(queue, record)
         return event_id
+
+    @staticmethod
+    def _enqueue(queue: asyncio.Queue[EventRecord], record: EventRecord) -> None:
+        try:
+            queue.put_nowait(record)
+        except asyncio.QueueFull:
+            # Drop the oldest frame so live streams stay current.
+            with suppress(asyncio.QueueEmpty):
+                queue.get_nowait()
+            with suppress(asyncio.QueueFull):
+                queue.put_nowait(record)
 
     async def replay(
         self, run_id: str, after_id: str | None = None
     ) -> AsyncIterator[EventRecord]:
         for event_id, event in self._log.get(run_id, ()):
-            if _is_after(event_id, after_id):
+            if is_after(event_id, after_id):
                 yield event_id, event
 
     @asynccontextmanager
     async def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[EventRecord]]:
-        queue: asyncio.Queue[EventRecord] = asyncio.Queue()
+        queue: asyncio.Queue[EventRecord] = asyncio.Queue(
+            maxsize=_SUBSCRIBE_QUEUE_MAXSIZE
+        )
         async with self._lock:
             self._subscribers[run_id].add(queue)
         try:
@@ -115,16 +167,23 @@ class RedisEventBus:
         return f"{self._channel_prefix}{run_id}{self._stream_suffix}"
 
     async def publish(self, event: RunEvent, *, persist: bool = True) -> str:
+        # Serialize once; stream payload and pub/sub envelope share the body.
+        event_dict = event.model_dump(mode="json")
+        event_json = json.dumps(event_dict, separators=(",", ":"))
         event_id = ""
+
         if persist:
-            stream = self._stream(event.run_id)
             event_id = await self._redis.xadd(
-                stream,
-                {"payload": event.model_dump_json()},
+                self._stream(event.run_id),
+                {"payload": event_json},
                 maxlen=self._stream_max_len,
                 approximate=True,
             )
-        envelope = json.dumps({"id": event_id, "event": event.model_dump(mode="json")})
+
+        envelope = json.dumps(
+            {"id": event_id or None, "event": event_dict},
+            separators=(",", ":"),
+        )
         await self._redis.publish(self._channel(event.run_id), envelope)
         return event_id
 
@@ -135,16 +194,22 @@ class RedisEventBus:
         start = f"({after_id}" if after_id else "-"
         entries = await self._redis.xrange(stream, min=start, max="+")
         for entry_id, fields in entries:
+            raw = fields.get("payload")
+            if raw is None:
+                continue
             try:
-                yield entry_id, RunEvent(**json.loads(fields["payload"]))
+                yield entry_id, RunEvent(**json.loads(raw))
             except Exception:  # pragma: no cover - defensive
                 logger.exception("event_replay_decode_failed", run_id=run_id)
 
     @asynccontextmanager
     async def subscribe(self, run_id: str) -> AsyncIterator[asyncio.Queue[EventRecord]]:
         pubsub = self._redis.pubsub()
-        queue: asyncio.Queue[EventRecord] = asyncio.Queue()
-        await pubsub.subscribe(self._channel(run_id))
+        queue: asyncio.Queue[EventRecord] = asyncio.Queue(
+            maxsize=_SUBSCRIBE_QUEUE_MAXSIZE
+        )
+        channel = self._channel(run_id)
+        await pubsub.subscribe(channel)
 
         async def reader() -> None:
             async for message in pubsub.listen():
@@ -152,13 +217,14 @@ class RedisEventBus:
                     continue
                 try:
                     payload = json.loads(message["data"])
-                    if "id" in payload and "event" in payload:
-                        event_id = payload["id"]
-                        event = RunEvent(**payload["event"])
-                    else:
-                        event = RunEvent(**payload)
-                        event_id = ""
-                    await queue.put((event_id, event))
+                    record = _decode_envelope(payload)
+                    try:
+                        queue.put_nowait(record)
+                    except asyncio.QueueFull:
+                        with suppress(asyncio.QueueEmpty):
+                            queue.get_nowait()
+                        with suppress(asyncio.QueueFull):
+                            queue.put_nowait(record)
                 except Exception:  # pragma: no cover - defensive
                     logger.exception("event_decode_failed")
 
@@ -167,8 +233,12 @@ class RedisEventBus:
             yield queue
         finally:
             task.cancel()
-            await pubsub.unsubscribe(self._channel(run_id))
-            await pubsub.aclose()
+            with suppress(asyncio.CancelledError):
+                await task
+            with suppress(Exception):
+                await pubsub.unsubscribe(channel)
+            with suppress(Exception):
+                await pubsub.aclose()
 
     async def aclose(self) -> None:
         await self._redis.aclose()

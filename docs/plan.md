@@ -8,7 +8,7 @@
 
 按投入产出比排序：
 
-1. **事件总线持久化。** Redis pub/sub 无订阅者时会丢消息；支持 `Last-Event-ID` 重放。
+1. ~~**事件总线持久化。**~~ 已用 Redis Stream `agentflow:run:{run_id}:log` 做 durable replay；pub/sub 仍负责 live 投递；支持 `Last-Event-ID` 重放。
 2. **队列 / LLM / Run OTel 指标与背压。** 深度/消费者延迟已导出为 `agentflow.queue.*`；worker 利用率见 `agentflow.worker.utilization`；LLM token/cost、Run 结局、Step/ToolCall RED 见 `agentflow.llm.*` / `agentflow.run.outcomes` / `agentflow.step.*` / `agentflow.tool.*`；面板见 `docker/grafana/dashboards/agentflow-observability.json`。
 3. **控制台调试体验。** Step 可视化时间线、独立 ToolCall 检查面板。
 4. **LangGraph adapter 扩展。** 更多 graph 模式、MCP 工具协议集成。
@@ -33,7 +33,7 @@
 
 - [x] Step 时间线组件（节点延迟与状态流转）
 - [ ] 独立 ToolCall 检查面板（参数/结果/错误结构化浏览）
-- [ ] SSE 事件重放（`Last-Event-ID` / 持久化 event log）
+- [x] SSE 事件重放（`Last-Event-ID` / 持久化 event log）
 - [x] 队列深度、worker 利用率导出为 OTel/Prometheus 指标
 - [x] p95 耗时仪表盘与告警
 - [x] LLM token/cost、Run 成功率、Step/ToolCall 指标 + Grafana 面板
@@ -79,7 +79,7 @@
 
 ## 建议下一步
 
-1. **SSE `Last-Event-ID` 重放** — `backend/app/events/bus.py`、`backend/app/api/v1/events.py`
+1. ~~**SSE `Last-Event-ID` 重放**~~ — 已完成：`backend/app/events/bus.py`、`backend/app/api/v1/events.py`、Java `EventStreamService`
 2. **队列 OTel 指标** — `backend/app/worker/monitor.py`、`backend/app/core/telemetry.py`
 3. **Step 时间线 + ToolCall 面板** — `frontend/app/runs/`、`frontend/components/`
 4. **人工审批 UI** — 基于 `waiting_human` + resume API，Phase 4 前可先做雏形
