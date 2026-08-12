@@ -26,9 +26,12 @@ function getStatus(call: ToolCall): ToolCallStatus {
 function formatLatency(ms: number | null): string | null {
   if (ms == null) return null;
   if (ms < 1000) return `${ms} ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
-  const mins = Math.floor(ms / 60_000);
-  const secs = Math.round((ms % 60_000) / 1000);
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+  }
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
   return `${mins}m ${secs}s`;
 }
 
@@ -46,22 +49,24 @@ function JsonBlock({ label, value }: { label: string; value: unknown }) {
 }
 
 export function ToolCallPanel({ steps }: { steps: Step[] }) {
-  const entries: ToolCallEntry[] = [...steps]
-    .sort((a, b) => a.index - b.index)
-    .flatMap((step) =>
-      step.tool_calls.map((call) => ({
-        call,
-        stepIndex: step.index,
-        stepNode: step.node,
-      })),
-    );
-
-  const counts: Record<ToolCallStatus, number> = {
-    pending: 0,
-    succeeded: 0,
-    failed: 0,
-  };
-  for (const { call } of entries) counts[getStatus(call)] += 1;
+  const { entries, counts } = useMemo(() => {
+    const entries: ToolCallEntry[] = [...steps]
+      .sort((a, b) => a.index - b.index)
+      .flatMap((step) =>
+        step.tool_calls.map((call) => ({
+          call,
+          stepIndex: step.index,
+          stepNode: step.node,
+        })),
+      );
+    const counts: Record<ToolCallStatus, number> = {
+      pending: 0,
+      succeeded: 0,
+      failed: 0,
+    };
+    for (const { call } of entries) counts[getStatus(call)] += 1;
+    return { entries, counts };
+  }, [steps]);
 
   return (
     <section className="rounded-lg border border-border bg-surface p-4 space-y-4">
