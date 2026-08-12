@@ -17,7 +17,7 @@ const statusStyle: Record<ToolCallStatus, string> = {
 };
 
 function getStatus(call: ToolCall): ToolCallStatus {
-  if (call.error != null) return "failed";
+  if (call.error) return "failed";
   if (call.result != null) return "succeeded";
   return "pending";
 }
@@ -25,7 +25,10 @@ function getStatus(call: ToolCall): ToolCallStatus {
 function formatLatency(ms: number | null): string | null {
   if (ms == null) return null;
   if (ms < 1000) return `${ms} ms`;
-  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return `${mins}m ${secs}s`;
 }
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
@@ -87,10 +90,7 @@ export function ToolCallPanel({ steps }: { steps: Step[] }) {
             const latency = formatLatency(call.latency_ms);
             return (
               <li key={call.id}>
-                <details
-                  className="group rounded border border-border bg-bg"
-                  open={status === "failed"}
-                >
+                <details className="group rounded border border-border bg-bg">
                   <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-3 py-2.5 text-sm marker:content-none">
                     <span className="font-medium text-accent">{call.name}</span>
                     <span
@@ -121,7 +121,7 @@ export function ToolCallPanel({ steps }: { steps: Step[] }) {
                     {call.result != null ? (
                       <JsonBlock label="Result" value={call.result} />
                     ) : null}
-                    {call.error != null ? (
+                    {call.error ? (
                       <div className="space-y-1">
                         <div className="text-xs uppercase tracking-wide text-bad">
                           Error
