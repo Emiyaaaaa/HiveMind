@@ -28,10 +28,10 @@ function getStatus(call: ToolCall): ToolCallStatus {
 function formatLatency(ms: number | null): string | null {
   if (ms == null) return null;
   if (ms < 1000) return `${ms} ms`;
-  const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds < 60) {
+  if (ms < 60_000) {
     return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
   }
+  const totalSeconds = Math.round(ms / 1000);
   const mins = Math.floor(totalSeconds / 60);
   const secs = totalSeconds % 60;
   return `${mins}m ${secs}s`;
