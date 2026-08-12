@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { Step, ToolCall } from "@/lib/types";
 
@@ -18,6 +18,8 @@ const statusStyle: Record<ToolCallStatus, string> = {
   succeeded: "border-good/40 bg-good/10 text-good",
   failed: "border-bad/40 bg-bad/10 text-bad",
 };
+
+const JSON_PREVIEW_CHARS = 4_000;
 
 function getStatus(call: ToolCall): ToolCallStatus {
   if (call.error) return "failed";
@@ -38,14 +40,32 @@ function formatLatency(ms: number | null): string | null {
 }
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
-  const text = useMemo(() => JSON.stringify(value, null, 2), [value]);
+  const text = useMemo(
+    () => JSON.stringify(value, null, 2) ?? String(value),
+    [value],
+  );
+  const [showAll, setShowAll] = useState(false);
+  const needsTruncate = text.length > JSON_PREVIEW_CHARS;
+  const visible =
+    !needsTruncate || showAll ? text : `${text.slice(0, JSON_PREVIEW_CHARS)}…`;
 
   return (
     <div className="space-y-1">
       <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
       <pre className="max-h-72 overflow-auto rounded border border-border bg-bg p-3 text-xs font-mono whitespace-pre-wrap break-all text-muted">
-        {text}
+        {visible}
       </pre>
+      {needsTruncate ? (
+        <button
+          type="button"
+          className="text-xs text-accent hover:underline"
+          onClick={() => setShowAll((current) => !current)}
+        >
+          {showAll
+            ? "Show less"
+            : `Show all (${text.length.toLocaleString()} chars)`}
+        </button>
+      ) : null}
     </div>
   );
 }
