@@ -32,7 +32,7 @@
 **目标：** 控制台调试闭环、事件可靠性与运行时指标。
 
 - [x] Step 时间线组件（节点延迟与状态流转）
-- [ ] 独立 ToolCall 检查面板（参数/结果/错误结构化浏览）
+- [x] 独立 ToolCall 检查面板（参数/结果/错误结构化浏览）
 - [x] SSE 事件重放（`Last-Event-ID` / 持久化 event log）
 - [x] 队列深度、worker 利用率导出为 OTel/Prometheus 指标
 - [x] p95 耗时仪表盘与告警

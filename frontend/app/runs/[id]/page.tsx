@@ -9,6 +9,7 @@ import { EventStream } from "@/components/EventStream";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepTimeline } from "@/components/StepTimeline";
 import { TokenCostSummary } from "@/components/TokenCostSummary";
+import { ToolCallPanel } from "@/components/ToolCallPanel";
 import { checkpointsByStep } from "@/lib/checkpoints";
 import { api } from "@/lib/api";
 import { useRunWithLiveUpdates } from "@/lib/useRunLiveSync";
@@ -104,6 +105,8 @@ export default function RunDetailPage({ params }: PageProps) {
         steps={r.steps}
         checkpointsByStepId={stepCheckpoints}
       />
+
+      <ToolCallPanel steps={r.steps} />
 
       <section className="space-y-3">
         <h2 className="font-medium">Messages</h2>
