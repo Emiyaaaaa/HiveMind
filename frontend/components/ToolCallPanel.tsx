@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { useMemo } from "react";
 
 import type { Step, ToolCall } from "@/lib/types";
 
@@ -32,11 +33,13 @@ function formatLatency(ms: number | null): string | null {
 }
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
+  const text = useMemo(() => JSON.stringify(value, null, 2), [value]);
+
   return (
     <div className="space-y-1">
       <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
       <pre className="max-h-72 overflow-auto rounded border border-border bg-bg p-3 text-xs font-mono whitespace-pre-wrap break-all text-muted">
-        {JSON.stringify(value, null, 2)}
+        {text}
       </pre>
     </div>
   );
