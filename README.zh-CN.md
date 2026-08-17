@@ -35,8 +35,9 @@ Python worker 执行 adapter，SQLAlchemy + Alembic 负责持久化，Redis 负�
 
 ## 核心能力
 
-- **编排 adapter。** 默认 adapter 使用 LangGraph。AutoGen、CrewAI、
-PydanticAI 或内部框架可以通过相同接口注册接入，不需要修改 API 或数据库模型。
+- **编排 adapter。** 默认 adapter 使用 LangGraph。官方 PydanticAI 集成以
+可安装插件提供；AutoGen、CrewAI 或内部框架也可以通过相同接口注册接入，
+不需要修改 API 或数据库模型。
 - **持久化执行模型。** `Run`、`Step`、`Message`、`ToolCall` 和 `Checkpoint`
 是一等数据库实体，为不同编排引擎提供统一的可观测数据面。
 - **Server-Sent Events。** run 生命周期中的状态变化会被发布为 SSE 事件，
@@ -171,6 +172,12 @@ class MyAdapter(OrchestratorAdapter):
 
 在 `app/adapters/__init__.py` 中注册 adapter。Worker 会自动加载；
 API、持久化模型、事件流和控制台继续通过统一的运行时契约工作。
+
+官方 adapter 也可以通过 entry point 以插件包发布。
+[`integrations/pydantic-ai`](integrations/pydantic-ai) 中的 PydanticAI 包会将
+用户通过受信任 factory 提供的现有 Agent 所产生的流式文本、输出、模型
+usage 及原生工具/MCP 事件映射到同一契约，同时不向核心 backend 增加
+PydanticAI 依赖。
 
 ## 当前架构（摘要）
 

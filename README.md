@@ -38,9 +38,10 @@ Alembic for persistence, and Redis for job queues and live events.
 
 ## Core capabilities
 
-- **Orchestrator adapters.** The default adapter uses LangGraph. Additional
-adapters can be registered for AutoGen, CrewAI, PydanticAI or internal
-frameworks without changing the API or database schema.
+- **Orchestrator adapters.** The default adapter uses LangGraph. The official
+PydanticAI integration ships as an installable plugin, and additional adapters
+can be registered for AutoGen, CrewAI or internal frameworks without changing
+the API or database schema.
 - **Persistent execution model.** `Run`, `Step`, `Message`, `ToolCall` and
 `Checkpoint` are first-class database entities. They provide a common
 observability surface across different orchestration engines.
@@ -202,6 +203,12 @@ class MyAdapter(OrchestratorAdapter):
 Register the adapter in `app/adapters/__init__.py`. Workers pick it up
 automatically; the API, persistence model, event stream and console stay on
 the shared runtime contract.
+
+Official adapters can also ship as entry-point plugins. The PydanticAI package
+in [`integrations/pydantic-ai`](integrations/pydantic-ai) loads an existing
+PydanticAI Agent through a trusted factory and maps its streamed text, output,
+model usage, and native tool/MCP events onto the same contract without adding
+PydanticAI to the core backend dependency set.
 
 ## Current architecture (summary)
 
