@@ -120,6 +120,14 @@ exactly as it was.
 No changes are needed in the DB schema, the `/v1` contract, or the frontend.
 Workers pick up new adapters through the shared Python adapter registry.
 
+The repository's official PydanticAI integration follows this layout in
+`integrations/pydantic-ai`. Its `pydantic-ai` entry point keeps PydanticAI and
+provider dependencies optional. A trusted `agent_factory` supplies an existing
+Agent, including its instructions, output validators, native tools, and MCP
+toolsets. One PydanticAI run maps to one runtime step; token deltas, output,
+provider usage/cost, and tool events are translated to standard adapter events.
+The MVP does not rebuild Agents from JSON or implement checkpoint/resume.
+
 ## Unit tests
 
 The Python test suite in `backend/tests/` exercises adapter and queue logic
