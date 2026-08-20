@@ -22,6 +22,7 @@ from app.adapters.base import (
 from app.adapters.discovery import AdapterPluginError, load_adapter_plugins
 from app.adapters.echo_adapter import EchoAdapter
 from app.adapters.langgraph_adapter import LangGraphAdapter
+from app.adapters.mcp_adapter import McpAdapter
 from app.adapters.mcp_client import (
     McpServerConfig,
     McpSessionManager,
@@ -38,6 +39,7 @@ from app.adapters.tool_registry import (
 
 register_adapter("echo", EchoAdapter())
 register_adapter("langgraph", LangGraphAdapter())
+register_adapter("mcp", McpAdapter())
 
 __all__ = [
     "AdapterContext",
@@ -45,6 +47,7 @@ __all__ = [
     "AdapterToolSurface",
     "EchoAdapter",
     "LangGraphAdapter",
+    "McpAdapter",
     "McpServerConfig",
     "McpSessionManager",
     "OrchestratorAdapter",

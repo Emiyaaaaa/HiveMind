@@ -11,7 +11,7 @@
 1. ~~**事件总线持久化。**~~ 已用 Redis Stream `agentflow:run:{run_id}:log` 做 durable replay；pub/sub 仍负责 live 投递；支持 `Last-Event-ID` 重放。
 2. **队列 / LLM / Run OTel 指标与背压。** 深度/消费者延迟已导出为 `agentflow.queue.*`；worker 利用率见 `agentflow.worker.utilization`；LLM token/cost、Run 结局、Step/ToolCall RED 见 `agentflow.llm.*` / `agentflow.run.outcomes` / `agentflow.step.*` / `agentflow.tool.*`；面板见 `docker/grafana/dashboards/agentflow-observability.json`。
 3. **控制台调试体验。** Step 可视化时间线、独立 ToolCall 检查面板。
-4. **LangGraph adapter 扩展。** 更多 graph 模式、MCP 工具协议集成。
+4. ~~**LangGraph adapter 扩展。**~~ 更多 graph 模式、MCP 工具协议集成（`mcp` adapter + `AdapterToolSurface` bridge）。
 5. **双向流式传输。** WebSocket / WebTransport + SSE 降级，支持双向取消与审批。
 ## 可引入的先进技术
 
@@ -47,7 +47,7 @@
 
 - [x] Adapter 插件注册表（entry points / 动态加载）
 - [ ] 官方 adapter：AutoGen、CrewAI、PydanticAI（按需求选 2 个）
-- [ ] MCP tool adapter
+- [x] MCP tool adapter
 - [ ] OpenAPI 规范 + Python/TypeScript SDK 自动生成
 - [ ] Webhook 出站事件（`run.completed` 等）
 - [x] Agent 版本管理与配置 diff
@@ -90,7 +90,7 @@
 | --- | --- |
 | 事件重放 | `backend/app/events/bus.py`、`backend/app/api/v1/events.py` |
 | 修控制台 | `frontend/app/runs/`、`frontend/components/` |
-| 新 adapter | `backend/app/adapters/` + `__init__.py` 注册 |
+| 新 adapter | `backend/app/adapters/` + `__init__.py` 注册；MCP 见 [architecture.md](architecture.md#mcp-tool-bridge) |
 | 扩展 API | 先改 [api-contract.md](api-contract.md)，再实现 Java API；涉及执行协议时同步 Python Worker |
 | 队列可靠性 | `backend/app/worker/queue.py`、`backend/app/worker/monitor.py` |
 | 可观测性 | `backend/app/core/telemetry.py`、Java `RedMetricsFilter` |
