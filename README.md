@@ -221,7 +221,7 @@ and shared infrastructure.
 | Console  | Next.js 15, React Query, SSE  | Run/agent management, live event stream                |
 | API      | Java 21, Spring Boot 3, JPA   | REST `/v1/*`, SSE bridge, job enqueue, cancel          |
 | Worker   | Python asyncio, `RunExecutor` | Consume Redis jobs, run adapters, write Postgres       |
-| Adapters | LangGraph, Echo (+ registry)  | Framework-specific orchestration behind one interface  |
+| Adapters | LangGraph, Echo, MCP (+ registry)  | Framework-specific orchestration behind one interface  |
 | State    | Postgres 16, Alembic          | Durable runs, steps, messages, tool calls, checkpoints |
 | Messaging| Redis Streams + pub/sub       | At-least-once job queue, cancel keys, live events      |
 

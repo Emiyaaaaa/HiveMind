@@ -7,7 +7,7 @@ orchestrator adapter.
 
 ```
 app/
-├── adapters/         Orchestrator adapters (Echo, LangGraph, ...)
+├── adapters/         Orchestrator adapters (Echo, LangGraph, MCP, ...)
 ├── api/v1/           HTTP routes
 ├── core/             Config + logging
 ├── db/               SQLAlchemy session/base
@@ -28,6 +28,14 @@ uv run uvicorn app.main:app --reload
 ```
 
 Browse OpenAPI at http://localhost:8000/docs.
+
+### MCP tool adapter
+
+The `mcp` adapter calls MCP servers directly (stdio, SSE, or Streamable HTTP)
+and writes standard `ToolCall` rows. Configure `mcp_servers` in agent config
+and pass tool calls via `input.tool`/`input.calls` or fixed `config.steps`.
+LangGraph graphs can reuse the same MCP bridge via `AdapterToolSurface`.
+See [docs/architecture.md](../docs/architecture.md#mcp-tool-bridge).
 
 ## Tests
 

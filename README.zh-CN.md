@@ -189,7 +189,7 @@ AgentFlow 是**分层运行时**：Java API 层、Python 执行层、共享基�
 | 控制台    | Next.js 15、React Query、SSE   | Agent/Run 管理、实时事件流                   |
 | API      | Java 21、Spring Boot 3、JPA    | REST `/v1/*`、SSE 桥接、入队、取消            |
 | Worker   | Python asyncio、`RunExecutor` | 消费 Redis 任务、执行 adapter、写 Postgres    |
-| Adapter  | LangGraph、Echo（可注册）          | 统一接口下的框架编排                           |
+| Adapter  | LangGraph、Echo、MCP（可注册）       | 统一接口下的框架编排                           |
 | 状态     | Postgres 16、Alembic          | Run、Step、Message、ToolCall、Checkpoint |
 | 消息     | Redis Streams + pub/sub      | 至少一次任务队列、取消信号、实时事件                   |
 

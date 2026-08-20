@@ -116,10 +116,14 @@ async def _build_mcp_tool_definitions(
         server_name, tool_name = parse_mcp_tool_key(key)
         meta = await manager.get_tool_meta(server_name, tool_name)
         handler = _make_mcp_handler(manager, server_name, tool_name)
-        parameters = getattr(meta, "inputSchema", None) or {
-            "type": "object",
-            "properties": {},
-        }
+        parameters = (
+            getattr(meta, "inputSchema", None)
+            or getattr(meta, "input_schema", None)
+            or {
+                "type": "object",
+                "properties": {},
+            }
+        )
         definitions.append(
             ToolDefinition(
                 name=key,

@@ -102,7 +102,7 @@ def serialize_call_tool_result(result: Any) -> dict[str, Any]:
             content_blocks.append({"type": str(block_type), "raw": str(block)})
 
     payload: dict[str, Any] = {"content": content_blocks}
-    if getattr(result, "isError", False):
+    if getattr(result, "isError", False) or getattr(result, "is_error", False):
         payload["is_error"] = True
     structured = getattr(result, "structuredContent", None)
     if structured is not None:
@@ -208,7 +208,11 @@ class McpSessionManager:
     ) -> dict[str, Any]:
         session = await self._require_session(server_name)
         result = await session.call_tool(tool_name, arguments)
-        return serialize_call_tool_result(result)
+        payload = serialize_call_tool_result(result)
+        if payload.get("is_error"):
+            message = payload.get("text") or f"MCP tool {tool_name!r} returned an error"
+            raise RuntimeError(message)
+        return payload
 
     async def _require_session(self, server_name: str) -> Any:
         if server_name not in self._servers:

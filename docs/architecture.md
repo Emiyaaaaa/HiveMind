@@ -128,6 +128,66 @@ toolsets. One PydanticAI run maps to one runtime step; token deltas, output,
 provider usage/cost, and tool events are translated to standard adapter events.
 The MVP does not rebuild Agents from JSON or implement checkpoint/resume.
 
+## MCP tool bridge
+
+MCP (Model Context Protocol) tools are wired through a shared bridge so every
+adapter persists the same `ToolCall` rows and SSE events:
+
+```
+agent.config.mcp_servers
+        │
+        ▼
+  McpSessionManager          stdio / SSE / Streamable HTTP
+        │
+        ▼
+  resolve_run_tools()        registry keys: mcp/{server}/{tool}
+        │
+        ▼
+  AdapterToolSurface         emit tool_call.started / tool_call.completed
+        │
+        ├── McpAdapter           direct tool invocation (no LLM)
+        └── LangGraphAdapter     tool / agent graph nodes
+```
+
+Configure servers in `agent.config.mcp_servers` and reference tools by key
+(`mcp/{server}/{tool}`) in `agent.config.tools`, or set
+`mcp_auto_register: true` to expose every tool from configured servers.
+
+**Built-in `mcp` adapter** — for runs that only call MCP tools:
+
+```jsonc
+{
+  "adapter": "mcp",
+  "config": {
+    "mcp_servers": [{
+      "name": "echo",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["path/to/mcp_server.py"]
+    }],
+    "steps": [
+      {"tool": "mcp/echo/ping", "arguments": {"message": "hello"}}
+    ]
+  }
+}
+```
+
+Alternatively pass a single call or batch in run `input`:
+
+```json
+{"tool": "mcp/echo/ping", "arguments": {"message": "hello"}}
+```
+
+```json
+{"calls": [
+  {"tool": "mcp/echo/ping", "arguments": {"message": "a"}},
+  {"tool": "mcp/echo/add", "arguments": {"a": 1, "b": 2}}
+]}
+```
+
+LangGraph graphs can invoke the same MCP tools via `type: "tool"` or
+`type: "agent"` nodes without a separate adapter.
+
 ## Unit tests
 
 The Python test suite in `backend/tests/` exercises adapter and queue logic

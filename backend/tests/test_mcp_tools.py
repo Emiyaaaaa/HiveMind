@@ -130,6 +130,29 @@ async def test_langgraph_mcp_tool_writes_tool_call_events():
     assert tool_completed[0]["result"]["text"]
 
 
+@pytest.mark.asyncio
+async def test_mcp_call_tool_raises_on_error():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.adapters.mcp_client import McpSessionManager, McpServerConfig
+    from mcp.types import CallToolResult, TextContent
+
+    manager = McpSessionManager(
+        [McpServerConfig(name="echo", transport="stdio", command="true")]
+    )
+    session = MagicMock()
+    session.call_tool = AsyncMock(
+        return_value=CallToolResult(
+            content=[TextContent(type="text", text="bad input")],
+            is_error=True,
+        )
+    )
+    manager._sessions["echo"] = session
+
+    with pytest.raises(RuntimeError, match="bad input"):
+        await manager.call_tool("echo", "ping", {"message": "x"})
+
+
 def test_serialize_call_tool_result_text():
     from mcp.types import CallToolResult, TextContent
 
