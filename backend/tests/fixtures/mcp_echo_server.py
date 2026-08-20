@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-import mcp_types as types
-from mcp.server.lowlevel.server import Server
-from mcp.server.stdio import stdio_server
+import mcp.types as types
 
 _TOOLS = [
     types.Tool(
