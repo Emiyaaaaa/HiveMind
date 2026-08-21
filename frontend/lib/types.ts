@@ -63,6 +63,7 @@ export interface Checkpoint {
 
 export interface Run {
   id: string;
+  tenant_id: string;
   agent_id: string;
   adapter: string;
   status: RunStatus;
@@ -79,6 +80,7 @@ export interface Run {
 
 export interface Agent {
   id: string;
+  tenant_id: string;
   name: string;
   description: string | null;
   adapter: string;

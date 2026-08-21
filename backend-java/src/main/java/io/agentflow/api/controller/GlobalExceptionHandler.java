@@ -7,6 +7,8 @@ import io.agentflow.api.service.RegressionExecutionException;
 import io.agentflow.api.service.RunComparisonValidationException;
 import io.agentflow.api.service.RunConflictException;
 import io.agentflow.api.service.RunNotFoundException;
+import io.agentflow.api.security.ForbiddenException;
+import io.agentflow.api.security.UnauthorizedException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -57,5 +59,17 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, String>> handleRegressionExecution(
             RegressionExecutionException ex) {
         return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<Map<String, String>> handleUnauthorized(UnauthorizedException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .header("WWW-Authenticate", "Bearer")
+                .body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<Map<String, String>> handleForbidden(ForbiddenException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("detail", ex.getMessage()));
     }
 }

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ulid import ULID
 
 from app.db.base import Base
+from app.models.agent import DEFAULT_TENANT_ID
 
 
 def _ulid() -> str:
@@ -36,11 +37,20 @@ class Run(Base):
     A run is the top-level unit users observe and operate on (cancel, retry,
     resume). It owns an ordered stream of `Step` rows, which in turn own
     `Message` and `ToolCall` rows.
+
+    ``tenant_id`` mirrors the owning agent's tenant for query isolation.
     """
 
     __tablename__ = "runs"
+    __table_args__ = (
+        Index("ix_runs_tenant_id", "tenant_id"),
+        Index("ix_runs_tenant_created", "tenant_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(26), primary_key=True, default=_ulid)
+    tenant_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_TENANT_ID, nullable=False
+    )
     agent_id: Mapped[str] = mapped_column(
         ForeignKey("agents.id", ondelete="CASCADE"), index=True
     )

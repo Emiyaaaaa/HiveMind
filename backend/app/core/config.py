@@ -167,6 +167,21 @@ class Settings(BaseSettings):
     )
     cancel_ttl_seconds: int = 86400
 
+    auth_enabled: bool = Field(
+        default=False,
+        description=(
+            "When true, /v1 endpoints (except health) require an API key. "
+            "Keys are listed in auth_api_keys."
+        ),
+    )
+    auth_api_keys: str = Field(
+        default="",
+        description=(
+            "Comma-separated API keys as key:tenant_id:role "
+            "(role is viewer|operator|admin)."
+        ),
+    )
+
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
 

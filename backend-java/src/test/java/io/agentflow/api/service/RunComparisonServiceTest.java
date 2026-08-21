@@ -8,19 +8,34 @@ import io.agentflow.api.dto.RunComparisonPreviewRequest;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.entity.RunStatus;
 import io.agentflow.api.repository.RunRepository;
+import io.agentflow.api.security.AuthPrincipal;
+import io.agentflow.api.security.Role;
+import io.agentflow.api.security.TenantContext;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class RunComparisonServiceTest {
+
+    @BeforeEach
+    void setPrincipal() {
+        TenantContext.set(new AuthPrincipal("default", Role.ADMIN, "test"));
+    }
+
+    @AfterEach
+    void clearPrincipal() {
+        TenantContext.clear();
+    }
 
     @Test
     void comparesSimpleRunSummary() {
         RunRepository runs = mock(RunRepository.class);
         RunEntity baseline = run("baseline", 1, Map.of("answer", "old"));
         RunEntity candidate = run("candidate", 2, Map.of("answer", "new"));
-        when(runs.findById("baseline")).thenReturn(Optional.of(baseline));
-        when(runs.findById("candidate")).thenReturn(Optional.of(candidate));
+        when(runs.findByIdAndTenantId("baseline", "default")).thenReturn(Optional.of(baseline));
+        when(runs.findByIdAndTenantId("candidate", "default")).thenReturn(Optional.of(candidate));
 
         var result = new RunComparisonService(runs)
                 .preview(new RunComparisonPreviewRequest("baseline", "candidate"));

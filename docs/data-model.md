@@ -18,6 +18,7 @@ erDiagram
 
     Agent {
         string id PK
+        string tenant_id
         string name UK
         string adapter
         json config
@@ -33,6 +34,7 @@ erDiagram
     }
     Run {
         string id PK
+        string tenant_id
         string agent_id FK
         string adapter
         string status
@@ -103,6 +105,8 @@ stateDiagram-v2
 
 ## Design notes
 
+- **`tenant_id`** scopes agents and runs. Names are unique within a tenant
+  (`uq_agents_tenant_name`). List/get APIs filter by the caller's tenant.
 - **`Agent.version`** is a monotonic integer. Each bump also writes an
   immutable ``agent_versions`` snapshot (adapter + config + description).
   Restore creates a new version rather than rewriting history.
@@ -126,6 +130,10 @@ stateDiagram-v2
 
 | Index | Purpose |
 | --- | --- |
+| `uq_agents_tenant_name` | unique agent name per tenant |
+| `ix_agents_tenant_id` | list agents for a tenant |
+| `ix_runs_tenant_id` | filter runs by tenant |
+| `ix_runs_tenant_created` | tenant-scoped recent runs |
 | `ix_runs_status` | filter pending / running runs from a worker |
 | `ix_runs_agent_id` | list runs for an agent |
 | `ix_steps_run_index` | render the step timeline in O(log n) |

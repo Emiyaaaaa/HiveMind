@@ -29,6 +29,7 @@ class AgentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    tenant_id: str
     name: str
     description: str | None
     adapter: str

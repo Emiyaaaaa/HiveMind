@@ -27,6 +27,11 @@ export async function GET(
   if (lastEventId) {
     headers["Last-Event-ID"] = lastEventId;
   }
+  const apiKey =
+    process.env.AGENTFLOW_API_KEY || process.env.NEXT_PUBLIC_AGENTFLOW_API_KEY;
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
 
   const upstream = await fetch(url.toString(), {
     headers,

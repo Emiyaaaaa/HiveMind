@@ -12,6 +12,7 @@ public class AgentflowProperties {
     private Cancel cancel = new Cancel();
     private Events events = new Events();
     private Otel otel = new Otel();
+    private Auth auth = new Auth();
 
     public String getVersion() {
         return version;
@@ -59,6 +60,65 @@ public class AgentflowProperties {
 
     public void setOtel(Otel otel) {
         this.otel = otel;
+    }
+
+    public Auth getAuth() {
+        return auth;
+    }
+
+    public void setAuth(Auth auth) {
+        this.auth = auth;
+    }
+
+    public static class Auth {
+        private boolean enabled = false;
+        private List<ApiKeyEntry> keys = List.of();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public List<ApiKeyEntry> getKeys() {
+            return keys;
+        }
+
+        public void setKeys(List<ApiKeyEntry> keys) {
+            this.keys = keys == null ? List.of() : keys;
+        }
+    }
+
+    public static class ApiKeyEntry {
+        private String key;
+        private String tenantId = "default";
+        private String role = "admin";
+
+        public String getKey() {
+            return key;
+        }
+
+        public void setKey(String key) {
+            this.key = key;
+        }
+
+        public String getTenantId() {
+            return tenantId;
+        }
+
+        public void setTenantId(String tenantId) {
+            this.tenantId = tenantId;
+        }
+
+        public String getRole() {
+            return role;
+        }
+
+        public void setRole(String role) {
+            this.role = role;
+        }
     }
 
     public static class Otel {

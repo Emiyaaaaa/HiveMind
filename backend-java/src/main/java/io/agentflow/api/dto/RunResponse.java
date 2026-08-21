@@ -9,6 +9,7 @@ import java.util.Map;
 public class RunResponse {
 
     private String id;
+    private String tenantId;
     private String agentId;
     private String adapter;
     private RunStatus status;
@@ -51,6 +52,7 @@ public class RunResponse {
             RunUsage usage) {
         RunResponse dto = new RunResponse();
         dto.id = entity.getId();
+        dto.tenantId = entity.getTenantId();
         dto.agentId = entity.getAgentId();
         dto.adapter = entity.getAdapter();
         dto.status = entity.getStatus();
@@ -68,6 +70,10 @@ public class RunResponse {
 
     public String getId() {
         return id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
     }
 
     public String getAgentId() {

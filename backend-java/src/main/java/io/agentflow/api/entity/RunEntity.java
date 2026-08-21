@@ -22,6 +22,9 @@ public class RunEntity {
     @Column(length = 26)
     private String id;
 
+    @Column(name = "tenant_id", nullable = false, length = 64)
+    private String tenantId = "default";
+
     @Column(name = "agent_id", nullable = false, length = 26)
     private String agentId;
 
@@ -80,6 +83,14 @@ public class RunEntity {
 
     public void setId(String id) {
         this.id = id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public String getAgentId() {
