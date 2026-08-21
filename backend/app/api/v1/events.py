@@ -84,15 +84,19 @@ async def stream_run_events(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> EventSourceResponse:
+    settings = get_settings()
     run = await session.get(Run, run_id)
-    # Missing rows are allowed so clients can subscribe before the run is
-    # visible (and so event-bus unit tests can use synthetic ids). When the
-    # row exists it must belong to the caller's tenant.
+    # When auth is enabled, require the run to exist to avoid pre-subscribing to
+    # another tenant's run_id before it becomes visible.
+    if settings.auth_enabled and run is None:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    # Missing rows are allowed (when auth is disabled) so clients can subscribe
+    # before the run is visible (and so event-bus unit tests can use synthetic ids).
     if run is not None and run.tenant_id != principal.tenant_id:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     after_id = _resolve_last_event_id(request)
-    heartbeat = float(get_settings().event_sse_heartbeat_seconds)
+    heartbeat = float(settings.event_sse_heartbeat_seconds)
 
     async def generator() -> AsyncIterator[dict[str, str]]:
         yield {"retry": _SSE_RETRY_MS}
