@@ -9,6 +9,8 @@ import io.agentflow.api.entity.AgentEntity;
 import io.agentflow.api.entity.AgentVersionEntity;
 import io.agentflow.api.repository.AgentRepository;
 import io.agentflow.api.repository.AgentVersionRepository;
+import io.agentflow.api.security.AccessControl;
+import io.agentflow.api.security.Role;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,10 +34,12 @@ public class AgentService {
 
     @Transactional
     public AgentResponse create(AgentCreateRequest req) {
-        if (repository.existsByName(req.getName())) {
+        String tenantId = AccessControl.tenantId(Role.ADMIN);
+        if (repository.existsByTenantIdAndName(tenantId, req.getName())) {
             throw new AgentNameConflictException(req.getName());
         }
         AgentEntity entity = new AgentEntity();
+        entity.setTenantId(tenantId);
         entity.setName(req.getName());
         entity.setDescription(req.getDescription());
         entity.setAdapter(req.getAdapter());
@@ -52,25 +56,28 @@ public class AgentService {
 
     @Transactional(readOnly = true)
     public List<AgentResponse> list() {
-        return repository.findAllByOrderByCreatedAtDesc().stream()
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
+        return repository.findAllByTenantIdOrderByCreatedAtDesc(tenantId).stream()
                 .map(AgentResponse::fromEntity)
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public AgentResponse get(String id) {
-        return repository.findById(id)
-                .map(AgentResponse::fromEntity)
-                .orElseThrow(() -> new AgentNotFoundException(id));
+        return AgentResponse.fromEntity(getEntity(id));
     }
 
     @Transactional(readOnly = true)
     public AgentEntity getEntity(String id) {
-        return repository.findById(id).orElseThrow(() -> new AgentNotFoundException(id));
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
+        return repository
+                .findByIdAndTenantId(id, tenantId)
+                .orElseThrow(() -> new AgentNotFoundException(id));
     }
 
     @Transactional
     public AgentResponse update(String id, AgentUpdateRequest req) {
+        AccessControl.require(Role.ADMIN);
         AgentEntity agent = getEntity(id);
 
         if (req.isNameSet() && req.getName() != null) {
@@ -164,6 +171,7 @@ public class AgentService {
 
     @Transactional
     public AgentResponse restore(String agentId, int version) {
+        AccessControl.require(Role.ADMIN);
         AgentEntity agent = getEntity(agentId);
         AgentVersionEntity snap =
                 versionRepository

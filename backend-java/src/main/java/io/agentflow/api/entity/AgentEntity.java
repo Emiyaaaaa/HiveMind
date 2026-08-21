@@ -8,19 +8,28 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
 @Entity
-@Table(name = "agents")
+@Table(
+        name = "agents",
+        uniqueConstraints =
+                @UniqueConstraint(
+                        name = "uq_agents_tenant_name",
+                        columnNames = {"tenant_id", "name"}))
 public class AgentEntity {
 
     @Id
     @Column(length = 26)
     private String id;
 
-    @Column(nullable = false, unique = true, length = 128)
+    @Column(name = "tenant_id", nullable = false, length = 64)
+    private String tenantId = "default";
+
+    @Column(nullable = false, length = 128)
     private String name;
 
     @Column(length = 1024)
@@ -65,6 +74,14 @@ public class AgentEntity {
 
     public void setId(String id) {
         this.id = id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public String getName() {

@@ -15,6 +15,8 @@ import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.entity.RunStatus;
 import io.agentflow.api.repository.AgentVersionRepository;
 import io.agentflow.api.repository.RunRepository;
+import io.agentflow.api.security.AccessControl;
+import io.agentflow.api.security.Role;
 import io.agentflow.api.service.RegressionExecutionManifest.CaseReference;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -52,16 +54,12 @@ public class RegressionExecutionService {
     }
 
     public RegressionExecutionResponse create(RegressionExecutionCreateRequest request) {
+        AccessControl.require(Role.OPERATOR);
+        String tenantId = AccessControl.tenantId(Role.OPERATOR);
         List<String> baselineIds = normalizeIds(request);
-        Map<String, RunEntity> loaded = byId(runs.findAllById(baselineIds));
         List<RunEntity> baselines = baselineIds.stream()
-                .map(id -> {
-                    RunEntity run = loaded.get(id);
-                    if (run == null) {
-                        throw new RunNotFoundException(id);
-                    }
-                    return run;
-                })
+                .map(id -> runs.findByIdAndTenantId(id, tenantId)
+                        .orElseThrow(() -> new RunNotFoundException(id)))
                 .toList();
         validateBaselines(baselines);
 
@@ -148,14 +146,15 @@ public class RegressionExecutionService {
     }
 
     private Map<String, RunEntity> candidateRuns(RegressionExecutionManifest manifest) {
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
         List<String> ids = manifest.cases().stream()
                 .map(CaseReference::candidateRunId)
                 .toList();
-        Map<String, RunEntity> result = byId(runs.findAllById(ids));
+        Map<String, RunEntity> result = new HashMap<>();
         for (String id : ids) {
-            if (!result.containsKey(id)) {
-                throw new RunNotFoundException(id);
-            }
+            RunEntity run = runs.findByIdAndTenantId(id, tenantId)
+                    .orElseThrow(() -> new RunNotFoundException(id));
+            result.put(id, run);
         }
         return result;
     }

@@ -1,6 +1,7 @@
 package io.agentflow.api.controller;
 
 import io.agentflow.api.service.EventStreamService;
+import io.agentflow.api.service.RunService;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,9 +17,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class EventsController {
 
     private final EventStreamService events;
+    private final RunService runs;
 
-    public EventsController(EventStreamService events) {
+    public EventsController(EventStreamService events, RunService runs) {
         this.events = events;
+        this.runs = runs;
     }
 
     @GetMapping(value = "/{runId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -26,6 +29,7 @@ public class EventsController {
             @PathVariable String runId,
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
             @RequestParam(value = "last_event_id", required = false) String lastEventIdParam) {
+        runs.requireAccessible(runId);
         String after =
                 lastEventId != null && !lastEventId.isBlank() ? lastEventId : lastEventIdParam;
         SseEmitter emitter = events.subscribe(runId, after);

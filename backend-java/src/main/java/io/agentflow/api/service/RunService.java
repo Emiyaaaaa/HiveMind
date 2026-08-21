@@ -21,6 +21,8 @@ import io.agentflow.api.repository.MessageRepository;
 import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
 import io.agentflow.api.repository.ToolCallRepository;
+import io.agentflow.api.security.AccessControl;
+import io.agentflow.api.security.Role;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -74,12 +76,14 @@ public class RunService {
 
     @Transactional
     public RunResponse create(RunCreateRequest req) {
+        AccessControl.require(Role.OPERATOR);
         AgentEntity agent = agentService.getEntity(req.getAgentId());
         String adapter = (req.getAdapter() != null && !req.getAdapter().isBlank())
                 ? req.getAdapter()
                 : agent.getAdapter();
 
         RunEntity run = new RunEntity();
+        run.setTenantId(agent.getTenantId());
         run.setAgentId(agent.getId());
         run.setAdapter(adapter);
         run.setStatus(RunStatus.PENDING);
@@ -102,9 +106,12 @@ public class RunService {
             String adapter,
             int agentVersion,
             List<Map<String, Object>> inputs) {
+        AccessControl.require(Role.OPERATOR);
+        AgentEntity agent = agentService.getEntity(agentId);
         List<RunEntity> candidates = new ArrayList<>(inputs.size());
         for (Map<String, Object> input : inputs) {
             RunEntity run = new RunEntity();
+            run.setTenantId(agent.getTenantId());
             run.setAgentId(agentId);
             run.setAdapter(adapter);
             run.setStatus(RunStatus.PENDING);
@@ -125,22 +132,28 @@ public class RunService {
 
     @Transactional(readOnly = true)
     public List<RunResponse> list(int limit) {
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
         int capped = Math.max(1, Math.min(limit, 200));
         // Header rows only — matches Python list_runs (no steps/messages/checkpoints).
-        return runs.findRecent(PageRequest.of(0, capped)).stream()
+        return runs.findRecentByTenantId(tenantId, PageRequest.of(0, capped)).stream()
                 .map(RunResponse::fromEntity)
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public RunResponse get(String id) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
-        return toResponse(run);
+        return toResponse(requireRun(id, Role.VIEWER));
+    }
+
+    /** Ensure the run exists in the caller's tenant (for SSE and cross-service checks). */
+    @Transactional(readOnly = true)
+    public void requireAccessible(String id) {
+        requireRun(id, Role.VIEWER);
     }
 
     @Transactional
     public void cancel(String id) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
+        RunEntity run = requireRun(id, Role.OPERATOR);
         cancelSignal.requestCancel(run.getId());
         // We do not flip the row to CANCELLED here: the worker owns the
         // transition so steps/messages can be flushed first.
@@ -148,7 +161,7 @@ public class RunService {
 
     @Transactional
     public RunResponse retry(String id, RunRetryRequest req) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
+        RunEntity run = requireRun(id, Role.OPERATOR);
         if (run.getStatus() != RunStatus.FAILED) {
             throw new RunConflictException(
                     "Cannot retry run " + id + " in status " + run.getStatus().wire());
@@ -186,7 +199,7 @@ public class RunService {
 
     @Transactional
     public RunResponse resume(String id, RunResumeRequest req) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
+        RunEntity run = requireRun(id, Role.OPERATOR);
         if (run.getStatus() != RunStatus.WAITING_HUMAN) {
             throw new RunConflictException(
                     "Cannot resume run " + id + " in status " + run.getStatus().wire());
@@ -217,6 +230,12 @@ public class RunService {
         RunEntity saved = runs.save(run);
         enqueueJobAfterCommit(saved.getId(), saved.getAgentId(), saved.getAdapter());
         return toResponse(saved);
+    }
+
+    private RunEntity requireRun(String id, Role minimum) {
+        String tenantId = AccessControl.tenantId(minimum);
+        return runs.findByIdAndTenantId(id, tenantId)
+                .orElseThrow(() -> new RunNotFoundException(id));
     }
 
     /**

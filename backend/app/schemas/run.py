@@ -87,6 +87,7 @@ class RunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    tenant_id: str
     agent_id: str
     adapter: str
     status: RunStatus

@@ -1,11 +1,18 @@
 import type { Agent, AgentVersion, AgentVersionDiff, Run } from "./types";
 import { normalizeUsage } from "./usage";
 
+function authHeaders(): Record<string, string> {
+  const key = process.env.NEXT_PUBLIC_AGENTFLOW_API_KEY;
+  if (!key) return {};
+  return { Authorization: `Bearer ${key}` };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders(),
       ...(init?.headers || {}),
     },
     cache: "no-store",

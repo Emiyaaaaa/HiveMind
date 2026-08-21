@@ -15,6 +15,20 @@ below are relative to that backend root.
 - JSON keys use `snake_case`. The frontend types in
   [`frontend/lib/types.ts`](../frontend/lib/types.ts) are the source of truth.
 - Errors return `{"detail": "<message>"}` with a non-2xx status code.
+- **Auth (optional).** When `AGENTFLOW_AUTH_ENABLED=true`, every `/v1/*`
+  endpoint except `GET /v1/health` requires
+  `Authorization: Bearer <api-key>` or `X-Api-Key: <api-key>`. Each key maps
+  to a `tenant_id` and role (`viewer` | `operator` | `admin`). Cross-tenant
+  resources return 404. Missing key → 401; insufficient role → 403.
+  Auth is **off by default** for local development.
+
+### Roles
+
+| Role | Capabilities |
+| --- | --- |
+| `viewer` | List/get agents, runs, versions, SSE |
+| `operator` | viewer + create/cancel/retry/resume runs |
+| `admin` | operator + create/update/restore agents |
 
 ## Endpoints
 
@@ -326,6 +340,7 @@ the runtime falls back to the oldest incomplete call with a matching name.
 ```ts
 {
   id: string;
+  tenant_id: string;
   name: string;
   description: string | null;
   adapter: string;
@@ -335,6 +350,9 @@ the runtime falls back to the oldest incomplete call with a matching name.
   updated_at: string;
 }
 ```
+
+`tenant_id` is assigned from the caller's API key (or `"default"` when auth
+is disabled). Agent `name` is unique **per tenant**.
 
 ### `AgentVersion`
 
@@ -372,6 +390,7 @@ the runtime falls back to the oldest incomplete call with a matching name.
 ```ts
 {
   id: string;
+  tenant_id: string;
   agent_id: string;
   adapter: string;
   status: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "waiting_human";

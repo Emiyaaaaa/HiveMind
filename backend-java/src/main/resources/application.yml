@@ -42,6 +42,14 @@ agentflow:
   otel:
     enabled: ${AGENTFLOW_OTEL_ENABLED:false}
     service-name: ${AGENTFLOW_OTEL_SERVICE_NAME:agentflow-api}
+  auth:
+    # Off by default for local/dev. Set AGENTFLOW_AUTH_ENABLED=true and
+    # configure keys to enforce tenant isolation + RBAC.
+    enabled: ${AGENTFLOW_AUTH_ENABLED:false}
+    keys:
+      - key: ${AGENTFLOW_API_KEY_ADMIN:dev-admin}
+        tenant-id: default
+        role: admin
 
 management:
   tracing:

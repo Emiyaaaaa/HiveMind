@@ -14,12 +14,16 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
+from app.core.auth import AuthPrincipal, Role, require_role
 from app.core.config import get_settings
+from app.db.session import get_session
 from app.events import EventBus, get_event_bus
 from app.events.bus import is_after
+from app.models import Run
 from app.schemas.run import RunEvent
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -77,7 +81,16 @@ async def stream_run_events(
     run_id: str,
     request: Request,
     bus: EventBus = Depends(get_event_bus),
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> EventSourceResponse:
+    run = await session.get(Run, run_id)
+    # Missing rows are allowed so clients can subscribe before the run is
+    # visible (and so event-bus unit tests can use synthetic ids). When the
+    # row exists it must belong to the caller's tenant.
+    if run is not None and run.tenant_id != principal.tenant_id:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+
     after_id = _resolve_last_event_id(request)
     heartbeat = float(get_settings().event_sse_heartbeat_seconds)
 
