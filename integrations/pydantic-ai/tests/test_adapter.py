@@ -4,12 +4,14 @@ from typing import Any
 
 import pytest
 from app.adapters.base import AdapterContext
+from app.adapters.tool_registry import register_tool
 from app.models.run import RunStatus
 from pydantic_ai import Agent
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from agentflow_pydantic_ai import PydanticAIAdapter, create_adapter
+from agentflow_pydantic_ai.toolset import pydantic_tool_name
 
 
 class RecordingContext(AdapterContext):
@@ -64,8 +66,31 @@ def tool_agent() -> Agent[None, str]:
     return agent
 
 
+def bridged_tool_agent() -> Agent[None, str]:
+    return Agent(TestModel(call_tools=["echo"]))
+
+
+def mixed_tool_agent() -> Agent[None, str]:
+    agent = Agent(TestModel(call_tools=["echo", "local_upper"]))
+
+    @agent.tool_plain
+    async def local_upper(text: str) -> dict[str, str]:
+        return {"text": text.upper()}
+
+    return agent
+
+
+def failing_tool_agent() -> Agent[None, str]:
+    return Agent(TestModel(call_tools=["bridge_failure"]))
+
+
 def not_an_agent() -> object:
     return object()
+
+
+def test_mcp_tool_names_are_provider_safe() -> None:
+    assert pydantic_tool_name("mcp/knowledge/search") == "mcp__knowledge__search"
+    assert len(pydantic_tool_name("mcp/" + "x" * 100)) == 64
 
 
 @pytest.mark.asyncio
@@ -104,6 +129,55 @@ async def test_native_tool_events_use_agentflow_ids() -> None:
     assert completed["call_id"] == started["call_id"]
     assert completed["result"] == {"text": "ping"}
     assert completed["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_agentflow_builtin_tool_is_injected_without_duplicate_events() -> None:
+    ctx = RecordingContext(factory_reference("bridged_tool_agent"))
+    ctx.agent_config["tools"] = ["echo"]
+
+    result = await PydanticAIAdapter().run(ctx)
+
+    assert result.status == RunStatus.SUCCEEDED
+    started = ctx.event("tool_call.started")
+    completed = ctx.event("tool_call.completed")
+    assert len(started) == len(completed) == 1
+    assert started[0]["name"] == "echo"
+    assert completed[0]["result"] == {"text": ""}
+    assert completed[0]["call_id"] == started[0]["call_id"]
+
+
+@pytest.mark.asyncio
+async def test_agentflow_and_factory_tools_can_run_together() -> None:
+    ctx = RecordingContext(factory_reference("mixed_tool_agent"))
+    ctx.agent_config["tools"] = ["echo"]
+
+    result = await PydanticAIAdapter().run(ctx)
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert {event["name"] for event in ctx.event("tool_call.started")} == {
+        "echo",
+        "local_upper",
+    }
+    assert len(ctx.event("tool_call.completed")) == 2
+
+
+@pytest.mark.asyncio
+async def test_agentflow_tool_failure_is_emitted_once() -> None:
+    async def fail(_arguments: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("bridge exploded")
+
+    register_tool("bridge_failure", fail, overwrite=True)
+    ctx = RecordingContext(factory_reference("failing_tool_agent"))
+    ctx.agent_config["tools"] = ["bridge_failure"]
+
+    result = await PydanticAIAdapter().run(ctx)
+
+    assert result.status == RunStatus.FAILED
+    assert result.error == "bridge exploded"
+    assert len(ctx.event("tool_call.started")) == 1
+    assert len(ctx.event("tool_call.completed")) == 1
+    assert ctx.event("tool_call.completed")[0]["error"] == "bridge exploded"
 
 
 @pytest.mark.asyncio
