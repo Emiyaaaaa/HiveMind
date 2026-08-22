@@ -1,8 +1,9 @@
 """Official PydanticAI adapter plugin for AgentFlow."""
 
 from agentflow_pydantic_ai.adapter import PydanticAIAdapter
+from agentflow_pydantic_ai.toolset import AgentFlowToolset
 
-__all__ = ["PydanticAIAdapter", "create_adapter"]
+__all__ = ["AgentFlowToolset", "PydanticAIAdapter", "create_adapter"]
 
 
 def create_adapter() -> PydanticAIAdapter:
