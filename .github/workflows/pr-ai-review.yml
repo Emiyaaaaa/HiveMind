@@ -1,0 +1,65 @@
+name: AI PR Review
+
+# pull_request_target so fork PRs can use repository secrets (LLM key).
+# Security: never check out or execute untrusted PR code — only fetch the
+# diff via the GitHub API inside scripts/ci/ai_pr_review.py.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ai-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Analyze PR and suggest improvements
+    runs-on: ubuntu-latest
+    # Only review PRs from others: skip the repository owner, bots, and drafts.
+    if: >
+      github.event.pull_request.draft == false
+      && github.event.pull_request.user.login != github.repository_owner
+      && github.event.pull_request.user.type != 'Bot'
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+      && github.event.pull_request.user.login != 'github-actions[bot]'
+    steps:
+      - name: Check LLM secret
+        id: secrets
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$LLM_API_KEY" ] || [ -n "$OPENAI_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Set repository secret LLM_API_KEY (or OPENAI_API_KEY) to enable AI PR review."
+          fi
+
+      - name: Checkout base branch only
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          # pull_request_target defaults to the base branch. Do not override
+          # ref to the PR head — never run untrusted contributor code here.
+          persist-credentials: false
+
+      - name: Run AI PR review
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+        run: |
+          export LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com/v1}"
+          export LLM_MODEL="${LLM_MODEL:-gpt-4o-mini}"
+          python3 scripts/ci/ai_pr_review.py
