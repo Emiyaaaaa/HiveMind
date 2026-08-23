@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Daily health check at 05:00 UTC; failures open/refresh an Issue.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   backend:
@@ -32,6 +40,9 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          # uv.lock is gitignored; key cache on project manifests instead.
+          cache-dependency-glob: |
+            **/pyproject.toml
       - name: Install
         working-directory: backend
         run: uv sync --all-extras
@@ -69,6 +80,8 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
       - name: Install Python deps
         working-directory: backend
         run: uv sync --all-extras
@@ -104,3 +117,85 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  report-scheduled-failure:
+    name: Open Issue on scheduled CI failure
+    runs-on: ubuntu-latest
+    needs: [backend, backend-java, integration, frontend]
+    if: |
+      always() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      (
+        needs.backend.result == 'failure' ||
+        needs.backend-java.result == 'failure' ||
+        needs.integration.result == 'failure' ||
+        needs.frontend.result == 'failure'
+      )
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write failure report and upsert Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          JAVA_RESULT: ${{ needs.backend-java.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/upsert_automation_issue.sh
+          REPORT="ci-failure-report.md"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            echo "# Scheduled CI failure"
+            echo
+            echo "Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+            echo
+            echo "Workflow run: ${RUN_URL}"
+            echo
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "| backend | \`${BACKEND_RESULT}\` |"
+            echo "| backend-java | \`${JAVA_RESULT}\` |"
+            echo "| integration | \`${INTEGRATION_RESULT}\` |"
+            echo "| frontend | \`${FRONTEND_RESULT}\` |"
+            echo
+            echo "This issue is refreshed while scheduled/manual CI keeps failing."
+            echo "Close it after the failing jobs are green again."
+          } >"$REPORT"
+
+          scripts/ci/upsert_automation_issue.sh \
+            "[automation] Scheduled CI failure" \
+            "$REPORT" \
+            automation \
+            ci-failure
+
+  close-scheduled-success:
+    name: Close CI failure Issue when green
+    runs-on: ubuntu-latest
+    needs: [backend, backend-java, integration, frontend]
+    if: |
+      always() &&
+      github.event_name == 'schedule' &&
+      needs.backend.result == 'success' &&
+      needs.backend-java.result == 'success' &&
+      needs.integration.result == 'success' &&
+      needs.frontend.result == 'success'
+    steps:
+      - name: Close open automation CI failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TITLE="[automation] Scheduled CI failure"
+          EXISTING="$(
+            gh issue list --state open --limit 100 --json number,title \
+              | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
+              | head -n 1
+          )"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --body "Scheduled CI is green again. Closing. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            gh issue close "$EXISTING" --reason completed
+            echo "Closed issue #${EXISTING}"
+          else
+            echo "No open CI failure issue."
+          fi

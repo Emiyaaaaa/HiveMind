@@ -1,0 +1,55 @@
+name: Outdated dependencies
+
+on:
+  schedule:
+    # Mondays 07:00 UTC
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: outdated-deps
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Collect outdated dependency report
+        run: |
+          chmod +x scripts/ci/outdated_deps_report.sh
+          scripts/ci/outdated_deps_report.sh outdated-deps-report.md
+
+      - name: Upsert GitHub Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x scripts/ci/upsert_automation_issue.sh
+          scripts/ci/upsert_automation_issue.sh \
+            "[automation] Outdated dependencies" \
+            outdated-deps-report.md \
+            automation \
+            dependencies
