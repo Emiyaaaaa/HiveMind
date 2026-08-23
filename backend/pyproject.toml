@@ -67,5 +67,5 @@ ignore_missing_imports = true
 
 [dependency-groups]
 dev = [
-    "fakeredis[lua]>=2.20",
+    "fakeredis[lua]>=2.37.1",
 ]
