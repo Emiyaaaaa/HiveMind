@@ -20,13 +20,15 @@ jobs:
   review:
     name: Analyze PR and suggest improvements
     runs-on: ubuntu-latest
-    # Only review PRs from others: skip the repository owner, bots, and drafts.
+    # Only review human contributor PRs. Skip drafts, repo owner, and bots
+    # (Dependabot, Renovate, github-actions, Copilot, …).
     if: >
       github.event.pull_request.draft == false
       && github.event.pull_request.user.login != github.repository_owner
       && github.event.pull_request.user.type != 'Bot'
-      && github.event.pull_request.user.login != 'dependabot[bot]'
-      && github.event.pull_request.user.login != 'github-actions[bot]'
+      && !endsWith(github.event.pull_request.user.login, '[bot]')
+      && github.actor != 'dependabot[bot]'
+      && !endsWith(github.actor, '[bot]')
     steps:
       - name: Check LLM secret
         id: secrets

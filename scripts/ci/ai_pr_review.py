@@ -20,6 +20,35 @@ AI_PR_REVIEW_MARKER = "<!-- agentflow-ai-pr-review -->"
 MAX_DIFF_CHARS = 120_000
 MAX_COMMENT_CHARS = 65_000
 
+# Explicit bot logins plus any login ending with "[bot]" (Dependabot, Renovate, …).
+KNOWN_BOT_LOGINS = frozenset(
+    {
+        "dependabot",
+        "dependabot[bot]",
+        "renovate",
+        "renovate[bot]",
+        "github-actions",
+        "github-actions[bot]",
+        "copilot",
+        "copilot[bot]",
+        "imgbot",
+        "imgbot[bot]",
+        "snyk-bot",
+        "snyk[bot]",
+    }
+)
+
+
+def is_bot_author(login: str, user_type: str | None = None) -> bool:
+    name = (login or "").strip().lower()
+    if not name:
+        return False
+    if (user_type or "").lower() == "bot":
+        return True
+    if name.endswith("[bot]"):
+        return True
+    return name in KNOWN_BOT_LOGINS
+
 
 def env(name: str, default: str | None = None) -> str:
     value = os.environ.get(name, default)
@@ -199,7 +228,12 @@ def main() -> int:
     pr = github_request("GET", f"{api_base}/repos/{owner}/{repo}/pulls/{pr_number}", token)
     title = pr.get("title") or ""
     body = pr.get("body") or ""
-    author = ((pr.get("user") or {}).get("login")) or "unknown"
+    author_user = pr.get("user") or {}
+    author = author_user.get("login") or "unknown"
+    author_type = author_user.get("type")
+    if is_bot_author(author, author_type):
+        print(f"Skipping AI review for bot PR author: {author} (type={author_type})")
+        return 0
     base = ((pr.get("base") or {}).get("ref")) or "main"
     head = ((pr.get("head") or {}).get("ref")) or "head"
 
