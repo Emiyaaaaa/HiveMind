@@ -45,7 +45,7 @@ validators, and output type. Returning a fresh Agent per run avoids accidental
 state sharing between runs.
 
 Install the MCP client extra when the factory uses `MCPToolset` or the config
-supplies `mcp_servers`:
+uses MCP tools via `mcp_auto_register` or an explicit `mcp/<server>/<tool>` entry:
 
 ```bash
 pip install "agentflow-pydantic-ai[mcp]"

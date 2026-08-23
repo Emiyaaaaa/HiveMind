@@ -167,7 +167,7 @@ async def test_agentflow_tool_failure_is_emitted_once() -> None:
     async def fail(_arguments: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("bridge exploded")
 
-    register_tool("bridge_failure", fail, overwrite=True)
+    register_tool("bridge_failure", fail)
     ctx = RecordingContext(factory_reference("failing_tool_agent"))
     ctx.agent_config["tools"] = ["bridge_failure"]
 
