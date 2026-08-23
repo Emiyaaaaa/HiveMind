@@ -44,7 +44,8 @@ The factory owns the PydanticAI model, instructions, tools, MCP servers,
 validators, and output type. Returning a fresh Agent per run avoids accidental
 state sharing between runs.
 
-Install the MCP client extra when the factory uses `MCPToolset`:
+Install the MCP client extra when the factory uses `MCPToolset` or the config
+uses MCP tools via `mcp_auto_register` or an explicit `mcp/<server>/<tool>` entry:
 
 ```bash
 pip install "agentflow-pydantic-ai[mcp]"
@@ -56,10 +57,15 @@ pip install "agentflow-pydantic-ai[mcp]"
 {
   "adapter": "pydantic-ai",
   "config": {
-    "agent_factory": "myapp.agents:create_agent"
+    "agent_factory": "myapp.agents:create_agent",
+    "tools": ["echo"]
   }
 }
 ```
+
+`tools`, `mcp_servers`, and `mcp_auto_register` use the same format as other
+AgentFlow adapters. The adapter exposes resolved tools to PydanticAI for the
+current run and delegates their execution back to `AdapterToolSurface`.
 
 `agent_factory` imports and executes trusted Python code in the worker process.
 Only administrators should be allowed to configure it; this plugin is not a
@@ -69,6 +75,6 @@ One PydanticAI run maps to one AgentFlow step. The plugin emits user and
 assistant messages, token deltas, provider usage/cost when available, and
 AgentFlow-owned ToolCall IDs for PydanticAI function-tool and MCP events.
 
-The MVP deliberately does not rebuild Agents from JSON, route tools through
-`AdapterToolSurface`, or implement checkpoint/retry, HITL, and deferred tools.
+The plugin deliberately does not rebuild Agents from JSON or implement
+checkpoint/retry, HITL, and deferred tools.
 PydanticAI 2.27 or later in the 2.x series is supported.

@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import AsyncExitStack
 from importlib import import_module
 from typing import Any
 
+from app.adapters.adapter_tools import open_tool_surface
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
 from app.core.logging import get_logger
 from app.models.run import RunStatus
@@ -24,6 +26,8 @@ from pydantic_ai import (
 )
 from pydantic_core import to_jsonable_python
 
+from agentflow_pydantic_ai.toolset import AgentFlowToolset
+
 logger = get_logger("adapter.pydantic_ai")
 
 DEFAULT_NODE = "pydantic_ai"
@@ -39,6 +43,7 @@ class PydanticAIAdapter(OrchestratorAdapter):
         node = str(ctx.agent_config.get("node") or DEFAULT_NODE)
         prompt = prompt_from_input(ctx.input)
         active_tools: dict[str, tuple[str, str, float]] = {}
+        bridged_tool_calls: set[str] = set()
 
         await ctx.emit_step_started(index=step_index, node=node)
         await ctx.emit_message(role="user", content=prompt)
@@ -46,29 +51,44 @@ class PydanticAIAdapter(OrchestratorAdapter):
 
         try:
             agent = load_agent(ctx.agent_config.get("agent_factory"))
+            async with AsyncExitStack() as stack:
+                bridge: AgentFlowToolset | None = None
+                if uses_agentflow_tools(ctx.agent_config):
+                    surface = await stack.enter_async_context(open_tool_surface(ctx.agent_config))
+                    if surface.tools:
+                        bridge = AgentFlowToolset(surface, ctx, step_index)
 
-            async with agent.run_stream_events(
-                prompt,
-                run_id=ctx.run_id,
-                metadata=dict(ctx.metadata) or None,
-            ) as events:
-                async for event in events:
-                    if delta := text_delta(event):
-                        await ctx.emit_token_delta(step_index=step_index, delta=delta)
-                    elif isinstance(event, FunctionToolCallEvent):
-                        call_id = await ctx.emit_tool_call_started(
-                            step_index=step_index,
-                            name=event.part.tool_name,
-                            arguments=event.part.args_as_dict(),
-                        )
-                        active_tools[event.tool_call_id] = (
-                            event.part.tool_name,
-                            call_id,
-                            time.monotonic(),
-                        )
-                    elif isinstance(event, FunctionToolResultEvent):
-                        await emit_tool_result(ctx, step_index, event, active_tools)
-                result = events.result
+                async with agent.run_stream_events(
+                    prompt,
+                    run_id=ctx.run_id,
+                    metadata=dict(ctx.metadata) or None,
+                    toolsets=[bridge] if bridge is not None else None,
+                ) as events:
+                    async for event in events:
+                        if delta := text_delta(event):
+                            await ctx.emit_token_delta(step_index=step_index, delta=delta)
+                        elif isinstance(event, FunctionToolCallEvent):
+                            if bridge is not None and bridge.owns(event.part.tool_name):
+                                bridged_tool_calls.add(event.tool_call_id)
+                                continue
+                            call_id = await ctx.emit_tool_call_started(
+                                step_index=step_index,
+                                name=event.part.tool_name,
+                                arguments=event.part.args_as_dict(),
+                            )
+                            active_tools[event.tool_call_id] = (
+                                event.part.tool_name,
+                                call_id,
+                                time.monotonic(),
+                            )
+                        elif isinstance(event, FunctionToolResultEvent):
+                            if event.tool_call_id in bridged_tool_calls or (
+                                bridge is not None and bridge.owns(event.part.tool_name)
+                            ):
+                                bridged_tool_calls.discard(event.tool_call_id)
+                                continue
+                            await emit_tool_result(ctx, step_index, event, active_tools)
+                    result = events.result
 
             if result is None:
                 raise RuntimeError("PydanticAI run ended without a final result")
@@ -100,6 +120,11 @@ class PydanticAIAdapter(OrchestratorAdapter):
             await close_active_tools(ctx, step_index, active_tools, error)
             await ctx.emit_step_failed(index=step_index, node=node, error=error)
             return AdapterResult(status=RunStatus.FAILED, error=error)
+
+
+def uses_agentflow_tools(config: dict[str, Any]) -> bool:
+    """Return whether this run asks AgentFlow to inject managed tools."""
+    return bool(config.get("tools") or config.get("mcp_auto_register"))
 
 
 def load_agent(reference: Any) -> Agent[Any, Any]:
