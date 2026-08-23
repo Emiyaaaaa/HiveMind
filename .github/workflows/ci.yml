@@ -40,6 +40,9 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          # uv.lock is gitignored; key cache on project manifests instead.
+          cache-dependency-glob: |
+            **/pyproject.toml
       - name: Install
         working-directory: backend
         run: uv sync --all-extras
@@ -77,6 +80,8 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
       - name: Install Python deps
         working-directory: backend
         run: uv sync --all-extras
