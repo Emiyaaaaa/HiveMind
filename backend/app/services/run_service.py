@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.adapters import get_adapter
-from app.core.config import get_settings
+from app.core.config import get_settings, jobs_backend
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.events import EventBus
@@ -259,6 +259,14 @@ class RunService:
         # Ensure the run exists so the API returns 404 for unknown ids
         # whether or not a worker is currently executing it.
         await self._get_run(run_id, tenant_id=tenant_id)
+
+        if (
+            get_settings().worker_mode == "queue"
+            and jobs_backend() == "temporal"
+        ):
+            from app.worker.temporal.client import signal_cancel
+
+            await signal_cancel(run_id)
 
         # Signal external workers (queue mode) via the cancel registry.
         await self.cancel_registry.request_cancel(run_id)
@@ -590,3 +598,13 @@ class RunService:
         result = await self.session.execute(stmt)
         last = result.scalar_one_or_none()
         return 0 if last is None else last + 1
+
+    async def _latest_checkpoint(self, run_id: str) -> Checkpoint | None:
+        stmt = (
+            select(Checkpoint)
+            .where(Checkpoint.run_id == run_id)
+            .order_by(Checkpoint.index.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()

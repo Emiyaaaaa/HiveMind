@@ -33,6 +33,7 @@ from app.db.session import SessionLocal
 from app.events import EventBus
 from app.models import Agent, RunStatus
 from app.runtime.resume_context import (
+    RunResumeContext,
     parse_resume_context,
     without_resume_metadata,
 )
@@ -114,6 +115,15 @@ class RunExecutor:
             if resume_ctx is not None:
                 run.metadata_ = without_resume_metadata(dict(run.metadata_ or {}))
 
+            # Worker crash / Temporal activity retry: the row is still RUNNING
+            # (or WAITING_HUMAN if a resume signal raced). Resume from the
+            # latest checkpoint so a 24h+ run does not start from scratch.
+            if resume_ctx is None and run.status in (
+                RunStatus.RUNNING,
+                RunStatus.WAITING_HUMAN,
+            ):
+                resume_ctx = await self._recover_resume(service, run.id, run.status)
+
             step_index_base = 0
             if resume_ctx is not None and resume_ctx.mode in ("retry", "resume"):
                 step_index_base = (await service._max_step_index(run.id)) + 1
@@ -147,7 +157,9 @@ class RunExecutor:
             try:
                 try:
                     result = await trace_adapter_run(
-                        adapter_name, run_id, adapter.run(ctx)
+                        adapter_name,
+                        run_id,
+                        self._invoke_adapter(adapter, ctx, resume_ctx),
                     )
                 except asyncio.CancelledError:
                     # Cancellation may interrupt a flush; clear the session
@@ -192,14 +204,25 @@ class RunExecutor:
         except asyncio.CancelledError:
             pass
 
+    async def _recover_resume(
+        self, service: Any, run_id: str, status: RunStatus
+    ) -> RunResumeContext:
+        latest = await service._latest_checkpoint(run_id)
+        mode = "resume" if status == RunStatus.WAITING_HUMAN else "retry"
+        if latest is None:
+            return RunResumeContext(mode=mode)
+        return RunResumeContext(
+            mode=mode,
+            checkpoint_state=latest.state,
+            checkpoint_index=latest.index,
+        )
+
     async def _invoke_adapter(
         self,
         adapter: OrchestratorAdapter,
         ctx: AdapterContext,
         resume_ctx: object,
     ) -> AdapterResult:
-        from app.runtime.resume_context import RunResumeContext
-
         if isinstance(resume_ctx, RunResumeContext):
             if resume_ctx.mode == "retry":
                 return await adapter.retry(ctx)

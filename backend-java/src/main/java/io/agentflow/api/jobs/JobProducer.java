@@ -26,6 +26,9 @@ import org.springframework.stereotype.Component;
  *       via {@code XAUTOCLAIM}.</li>
  *   <li>{@code list} -> legacy {@code LPUSH} / {@code BRPOP}. At-most-once;
  *       kept for rollback only.</li>
+ *   <li>{@code temporal} -> start or signal a Temporal workflow keyed by
+ *       {@code run_id}; the Python worker executes activities from the
+ *       shared task queue and resumes from checkpoints after a crash.</li>
  * </ul>
  *
  * <p>The JSON payload itself is identical across both modes: a single
@@ -42,18 +45,21 @@ public class JobProducer {
     private final AgentflowProperties props;
     private final Tracer tracer;
     private final Propagator propagator;
+    private final TemporalWorkflowClient temporal;
 
     public JobProducer(
             StringRedisTemplate redis,
             ObjectMapper mapper,
             AgentflowProperties props,
             Tracer tracer,
-            Propagator propagator) {
+            Propagator propagator,
+            TemporalWorkflowClient temporal) {
         this.redis = redis;
         this.mapper = mapper;
         this.props = props;
         this.tracer = tracer;
         this.propagator = propagator;
+        this.temporal = temporal;
     }
 
     public void enqueue(String runId, String agentId, String adapter) {
@@ -67,6 +73,10 @@ public class JobProducer {
         }
 
         String impl = props.getJobs().getImpl();
+        if ("temporal".equalsIgnoreCase(impl)) {
+            temporal.startOrResume(runId, agentId, adapter, traceContext);
+            return;
+        }
         String key = props.getJobs().getQueueKey();
         if ("list".equalsIgnoreCase(impl)) {
             redis.opsForList().leftPush(key, payload);
