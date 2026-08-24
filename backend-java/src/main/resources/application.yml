@@ -26,11 +26,18 @@ agentflow:
   version: 0.1.0
   adapters: echo,langgraph
   jobs:
-    # Wire protocol: ``streams`` (XADD/XREADGROUP, at-least-once) or
-    # ``list`` (legacy LPUSH/BRPOP). MUST match the Python worker's
-    # ``AGENTFLOW_REDIS_QUEUE_IMPL``.
+    # Wire protocol: ``streams`` (XADD/XREADGROUP, at-least-once), ``list``
+    # (legacy LPUSH/BRPOP), or ``temporal`` (durable long-run workflow).
+    # MUST match the Python worker's ``AGENTFLOW_JOBS_IMPL``.
     impl: ${AGENTFLOW_JOBS_IMPL:streams}
     queue-key: agentflow:jobs:runs
+  temporal:
+    target: ${AGENTFLOW_TEMPORAL_TARGET:localhost:7233}
+    namespace: ${AGENTFLOW_TEMPORAL_NAMESPACE:default}
+    task-queue: ${AGENTFLOW_TEMPORAL_TASK_QUEUE:agentflow-runs}
+    activity-heartbeat-seconds: ${AGENTFLOW_TEMPORAL_ACTIVITY_HEARTBEAT_SECONDS:30}
+    activity-start-to-close-seconds: ${AGENTFLOW_TEMPORAL_ACTIVITY_START_TO_CLOSE_SECONDS:604800}
+    activity-max-attempts: ${AGENTFLOW_TEMPORAL_ACTIVITY_MAX_ATTEMPTS:5}
   cancel:
     key-prefix: "agentflow:cancel:"
     ttl-seconds: 86400

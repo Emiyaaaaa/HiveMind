@@ -398,7 +398,10 @@ class LangGraphAdapter(OrchestratorAdapter):
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                # LangGraph may treat node outputs as the next state.
+                # Returning an empty dict can wipe keys required for later
+                # nodes (e.g. `pending_human` on resume), so preserve state.
+                return state
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx
             arguments = build_tool_arguments(tool_def, state)
@@ -440,7 +443,7 @@ class LangGraphAdapter(OrchestratorAdapter):
     ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                return state
 
             ctx = run_state.ctx
             pending = state.get("pending_human")
@@ -456,6 +459,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 await ctx.emit_step_started(index=step_idx, node=spec.id)
                 route = str(human_input.get("route") or state.get("route") or "approved")
                 next_state = {
+                    **state,
                     "human_input": human_input,
                     "route": route,
                     "pending_human": None,
@@ -502,7 +506,7 @@ class LangGraphAdapter(OrchestratorAdapter):
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                return state
 
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx
@@ -633,7 +637,7 @@ class LangGraphAdapter(OrchestratorAdapter):
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                return state
 
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx

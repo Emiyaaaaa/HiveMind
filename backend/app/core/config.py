@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+JobsImpl = Literal["streams", "list", "temporal"]
+
 
 class Settings(BaseSettings):
     """Runtime configuration loaded from env vars or .env file."""
@@ -65,6 +67,46 @@ class Settings(BaseSettings):
         ),
     )
 
+    jobs_impl: Literal["list", "streams", "temporal"] | None = Field(
+        default=None,
+        description=(
+            "Job dispatch backend. Must match the Java API's AGENTFLOW_JOBS_IMPL. "
+            "When unset, falls back to redis_queue_impl. `temporal` runs each "
+            "Run as a durable workflow so 24h+ executions and waiting_human "
+            "pauses survive worker restarts without Redis claim-idle races."
+        ),
+    )
+    temporal_target: str = Field(
+        default="localhost:7233",
+        description="Temporal frontend gRPC address (host:port).",
+    )
+    temporal_namespace: str = Field(
+        default="default",
+        description="Temporal namespace for Run workflows.",
+    )
+    temporal_task_queue: str = Field(
+        default="agentflow-runs",
+        description="Temporal task queue shared by the API client and Python worker.",
+    )
+    temporal_activity_start_to_close_seconds: int = Field(
+        default=7 * 24 * 3600,
+        ge=60,
+        description="Per-segment adapter activity start-to-close timeout.",
+    )
+    temporal_activity_heartbeat_seconds: int = Field(
+        default=30,
+        ge=5,
+        description=(
+            "Activity heartbeat timeout. A dead worker is detected when heartbeats "
+            "stop, then Temporal retries the segment from the latest checkpoint."
+        ),
+    )
+    temporal_activity_max_attempts: int = Field(
+        default=5,
+        ge=1,
+        description="Maximum Temporal retries for a crashed adapter segment.",
+    )
+
     job_queue_key: str = Field(
         default="agentflow:jobs:runs",
         description=(
@@ -78,7 +120,8 @@ class Settings(BaseSettings):
         description=(
             "Wire protocol for the run job queue. `streams` provides "
             "at-least-once delivery with XACK + XCLAIM-based recovery; "
-            "`list` is the legacy LPUSH/BRPOP path kept for rollback."
+            "`list` is the legacy LPUSH/BRPOP path kept for rollback. "
+            "Ignored when `jobs_impl` is set."
         ),
     )
     job_stream_group: str = Field(
@@ -213,6 +256,19 @@ class Settings(BaseSettings):
         le=300_000,
         description="Periodic metric reader export interval in milliseconds.",
     )
+
+
+def effective_jobs_impl(settings: Settings | None = None) -> JobsImpl:
+    """Resolve the job protocol Java and Python must agree on."""
+    cfg = settings or get_settings()
+    if cfg.jobs_impl is not None:
+        return cfg.jobs_impl
+    return cfg.redis_queue_impl
+
+
+def jobs_backend() -> JobsImpl:
+    """Backwards-compatible alias used across worker/service modules."""
+    return effective_jobs_impl()
 
 
 @lru_cache

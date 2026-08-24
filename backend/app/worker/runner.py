@@ -20,7 +20,7 @@ import signal
 
 # Importing the package registers the built-in adapters as a side effect.
 from app.adapters import load_adapter_plugins
-from app.core.config import get_settings
+from app.core.config import get_settings, jobs_backend
 from app.core.logging import get_logger, setup_logging
 from app.core.telemetry import (
     set_worker_utilization,
@@ -35,6 +35,7 @@ from app.worker.cancel import get_cancel_registry
 from app.worker.executor import RunExecutor
 from app.worker.monitor import run_queue_monitor
 from app.worker.queue import JobLease, JobQueue, get_job_queue
+from app.worker.temporal.worker import run_temporal_worker
 
 logger = get_logger("worker.runner")
 
@@ -160,6 +161,7 @@ async def run_forever() -> None:
     bus = get_event_bus()
     cancel_registry = get_cancel_registry()
     queue = get_job_queue()
+    backend = jobs_backend()
 
     executor = RunExecutor(bus=bus, cancel_registry=cancel_registry)
 
@@ -177,18 +179,23 @@ async def run_forever() -> None:
             signal.signal(sig, lambda *_: _request_stop())
 
     monitor_task: asyncio.Task[None] | None = None
-    if settings.job_queue_monitor_enabled:
+    if settings.job_queue_monitor_enabled and backend != "temporal":
         monitor_task = asyncio.create_task(
             run_queue_monitor(queue, stop, settings=settings)
         )
 
     try:
-        await _consume_loop(
-            executor=executor,
-            queue=queue,
-            stop=stop,
-            concurrency=concurrency,
-        )
+        if backend == "temporal":
+            await run_temporal_worker(
+                executor=executor, stop=stop, concurrency=concurrency
+            )
+        else:
+            await _consume_loop(
+                executor=executor,
+                queue=queue,
+                stop=stop,
+                concurrency=concurrency,
+            )
     finally:
         if monitor_task is not None:
             stop.set()

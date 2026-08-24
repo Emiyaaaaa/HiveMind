@@ -30,7 +30,7 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_REDIS_HOST` | Redis host |
 | `AGENTFLOW_REDIS_PORT` | `6379` |
 | `AGENTFLOW_SERVER_PORT` | `8000` (or behind a load balancer) |
-| `AGENTFLOW_JOBS_IMPL` | `streams` (recommended; must match worker) |
+| `AGENTFLOW_JOBS_IMPL` | `streams` / `list` / `temporal` (must match worker) |
 
 ### Python worker (`backend`)
 
@@ -39,7 +39,8 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_WORKER_MODE` | `queue` |
 | `AGENTFLOW_DATABASE_URL` | `postgresql+asyncpg://<user>:<pass>@<host>:5432/agentflow` |
 | `AGENTFLOW_REDIS_URL` | `redis://<host>:6379/0` |
-| `AGENTFLOW_REDIS_QUEUE_IMPL` | `streams` (must match `AGENTFLOW_JOBS_IMPL`) |
+| `AGENTFLOW_JOBS_IMPL` | `streams` / `list` / `temporal` (must match Java API) |
+| `AGENTFLOW_REDIS_QUEUE_IMPL` | `streams` (used only when `AGENTFLOW_JOBS_IMPL` is unset/`streams`) |
 | `AGENTFLOW_WORKER_CONCURRENCY` | `1`–`64`; parallel jobs per worker process (default `1`) |
 | `AGENTFLOW_JOB_QUEUE_MONITOR_ENABLED` | `true`/`false`; emit queue depth metrics and delay alerts (default `true`) |
 | `AGENTFLOW_JOB_QUEUE_MONITOR_INTERVAL_SECONDS` | Poll interval for queue metrics (default `30`) |
@@ -47,6 +48,17 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_JOB_QUEUE_DEPTH_ALERT_THRESHOLD` | Warn when `lag + pending` reaches this count (default `100`) |
 | `AGENTFLOW_WORKER_JOB_P95_ALERT_SECONDS` | Warn when rolling worker-job p95 meets or exceeds this duration (default `60`) |
 | `AGENTFLOW_WORKER_JOB_P95_ALERT_MIN_SAMPLES` | Minimum completed jobs before p95 alerting activates (default `10`) |
+
+When `AGENTFLOW_JOBS_IMPL=temporal`, also set:
+
+| Variable | Production value |
+| --- | --- |
+| `AGENTFLOW_TEMPORAL_TARGET` | `localhost:7233` |
+| `AGENTFLOW_TEMPORAL_NAMESPACE` | `default` |
+| `AGENTFLOW_TEMPORAL_TASK_QUEUE` | `agentflow-runs` |
+| `AGENTFLOW_TEMPORAL_ACTIVITY_HEARTBEAT_SECONDS` | `30` |
+| `AGENTFLOW_TEMPORAL_ACTIVITY_START_TO_CLOSE_SECONDS` | `604800` (7 days) |
+| `AGENTFLOW_TEMPORAL_ACTIVITY_MAX_ATTEMPTS` | `5` |
 
 Optional model-provider keys (`AGENTFLOW_OPENAI_API_KEY`, etc.) are only
 needed when running adapters that call external models.

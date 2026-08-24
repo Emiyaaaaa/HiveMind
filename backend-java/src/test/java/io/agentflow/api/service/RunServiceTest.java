@@ -12,6 +12,7 @@ import io.agentflow.api.entity.AgentEntity;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.jobs.CancelSignal;
 import io.agentflow.api.jobs.JobProducer;
+import io.agentflow.api.jobs.TemporalWorkflowClient;
 import io.agentflow.api.repository.CheckpointRepository;
 import io.agentflow.api.repository.MessageRepository;
 import io.agentflow.api.repository.RunRepository;

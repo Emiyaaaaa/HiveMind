@@ -13,6 +13,7 @@ public class AgentflowProperties {
     private Events events = new Events();
     private Otel otel = new Otel();
     private Auth auth = new Auth();
+    private Temporal temporal = new Temporal();
 
     public String getVersion() {
         return version;
@@ -68,6 +69,14 @@ public class AgentflowProperties {
 
     public void setAuth(Auth auth) {
         this.auth = auth;
+    }
+
+    public Temporal getTemporal() {
+        return temporal;
+    }
+
+    public void setTemporal(Temporal temporal) {
+        this.temporal = temporal;
     }
 
     public static class Auth {
@@ -145,11 +154,13 @@ public class AgentflowProperties {
     public static class Jobs {
         /**
          * Wire protocol used to enqueue run jobs for the Python worker.
-         * Must match the Python side's {@code AGENTFLOW_REDIS_QUEUE_IMPL}.
+         * Must match the Python side's {@code AGENTFLOW_JOBS_IMPL}.
          * <ul>
          *   <li>{@code streams} (default) -> {@code XADD} onto a Redis stream
          *       with at-least-once delivery via XACK + XAUTOCLAIM.</li>
          *   <li>{@code list} -> legacy {@code LPUSH} + {@code BRPOP}.</li>
+         *   <li>{@code temporal} -> start or signal a durable Temporal workflow
+         *       for the run; worker restarts resume from checkpoints.</li>
          * </ul>
          */
         private String impl = "streams";
@@ -169,6 +180,63 @@ public class AgentflowProperties {
 
         public void setQueueKey(String queueKey) {
             this.queueKey = queueKey;
+        }
+    }
+
+    public static class Temporal {
+        private String target = "localhost:7233";
+        private String namespace = "default";
+        private String taskQueue = "agentflow-runs";
+        private long activityHeartbeatSeconds = 30;
+        private long activityStartToCloseSeconds = 7 * 24 * 3600;
+        private int activityMaxAttempts = 5;
+
+        public String getTarget() {
+            return target;
+        }
+
+        public void setTarget(String target) {
+            this.target = target;
+        }
+
+        public String getNamespace() {
+            return namespace;
+        }
+
+        public void setNamespace(String namespace) {
+            this.namespace = namespace;
+        }
+
+        public String getTaskQueue() {
+            return taskQueue;
+        }
+
+        public void setTaskQueue(String taskQueue) {
+            this.taskQueue = taskQueue;
+        }
+
+        public long getActivityHeartbeatSeconds() {
+            return activityHeartbeatSeconds;
+        }
+
+        public void setActivityHeartbeatSeconds(long activityHeartbeatSeconds) {
+            this.activityHeartbeatSeconds = activityHeartbeatSeconds;
+        }
+
+        public long getActivityStartToCloseSeconds() {
+            return activityStartToCloseSeconds;
+        }
+
+        public void setActivityStartToCloseSeconds(long activityStartToCloseSeconds) {
+            this.activityStartToCloseSeconds = activityStartToCloseSeconds;
+        }
+
+        public int getActivityMaxAttempts() {
+            return activityMaxAttempts;
+        }
+
+        public void setActivityMaxAttempts(int activityMaxAttempts) {
+            this.activityMaxAttempts = activityMaxAttempts;
         }
     }
 
