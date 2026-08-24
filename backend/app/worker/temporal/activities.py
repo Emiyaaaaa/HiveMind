@@ -56,12 +56,12 @@ async def execute_run_segment(job_payload: dict[str, Any]) -> dict[str, str]:
     executor = _require_executor()
     activity.heartbeat("starting")
     beater = asyncio.create_task(_heartbeat_loop())
+    cancelled: asyncio.CancelledError | None = None
     try:
         await executor.execute(job.run_id, job.adapter)
-    except asyncio.CancelledError:
-        # The executor cancels and finalises the run as CANCELLED.
-        # Treat this as a normal activity completion so the workflow can
-        # reach a terminal state without Temporal retry noise.
+    except asyncio.CancelledError as exc:
+        cancelled = exc
+        # The executor should finalise the run as CANCELLED when cancellation is intentional.
         logger.info("temporal.activity.cancelled", run_id=job.run_id)
     finally:
         beater.cancel()
@@ -71,6 +71,8 @@ async def execute_run_segment(job_payload: dict[str, Any]) -> dict[str, str]:
             pass
 
     status = await _load_status(executor, job.run_id)
+    if cancelled is not None and status != RunStatus.CANCELLED.value:
+        raise cancelled
     return {"status": status}
 
 
