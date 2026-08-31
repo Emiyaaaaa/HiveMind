@@ -95,14 +95,25 @@ class RunService:
         self.cancel_registry = cancel_registry or get_cancel_registry()
 
     async def create_run(
-        self, payload: RunCreate, *, tenant_id: str | None = None
+        self,
+        payload: RunCreate,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Run:
         agent = await self.session.get(Agent, payload.agent_id)
-        if agent is None or (tenant_id is not None and agent.tenant_id != tenant_id):
+        if (
+            agent is None
+            or (tenant_id is not None and agent.tenant_id != tenant_id)
+            or (project_id is not None and agent.project_id != project_id)
+            or (agent_id is not None and agent.id != agent_id)
+        ):
             raise AgentNotFound(payload.agent_id)
 
         run = Run(
             tenant_id=agent.tenant_id,
+            project_id=agent.project_id,
             agent_id=agent.id,
             adapter=payload.adapter or agent.adapter,
             status=RunStatus.PENDING,
@@ -172,9 +183,14 @@ class RunService:
         payload: RunRetry | None = None,
         *,
         tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Run:
         """Re-queue a failed run, optionally from a checkpoint snapshot."""
-        run = await self._get_run(run_id, with_relations=True, tenant_id=tenant_id)
+        run = await self._get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
         if run.status != RunStatus.FAILED:
             raise RunConflict(run_id, run.status, "retry")
 
@@ -212,7 +228,10 @@ class RunService:
         await self.session.commit()
 
         await self.start_run(run_id)
-        return await self.get_run(run_id, with_relations=True, tenant_id=tenant_id)
+        return await self.get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
 
     async def resume_run(
         self,
@@ -220,9 +239,14 @@ class RunService:
         payload: RunResume | None = None,
         *,
         tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Run:
         """Continue a run paused for human approval."""
-        run = await self._get_run(run_id, with_relations=True, tenant_id=tenant_id)
+        run = await self._get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
         if run.status != RunStatus.WAITING_HUMAN:
             raise RunConflict(run_id, run.status, "resume")
 
@@ -253,12 +277,24 @@ class RunService:
         await self.session.commit()
 
         await self.start_run(run_id)
-        return await self.get_run(run_id, with_relations=True, tenant_id=tenant_id)
+        return await self.get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
 
-    async def cancel_run(self, run_id: str, *, tenant_id: str | None = None) -> None:
+    async def cancel_run(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> None:
         # Ensure the run exists so the API returns 404 for unknown ids
         # whether or not a worker is currently executing it.
-        await self._get_run(run_id, tenant_id=tenant_id)
+        await self._get_run(
+            run_id, tenant_id=tenant_id, project_id=project_id, agent_id=agent_id
+        )
 
         if (
             get_settings().worker_mode == "queue"
@@ -287,17 +323,32 @@ class RunService:
         *,
         with_relations: bool = True,
         tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Run:
         return await self._get_run(
-            run_id, with_relations=with_relations, tenant_id=tenant_id
+            run_id,
+            with_relations=with_relations,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            agent_id=agent_id,
         )
 
     async def list_runs(
-        self, limit: int = 50, *, tenant_id: str | None = None
+        self,
+        limit: int = 50,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
     ) -> list[Run]:
         stmt = select(Run).order_by(Run.created_at.desc()).limit(limit)
         if tenant_id is not None:
             stmt = stmt.where(Run.tenant_id == tenant_id)
+        if project_id is not None:
+            stmt = stmt.where(Run.project_id == project_id)
+        if agent_id is not None:
+            stmt = stmt.where(Run.agent_id == agent_id)
         result = await self.session.execute(stmt)
         return list(result.scalars())
 
@@ -309,10 +360,16 @@ class RunService:
         *,
         with_relations: bool = False,
         tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Run:
         stmt = select(Run).where(Run.id == run_id)
         if tenant_id is not None:
             stmt = stmt.where(Run.tenant_id == tenant_id)
+        if project_id is not None:
+            stmt = stmt.where(Run.project_id == project_id)
+        if agent_id is not None:
+            stmt = stmt.where(Run.agent_id == agent_id)
         if with_relations:
             stmt = stmt.options(
                 selectinload(Run.steps).selectinload(Step.tool_calls),

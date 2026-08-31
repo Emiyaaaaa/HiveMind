@@ -105,3 +105,68 @@ async def test_operator_can_create_run(authed_client: AsyncClient) -> None:
     )
     assert run.status_code == 202
     assert run.json()["tenant_id"] == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_project_and_agent_scopes_mask_sibling_resources(
+    authed_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = {"Authorization": "Bearer admin-a"}
+    project_a = await authed_client.post(
+        "/v1/projects", headers=headers, json={"name": "project-a"}
+    )
+    project_b = await authed_client.post(
+        "/v1/projects", headers=headers, json={"name": "project-b"}
+    )
+    assert project_a.status_code == project_b.status_code == 201
+
+    agent_a = await authed_client.post(
+        "/v1/agents",
+        headers=headers,
+        json={"name": "agent-a", "adapter": "echo", "project_id": project_a.json()["id"]},
+    )
+    agent_b = await authed_client.post(
+        "/v1/agents",
+        headers=headers,
+        json={"name": "agent-b", "adapter": "echo", "project_id": project_b.json()["id"]},
+    )
+    assert agent_a.status_code == agent_b.status_code == 201
+
+    monkeypatch.setenv(
+        "AGENTFLOW_AUTH_API_KEYS",
+        "admin-a:tenant-a:admin,"
+        f"project-operator:tenant-a:operator:{project_a.json()['id']},"
+        f"agent-viewer:tenant-a:viewer:{project_a.json()['id']}:{agent_a.json()['id']}",
+    )
+    get_settings.cache_clear()
+
+    project_agents = await authed_client.get(
+        "/v1/agents", headers={"X-Api-Key": "project-operator"}
+    )
+    assert project_agents.status_code == 200
+    assert [agent["id"] for agent in project_agents.json()] == [agent_a.json()["id"]]
+
+    sibling = await authed_client.get(
+        f"/v1/agents/{agent_b.json()['id']}",
+        headers={"X-Api-Key": "project-operator"},
+    )
+    assert sibling.status_code == 404
+
+    run = await authed_client.post(
+        "/v1/runs",
+        headers={"X-Api-Key": "project-operator"},
+        json={"agent_id": agent_a.json()["id"], "input": {"prompt": "hi"}},
+    )
+    assert run.status_code == 202
+    assert run.json()["project_id"] == project_a.json()["id"]
+
+    allowed = await authed_client.get(
+        f"/v1/agents/{agent_a.json()['id']}",
+        headers={"X-Api-Key": "agent-viewer"},
+    )
+    denied = await authed_client.get(
+        f"/v1/agents/{agent_b.json()['id']}",
+        headers={"X-Api-Key": "agent-viewer"},
+    )
+    assert allowed.status_code == 200
+    assert denied.status_code == 404

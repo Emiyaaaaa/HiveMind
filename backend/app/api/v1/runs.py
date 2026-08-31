@@ -29,13 +29,22 @@ async def create_run(
     principal: AuthPrincipal = Depends(require_role(Role.OPERATOR)),
 ) -> RunRead:
     try:
-        run = await service.create_run(payload, tenant_id=principal.tenant_id)
+        run = await service.create_run(
+            payload,
+            tenant_id=principal.tenant_id,
+            project_id=principal.project_id,
+            agent_id=principal.agent_id,
+        )
     except AgentNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {exc}") from exc
 
     await service.start_run(run.id)
     run = await service.get_run(
-        run.id, with_relations=True, tenant_id=principal.tenant_id
+        run.id,
+        with_relations=True,
+        tenant_id=principal.tenant_id,
+        project_id=principal.project_id,
+        agent_id=principal.agent_id,
     )
     return run_read_from_orm(run)
 
@@ -46,7 +55,12 @@ async def list_runs(
     service: RunService = Depends(get_run_service),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> list[RunRead]:
-    runs = await service.list_runs(limit=limit, tenant_id=principal.tenant_id)
+    runs = await service.list_runs(
+        limit=limit,
+        tenant_id=principal.tenant_id,
+        project_id=principal.project_id,
+        agent_id=principal.agent_id,
+    )
     return [run_read_from_orm(run) for run in runs]
 
 
@@ -58,7 +72,11 @@ async def get_run(
 ) -> RunRead:
     try:
         run = await service.get_run(
-            run_id, with_relations=True, tenant_id=principal.tenant_id
+            run_id,
+            with_relations=True,
+            tenant_id=principal.tenant_id,
+            project_id=principal.project_id,
+            agent_id=principal.agent_id,
         )
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
@@ -72,7 +90,10 @@ async def cancel_run(
     principal: AuthPrincipal = Depends(require_role(Role.OPERATOR)),
 ) -> None:
     try:
-        await service.cancel_run(run_id, tenant_id=principal.tenant_id)
+        await service.cancel_run(
+            run_id, tenant_id=principal.tenant_id,
+            project_id=principal.project_id, agent_id=principal.agent_id,
+        )
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
 
@@ -86,7 +107,8 @@ async def retry_run(
 ) -> RunRead:
     try:
         run = await service.retry_run(
-            run_id, payload, tenant_id=principal.tenant_id
+            run_id, payload, tenant_id=principal.tenant_id,
+            project_id=principal.project_id, agent_id=principal.agent_id,
         )
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
@@ -104,7 +126,8 @@ async def resume_run(
 ) -> RunRead:
     try:
         run = await service.resume_run(
-            run_id, payload, tenant_id=principal.tenant_id
+            run_id, payload, tenant_id=principal.tenant_id,
+            project_id=principal.project_id, agent_id=principal.agent_id,
         )
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc

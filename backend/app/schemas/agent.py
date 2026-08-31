@@ -9,6 +9,7 @@ class AgentCreate(BaseModel):
     description: str | None = None
     adapter: str = "echo"
     config: dict[str, Any] = Field(default_factory=dict)
+    project_id: str | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -30,6 +31,7 @@ class AgentRead(BaseModel):
 
     id: str
     tenant_id: str
+    project_id: str | None
     name: str
     description: str | None
     adapter: str

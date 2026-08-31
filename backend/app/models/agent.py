@@ -38,6 +38,9 @@ class Agent(Base):
     tenant_id: Mapped[str] = mapped_column(
         String(64), default=DEFAULT_TENANT_ID, nullable=False
     )
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(128), index=True)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     adapter: Mapped[str] = mapped_column(String(64), default="echo")
@@ -48,6 +51,7 @@ class Agent(Base):
         back_populates="agent",
         cascade="all, delete-orphan",
     )
+    project: Mapped["Project | None"] = relationship(back_populates="agents")  # noqa: F821
     versions: Mapped[list["AgentVersion"]] = relationship(
         back_populates="agent",
         order_by="AgentVersion.version",
