@@ -82,6 +82,7 @@ public class AgentflowProperties {
     public static class Auth {
         private boolean enabled = false;
         private List<ApiKeyEntry> keys = List.of();
+        private Oidc oidc = new Oidc();
 
         public boolean isEnabled() {
             return enabled;
@@ -97,6 +98,120 @@ public class AgentflowProperties {
 
         public void setKeys(List<ApiKeyEntry> keys) {
             this.keys = keys == null ? List.of() : keys;
+        }
+
+        public Oidc getOidc() {
+            return oidc;
+        }
+
+        public void setOidc(Oidc oidc) {
+            this.oidc = oidc == null ? new Oidc() : oidc;
+        }
+    }
+
+    /**
+     * OIDC resource-server settings.
+     *
+     * <p>OIDC tokens are accepted only when both {@link Auth#enabled} and this
+     * section's {@link #enabled} flag are true. A token must contain a tenant
+     * claim. Roles are resolved from configured mappings and then from values
+     * that match the built-in {@code viewer}, {@code operator}, or {@code admin}
+     * role names.
+     */
+    public static class Oidc {
+        private boolean enabled = false;
+        private String issuerUri;
+        private String jwkSetUri;
+        private String audience;
+        private String tenantClaim = "tenant_id";
+        private String roleClaim = "roles";
+        private String defaultRole = "viewer";
+        private List<OidcRoleMapping> roleMappings = List.of();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getIssuerUri() {
+            return issuerUri;
+        }
+
+        public void setIssuerUri(String issuerUri) {
+            this.issuerUri = issuerUri;
+        }
+
+        public String getJwkSetUri() {
+            return jwkSetUri;
+        }
+
+        public void setJwkSetUri(String jwkSetUri) {
+            this.jwkSetUri = jwkSetUri;
+        }
+
+        public String getAudience() {
+            return audience;
+        }
+
+        public void setAudience(String audience) {
+            this.audience = audience;
+        }
+
+        public String getTenantClaim() {
+            return tenantClaim;
+        }
+
+        public void setTenantClaim(String tenantClaim) {
+            this.tenantClaim = tenantClaim;
+        }
+
+        public String getRoleClaim() {
+            return roleClaim;
+        }
+
+        public void setRoleClaim(String roleClaim) {
+            this.roleClaim = roleClaim;
+        }
+
+        public String getDefaultRole() {
+            return defaultRole;
+        }
+
+        public void setDefaultRole(String defaultRole) {
+            this.defaultRole = defaultRole;
+        }
+
+        public List<OidcRoleMapping> getRoleMappings() {
+            return roleMappings;
+        }
+
+        public void setRoleMappings(List<OidcRoleMapping> roleMappings) {
+            this.roleMappings = roleMappings == null ? List.of() : roleMappings;
+        }
+    }
+
+    /** Maps one value in the configured OIDC role claim to an application role. */
+    public static class OidcRoleMapping {
+        private String claimValue;
+        private String role = "viewer";
+
+        public String getClaimValue() {
+            return claimValue;
+        }
+
+        public void setClaimValue(String claimValue) {
+            this.claimValue = claimValue;
+        }
+
+        public String getRole() {
+            return role;
+        }
+
+        public void setRole(String role) {
+            this.role = role;
         }
     }
 
