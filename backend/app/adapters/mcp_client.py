@@ -10,6 +10,10 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from app.adapters.tool_errors import (
+    MCP_TOOL_ERROR_PUBLIC_MESSAGE,
+    RecoverableToolError,
+)
 from app.core.logging import get_logger
 
 logger = get_logger("adapter.mcp")
@@ -211,7 +215,11 @@ class McpSessionManager:
         payload = serialize_call_tool_result(result)
         if payload.get("is_error"):
             message = payload.get("text") or f"MCP tool {tool_name!r} returned an error"
-            raise RuntimeError(message)
+            raise RecoverableToolError(
+                code="mcp_tool_error",
+                public_message=MCP_TOOL_ERROR_PUBLIC_MESSAGE,
+                internal_message=message,
+            )
         return payload
 
     async def _require_session(self, server_name: str) -> Any:

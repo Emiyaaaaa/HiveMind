@@ -188,6 +188,37 @@ Alternatively pass a single call or batch in run `input`:
 LangGraph graphs can invoke the same MCP tools via `type: "tool"` or
 `type: "agent"` nodes without a separate adapter.
 
+### ReAct tool failure recovery
+
+LangGraph `agent` nodes support an optional `tool_error_policy` in agent
+config:
+
+| Policy | Behavior |
+| --- | --- |
+| `fail_fast` (default) | Any tool exception fails the step/run (unchanged) |
+| `feedback` | Only explicit `RecoverableToolError` becomes a safe tool observation; fatal errors still fail-fast |
+
+Recoverable failures include MCP `CallToolResult.is_error=true` (mapped to a
+fixed public message) and custom tools that raise `RecoverableToolError`.
+Programming errors, transport/session failures, and cancellation continue to
+propagate. Raw errors are persisted on `ToolCall.error`; the model only sees
+a structured observation without traceback, arguments, or raw MCP text.
+
+Provider `tool_call_id` values pair assistant tool calls with `role=tool`
+messages. AgentFlow lifecycle ULIDs pair `tool_call.started` /
+`tool_call.completed` events with `ToolCall.id` rows — these identifiers are
+not unified in v1.
+
+Parallel tool calls use standard `asyncio.gather` semantics: recoverable
+failures can coexist with successes in one round, but a fatal error in any
+parallel call fails the step without cancelling siblings or rolling back side
+effects. `tool_error_policy` is interpreted only by LangGraph `agent` nodes;
+the direct `mcp` adapter and PydanticAI bridge remain fail-fast.
+
+When `feedback` is enabled and recoverable observations exhaust
+`max_tool_rounds` without a final model reply, the run fails with
+`tool_recovery_exhausted: reached max_tool_rounds=N`.
+
 ## Unit tests
 
 The Python test suite in `backend/tests/` exercises adapter and queue logic

@@ -23,6 +23,7 @@ Expected agent.config shape (all optional except when using custom graphs):
   ],
   "mcp_auto_register": false,  // register every tool from mcp_servers
   "max_tool_rounds": 4,        // agent-node ReAct iterations (default 4)
+  "tool_error_policy": "feedback", // fail_fast (default) | feedback
   "graph": {
     "nodes": [
       {"id": "agent", "type": "agent"},
@@ -62,7 +63,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from app.adapters.adapter_tools import (
     AdapterToolSurface,
@@ -70,6 +71,10 @@ from app.adapters.adapter_tools import (
     tool_schemas_from_definitions,
 )
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
+from app.adapters.tool_errors import (
+    RecoverableToolError,
+    build_safe_tool_error_observation,
+)
 from app.adapters.tool_registry import ToolDefinition
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -82,6 +87,37 @@ logger = get_logger("adapter.langgraph")
 START_NODE = "__start__"
 END_NODE = "__end__"
 DEFAULT_MAX_TOOL_ROUNDS = 4
+DEFAULT_TOOL_ERROR_POLICY = "fail_fast"
+ToolErrorPolicy = Literal["fail_fast", "feedback"]
+
+
+class ToolRecoveryExhaustedError(Exception):
+    """Raised when recoverable tool feedback exhausts ``max_tool_rounds``."""
+
+    def __init__(self, max_tool_rounds: int) -> None:
+        self.max_tool_rounds = max_tool_rounds
+        super().__init__(
+            f"tool_recovery_exhausted: reached max_tool_rounds={max_tool_rounds}"
+        )
+
+
+def parse_tool_error_policy(config: dict[str, Any]) -> ToolErrorPolicy:
+    """Parse and validate agent-level ``tool_error_policy``."""
+    raw = config.get("tool_error_policy", DEFAULT_TOOL_ERROR_POLICY)
+    if raw not in ("fail_fast", "feedback"):
+        raise ValueError(
+            f"invalid tool_error_policy={raw!r}; expected fail_fast|feedback"
+        )
+    return raw  # type: ignore[return-value]
+
+
+@dataclass
+class ToolOutcome:
+    """Result of one agent-node tool invocation."""
+
+    call: dict[str, Any]
+    result: dict[str, Any] | None = None
+    error_observation: dict[str, Any] | None = None
 
 
 class WaitingHumanInterrupt(Exception):
@@ -234,6 +270,7 @@ class _RunState:
     default_model: str
     default_system_prompt: str
     max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS
+    tool_error_policy: ToolErrorPolicy = DEFAULT_TOOL_ERROR_POLICY
     step_index: int = 0
     node_indices: dict[str, int] = field(default_factory=dict)
 
@@ -270,6 +307,12 @@ class LangGraphAdapter(OrchestratorAdapter):
             await tool_surface.close()
             return AdapterResult(status=RunStatus.FAILED, error=str(exc))
 
+        try:
+            tool_error_policy = parse_tool_error_policy(config)
+        except ValueError as exc:
+            await tool_surface.close()
+            return AdapterResult(status=RunStatus.FAILED, error=str(exc))
+
         max_rounds = int(config.get("max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS))
         run_state = _RunState(
             ctx=ctx,
@@ -281,6 +324,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 config.get("system_prompt", "You are a helpful agent.")
             ),
             max_tool_rounds=max(1, max_rounds),
+            tool_error_policy=tool_error_policy,
         )
 
         graph = StateGraph(dict)
@@ -517,6 +561,8 @@ class LangGraphAdapter(OrchestratorAdapter):
             total_in = 0
             total_out = 0
             final_reply = ""
+            had_recoverable_feedback = False
+            policy = run_state.tool_error_policy
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
             await ctx.emit_message(role="system", content=system_prompt)
@@ -550,30 +596,50 @@ class LangGraphAdapter(OrchestratorAdapter):
                             }
                         )
 
-                        async def _run_tool(tc: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+                        async def _run_one_tool(tc: dict[str, Any]) -> ToolOutcome:
                             name = str(tc.get("name") or "")
                             arguments = dict(tc.get("arguments") or {})
-                            result = await run_state.tool_surface.execute(
-                                ctx,
-                                step_index=step_idx,
-                                name=name,
-                                arguments=arguments,
-                            )
-                            return tc, result
+                            try:
+                                result = await run_state.tool_surface.execute(
+                                    ctx,
+                                    step_index=step_idx,
+                                    name=name,
+                                    arguments=arguments,
+                                )
+                                return ToolOutcome(call=tc, result=result)
+                            except RecoverableToolError as exc:
+                                if policy == "fail_fast":
+                                    raise
+                                return ToolOutcome(
+                                    call=tc,
+                                    error_observation=build_safe_tool_error_observation(
+                                        tool_name=name,
+                                        exc=exc,
+                                    ),
+                                )
 
                         # Parallel tool calls share one step; call_id keeps
                         # started/completed pairs associated correctly.
-                        pairs = await asyncio.gather(
-                            *[_run_tool(tc) for tc in response.tool_calls]
+                        outcomes = await asyncio.gather(
+                            *[_run_one_tool(tc) for tc in response.tool_calls]
                         )
-                        for tc, result in pairs:
+                        for outcome in outcomes:
+                            tc = outcome.call
                             name = str(tc.get("name") or "")
-                            tool_results[name] = result
+                            if outcome.result is not None:
+                                tool_results[name] = outcome.result
+                                content = json.dumps(outcome.result, default=str)
+                            else:
+                                assert outcome.error_observation is not None
+                                had_recoverable_feedback = True
+                                content = json.dumps(
+                                    outcome.error_observation, default=str
+                                )
                             messages.append(
                                 {
                                     "role": "tool",
                                     "tool_call_id": str(tc.get("id") or name),
-                                    "content": json.dumps(result, default=str),
+                                    "content": content,
                                 }
                             )
                         continue
@@ -582,6 +648,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                     messages.append({"role": "assistant", "content": final_reply})
                     break
                 else:
+                    if policy == "feedback" and had_recoverable_feedback:
+                        raise ToolRecoveryExhaustedError(max_rounds)
                     final_reply = (
                         final_reply
                         or f"[agent:{spec.id}] reached max_tool_rounds={max_rounds}"
