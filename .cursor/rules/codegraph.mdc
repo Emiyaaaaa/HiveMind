@@ -5,7 +5,7 @@ alwaysApply: true
 <!-- CODEGRAPH_START -->
 ## CodeGraph
 
-This project has a CodeGraph MCP server (`codegraph_*` tools) configured. CodeGraph is a tree-sitter-parsed knowledge graph of every symbol, edge, and file. Reads are sub-millisecond and return structural information grep cannot.
+This project can be used with a CodeGraph MCP server (`codegraph_*` tools) when configured in your environment. CodeGraph is a tree-sitter-parsed knowledge graph of every symbol, edge, and file. Reads are sub-millisecond and return structural information grep cannot.
 
 ### When to prefer codegraph over native search
 
