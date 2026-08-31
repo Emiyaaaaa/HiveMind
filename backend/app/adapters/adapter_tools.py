@@ -125,16 +125,6 @@ class AdapterToolSurface:
         started = time.monotonic()
         try:
             result = await tool.handler(arguments)
-            if not isinstance(result, dict):
-                result = {"result": result}
-            await ctx.emit_tool_call_completed(
-                step_index=step_index,
-                name=tool.name,
-                call_id=cid,
-                result=result,
-                latency_ms=int((time.monotonic() - started) * 1000),
-            )
-            return result
         except Exception as exc:
             await ctx.emit_tool_call_completed(
                 step_index=step_index,
@@ -144,6 +134,17 @@ class AdapterToolSurface:
                 latency_ms=int((time.monotonic() - started) * 1000),
             )
             raise
+
+        if not isinstance(result, dict):
+            result = {"result": result}
+        await ctx.emit_tool_call_completed(
+            step_index=step_index,
+            name=tool.name,
+            call_id=cid,
+            result=result,
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+        return result
 
 
 @asynccontextmanager

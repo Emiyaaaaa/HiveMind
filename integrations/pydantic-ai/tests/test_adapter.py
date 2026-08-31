@@ -181,6 +181,34 @@ async def test_agentflow_tool_failure_is_emitted_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agentflow_recoverable_tool_failure_stays_fail_fast() -> None:
+    from app.adapters.tool_errors import RecoverableToolError
+
+    async def fail(_arguments: dict[str, Any]) -> dict[str, Any]:
+        raise RecoverableToolError(
+            code="bridge_recoverable",
+            public_message="safe bridge message",
+            internal_message="raw bridge failure",
+        )
+
+    register_tool("bridge_recoverable", fail, overwrite=True)
+
+    def recoverable_tool_agent() -> Agent[None, str]:
+        return Agent(TestModel(call_tools=["bridge_recoverable"]))
+
+    ctx = RecordingContext(factory_reference("recoverable_tool_agent"))
+    ctx.agent_config["tools"] = ["bridge_recoverable"]
+
+    result = await PydanticAIAdapter().run(ctx)
+
+    assert result.status == RunStatus.FAILED
+    assert "raw bridge failure" in (result.error or "")
+    assert len(ctx.event("tool_call.started")) == 1
+    assert len(ctx.event("tool_call.completed")) == 1
+    assert ctx.event("tool_call.completed")[0]["error"] == "raw bridge failure"
+
+
+@pytest.mark.asyncio
 async def test_invalid_factory_becomes_a_failed_step() -> None:
     ctx = RecordingContext(factory_reference("not_an_agent"))
 

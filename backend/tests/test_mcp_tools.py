@@ -134,8 +134,10 @@ async def test_langgraph_mcp_tool_writes_tool_call_events():
 async def test_mcp_call_tool_raises_on_error():
     from unittest.mock import AsyncMock, MagicMock
 
-    from app.adapters.mcp_client import McpSessionManager, McpServerConfig
     from mcp.types import CallToolResult, TextContent
+
+    from app.adapters.mcp_client import McpServerConfig, McpSessionManager
+    from app.adapters.tool_errors import RecoverableToolError
 
     manager = McpSessionManager(
         [McpServerConfig(name="echo", transport="stdio", command="true")]
@@ -149,8 +151,12 @@ async def test_mcp_call_tool_raises_on_error():
     )
     manager._sessions["echo"] = session
 
-    with pytest.raises(RuntimeError, match="bad input"):
+    with pytest.raises(RecoverableToolError) as exc_info:
         await manager.call_tool("echo", "ping", {"message": "x"})
+    assert exc_info.value.code == "mcp_tool_error"
+    assert "bad input" in str(exc_info.value)
+    assert "bad input" not in exc_info.value.public_message
+    assert "Revise the request" in exc_info.value.public_message
 
 
 def test_serialize_call_tool_result_text():

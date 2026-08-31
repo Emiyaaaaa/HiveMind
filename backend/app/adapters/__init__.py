@@ -29,6 +29,7 @@ from app.adapters.mcp_client import (
     parse_mcp_servers,
 )
 from app.adapters.mcp_tools import RunToolResolver, resolve_run_tools
+from app.adapters.tool_errors import RecoverableToolError
 from app.adapters.tool_registry import (
     ToolDefinition,
     get_tool,
@@ -51,6 +52,7 @@ __all__ = [
     "McpServerConfig",
     "McpSessionManager",
     "OrchestratorAdapter",
+    "RecoverableToolError",
     "RunToolResolver",
     "ToolDefinition",
     "build_tool_arguments",
