@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Resolves the caller's tenant + role from an API key.
+ * Resolves the caller's tenant + role from an API key or an OIDC Bearer token.
  *
  * <p>When {@code agentflow.auth.enabled=false} (default), every request is
  * treated as {@code admin} on the {@code default} tenant so local development
@@ -27,9 +27,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class AuthFilter extends OncePerRequestFilter {
 
     private final AgentflowProperties properties;
+    private final OidcTokenAuthenticator oidc;
 
     public AuthFilter(AgentflowProperties properties) {
         this.properties = properties;
+        this.oidc = new OidcTokenAuthenticator(properties.getAuth());
     }
 
     @Override
@@ -47,7 +49,7 @@ public class AuthFilter extends OncePerRequestFilter {
         try {
             AuthPrincipal principal = resolve(request);
             if (principal == null) {
-                writeError(response, HttpStatus.UNAUTHORIZED, "Missing or invalid API key");
+                writeError(response, HttpStatus.UNAUTHORIZED, "Missing or invalid credentials");
                 return;
             }
             TenantContext.set(principal);
@@ -63,18 +65,30 @@ public class AuthFilter extends OncePerRequestFilter {
             return new AuthPrincipal(
                     TenantContext.DEFAULT_TENANT_ID, Role.ADMIN, "anonymous");
         }
-        String token = extractToken(request);
-        if (token == null) {
+        String apiKey = extractApiKey(request);
+        if (apiKey != null) {
+            return indexKeys(auth.getKeys()).get(apiKey);
+        }
+        String bearerToken = extractBearerToken(request);
+        if (bearerToken == null) {
             return null;
         }
-        return indexKeys(auth.getKeys()).get(token);
+        AuthPrincipal apiKeyPrincipal = indexKeys(auth.getKeys()).get(bearerToken);
+        if (apiKeyPrincipal != null) {
+            return apiKeyPrincipal;
+        }
+        return oidc.authenticate(bearerToken);
     }
 
-    private static String extractToken(HttpServletRequest request) {
+    private static String extractApiKey(HttpServletRequest request) {
         String apiKey = request.getHeader("X-Api-Key");
         if (apiKey != null && !apiKey.isBlank()) {
             return apiKey.trim();
         }
+        return null;
+    }
+
+    private static String extractBearerToken(HttpServletRequest request) {
         String authorization = request.getHeader("Authorization");
         if (authorization == null || authorization.isBlank()) {
             return null;

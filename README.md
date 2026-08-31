@@ -59,6 +59,10 @@ The HTTP layer that the frontend talks to is a Java/Spring Boot service in
 processes in [`backend/`](backend/) that consume a Redis-backed job queue and
 drive adapters (LangGraph, Echo, ...) to completion.
 
+The API supports tenant-scoped RBAC through API keys and OIDC Bearer tokens.
+For identity-provider setup, tenant claim requirements, and group-to-role
+mapping, see [`docs/oidc.md`](docs/oidc.md).
+
 ```
 ┌───────────────────┐  REST   ┌──────────────────────┐
 │  Next.js console  │ ──────▶ │  Java/Spring Boot API│
