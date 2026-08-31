@@ -128,6 +128,13 @@ toolsets. One PydanticAI run maps to one runtime step; token deltas, output,
 provider usage/cost, and tool events are translated to standard adapter events.
 The MVP does not rebuild Agents from JSON or implement checkpoint/resume.
 
+The official AutoGen integration lives in `integrations/autogen` and registers
+the `autogen` entry point. A trusted `agent_factory` or `team_factory` returns
+an AutoGen AgentChat agent or team. Single-agent runs map to one step; team
+runs can emit one step per agent turn. Token deltas, messages, native tool
+events, and AgentFlow-managed tools (via `AdapterToolSurface`) are translated
+to the same adapter contract.
+
 ## MCP tool bridge
 
 MCP (Model Context Protocol) tools are wired through a shared bridge so every
