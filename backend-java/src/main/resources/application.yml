@@ -57,6 +57,17 @@ agentflow:
       - key: ${AGENTFLOW_API_KEY_ADMIN:dev-admin}
         tenant-id: default
         role: admin
+    # OIDC is an additive resource-server authentication method. API keys
+    # remain supported, while standard Bearer JWTs are verified against the
+    # provider's published JWKS. See docs/oidc.md for a complete example.
+    oidc:
+      enabled: ${AGENTFLOW_OIDC_ENABLED:false}
+      issuer-uri: ${AGENTFLOW_OIDC_ISSUER_URI:}
+      jwk-set-uri: ${AGENTFLOW_OIDC_JWK_SET_URI:}
+      audience: ${AGENTFLOW_OIDC_AUDIENCE:}
+      tenant-claim: ${AGENTFLOW_OIDC_TENANT_CLAIM:tenant_id}
+      role-claim: ${AGENTFLOW_OIDC_ROLE_CLAIM:roles}
+      default-role: ${AGENTFLOW_OIDC_DEFAULT_ROLE:viewer}
 
 management:
   tracing:
