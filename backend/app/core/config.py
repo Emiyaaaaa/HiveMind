@@ -220,8 +220,8 @@ class Settings(BaseSettings):
     auth_api_keys: str = Field(
         default="",
         description=(
-            "Comma-separated API keys as key:tenant_id:role "
-            "(role is viewer|operator|admin)."
+            "Comma-separated API keys as key:organization:role[:project_id[:agent_id]] "
+            "(role is viewer|operator|admin; the three-part legacy form is org-wide)."
         ),
     )
 

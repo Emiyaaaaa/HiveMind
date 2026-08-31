@@ -8,6 +8,7 @@ agent system.
 
 ```mermaid
 erDiagram
+    Project ||--o{ Agent : contains
     Agent ||--o{ Run : has
     Agent ||--o{ AgentVersion : versions
     Run ||--o{ Step : has
@@ -16,9 +17,16 @@ erDiagram
     Step ||--o{ ToolCall : has
     Step }o--|| Message : "optional step_id"
 
+    Project {
+        string id PK
+        string tenant_id
+        string name UK
+        string description
+    }
     Agent {
         string id PK
         string tenant_id
+        string project_id FK
         string name UK
         string adapter
         json config
@@ -35,6 +43,7 @@ erDiagram
     Run {
         string id PK
         string tenant_id
+        string project_id
         string agent_id FK
         string adapter
         string status
@@ -105,8 +114,10 @@ stateDiagram-v2
 
 ## Design notes
 
-- **`tenant_id`** scopes agents and runs. Names are unique within a tenant
-  (`uq_agents_tenant_name`). List/get APIs filter by the caller's tenant.
+- **`tenant_id` is the organization id.** Projects belong to one organization;
+  agents and runs persist their `project_id` so authorization remains stable
+  across the Run lifecycle. A key can be organization-, project-, or
+  Agent-scoped; inaccessible sibling resources return 404.
 - **`Agent.version`** is a monotonic integer. Each bump also writes an
   immutable ``agent_versions`` snapshot (adapter + config + description).
   Restore creates a new version rather than rewriting history.
@@ -132,7 +143,11 @@ stateDiagram-v2
 | --- | --- |
 | `uq_agents_tenant_name` | unique agent name per tenant |
 | `ix_agents_tenant_id` | list agents for a tenant |
+| `ix_agents_project_id` | apply project-scoped access to agents |
+| `uq_projects_tenant_name` | unique project name per organization |
+| `ix_projects_tenant_id` | list projects for an organization |
 | `ix_runs_tenant_id` | filter runs by tenant |
+| `ix_runs_project_id` | apply project-scoped access to runs |
 | `ix_runs_tenant_created` | tenant-scoped recent runs |
 | `ix_runs_status` | filter pending / running runs from a worker |
 | `ix_runs_agent_id` | list runs for an agent |

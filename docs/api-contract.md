@@ -18,8 +18,11 @@ below are relative to that backend root.
 - **Auth (optional).** When `AGENTFLOW_AUTH_ENABLED=true`, every `/v1/*`
   endpoint except `GET /v1/health` requires
   `Authorization: Bearer <api-key>` or `X-Api-Key: <api-key>`. Each key maps
-  to a `tenant_id` and role (`viewer` | `operator` | `admin`). Cross-tenant
-  resources return 404. Missing key → 401; insufficient role → 403.
+  to an organization (`tenant_id`) and role (`viewer` | `operator` | `admin`).
+  Keys may additionally be constrained to one project or one Agent using
+  `key:organization:role[:project_id[:agent_id]]`; a narrower scope is never
+  allowed to access a sibling resource and returns 404. Missing key → 401;
+  insufficient role within an allowed scope → 403.
   Auth is **off by default** for local development.
 
 ### Roles
@@ -56,12 +59,19 @@ Request:
   "name": "writer",
   "description": "optional",
   "adapter": "echo",
-  "config": {}
+  "config": {},
+  "project_id": "01HZ..."
 }
 ```
 
 Response: a full `Agent` record (see schema below). Returns 409 if `name`
 already exists.
+
+### `POST /v1/projects` → 201
+
+Organization administrators create projects with `name` and optional
+`description`. `GET /v1/projects` lists only projects visible to the current
+organization/project scope; `GET /v1/projects/{id}` returns one visible project.
 
 ### `GET /v1/agents` → 200
 
@@ -341,6 +351,7 @@ the runtime falls back to the oldest incomplete call with a matching name.
 {
   id: string;
   tenant_id: string;
+  project_id: string | null;
   name: string;
   description: string | null;
   adapter: string;
@@ -391,6 +402,7 @@ is disabled). Agent `name` is unique **per tenant**.
 {
   id: string;
   tenant_id: string;
+  project_id: string | null;
   agent_id: string;
   adapter: string;
   status: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "waiting_human";

@@ -92,8 +92,10 @@ async def stream_run_events(
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     # Missing rows are allowed (when auth is disabled) so clients can subscribe
     # before the run is visible (and so event-bus unit tests can use synthetic ids).
-    if run is not None and run.tenant_id != principal.tenant_id:
-        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    if run is not None:
+        principal.require_agent(
+            run.tenant_id, run.project_id, run.agent_id, Role.VIEWER
+        )
 
     after_id = _resolve_last_event_id(request)
     heartbeat = float(settings.event_sse_heartbeat_seconds)

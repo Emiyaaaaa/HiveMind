@@ -51,6 +51,7 @@ class Run(Base):
     tenant_id: Mapped[str] = mapped_column(
         String(64), default=DEFAULT_TENANT_ID, nullable=False
     )
+    project_id: Mapped[str | None] = mapped_column(String(26), nullable=True, index=True)
     agent_id: Mapped[str] = mapped_column(
         ForeignKey("agents.id", ondelete="CASCADE"), index=True
     )

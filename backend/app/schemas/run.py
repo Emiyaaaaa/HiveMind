@@ -88,6 +88,7 @@ class RunRead(BaseModel):
 
     id: str
     tenant_id: str
+    project_id: str | None
     agent_id: str
     adapter: str
     status: RunStatus

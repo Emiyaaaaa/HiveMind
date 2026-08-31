@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthPrincipal, Role, require_role
 from app.db.session import get_session
-from app.models import Agent
+from app.models import Agent, Project
 from app.models.agent import AgentVersion
 from app.schemas.agent import (
     AgentCreate,
@@ -26,11 +26,12 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 
 async def _load_agent(
-    session: AsyncSession, agent_id: str, tenant_id: str
+    session: AsyncSession, agent_id: str, principal: AuthPrincipal, minimum: Role
 ) -> Agent:
     agent = await session.get(Agent, agent_id)
-    if agent is None or agent.tenant_id != tenant_id:
+    if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+    principal.require_agent(agent.tenant_id, agent.project_id, agent.id, minimum)
     return agent
 
 
@@ -40,8 +41,17 @@ async def create_agent(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.ADMIN)),
 ) -> Agent:
+    project_id = payload.project_id
+    if project_id is None:
+        principal.require_organization(principal.tenant_id, Role.ADMIN)
+    else:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        principal.require_project(project.tenant_id, project.id, Role.ADMIN)
     agent = Agent(
         tenant_id=principal.tenant_id,
+        project_id=project_id,
         name=payload.name,
         description=payload.description,
         adapter=payload.adapter,
@@ -68,11 +78,12 @@ async def list_agents(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> list[Agent]:
-    result = await session.execute(
-        select(Agent)
-        .where(Agent.tenant_id == principal.tenant_id)
-        .order_by(Agent.created_at.desc())
-    )
+    stmt = select(Agent).where(Agent.tenant_id == principal.tenant_id)
+    if principal.project_id is not None:
+        stmt = stmt.where(Agent.project_id == principal.project_id)
+    if principal.agent_id is not None:
+        stmt = stmt.where(Agent.id == principal.agent_id)
+    result = await session.execute(stmt.order_by(Agent.created_at.desc()))
     return list(result.scalars())
 
 
@@ -82,7 +93,7 @@ async def get_agent(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> Agent:
-    return await _load_agent(session, agent_id, principal.tenant_id)
+    return await _load_agent(session, agent_id, principal, Role.VIEWER)
 
 
 @router.patch("/{agent_id}", response_model=AgentRead)
@@ -92,7 +103,7 @@ async def update_agent(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.ADMIN)),
 ) -> Agent:
-    agent = await _load_agent(session, agent_id, principal.tenant_id)
+    agent = await _load_agent(session, agent_id, principal, Role.ADMIN)
 
     fields_set = payload.model_fields_set
     if "name" in fields_set and payload.name is not None:
@@ -146,7 +157,7 @@ async def list_versions(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> list[AgentVersion]:
-    await _load_agent(session, agent_id, principal.tenant_id)
+    await _load_agent(session, agent_id, principal, Role.VIEWER)
     return await list_agent_versions(session, agent_id)
 
 
@@ -161,7 +172,7 @@ async def diff_versions(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> AgentVersionDiff:
-    await _load_agent(session, agent_id, principal.tenant_id)
+    await _load_agent(session, agent_id, principal, Role.VIEWER)
     left = await get_agent_version(session, agent_id, from_version)
     right = await get_agent_version(session, agent_id, to_version)
     if left is None or right is None:
@@ -182,7 +193,7 @@ async def get_version(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> AgentVersion:
-    await _load_agent(session, agent_id, principal.tenant_id)
+    await _load_agent(session, agent_id, principal, Role.VIEWER)
     row = await get_agent_version(session, agent_id, version)
     if row is None:
         raise HTTPException(status_code=404, detail="Agent version not found")
@@ -200,7 +211,7 @@ async def restore_version(
     principal: AuthPrincipal = Depends(require_role(Role.ADMIN)),
 ) -> Agent:
     """Restore adapter/config/description from a snapshot as a new version."""
-    agent = await _load_agent(session, agent_id, principal.tenant_id)
+    agent = await _load_agent(session, agent_id, principal, Role.ADMIN)
     snap = await get_agent_version(session, agent_id, version)
     if snap is None:
         raise HTTPException(status_code=404, detail="Agent version not found")
