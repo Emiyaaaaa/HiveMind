@@ -24,6 +24,10 @@ Expected agent.config shape (all optional except when using custom graphs):
   "mcp_auto_register": false,  // register every tool from mcp_servers
   "max_tool_rounds": 4,        // agent-node ReAct iterations (default 4)
   "tool_error_policy": "feedback", // fail_fast (default) | feedback
+  "memory": {
+    "window_tokens": 8000,       // 0 = disabled; trim prompt before LLM calls
+    "summarize": true            // summarize dropped turns instead of deleting
+  },
   "graph": {
     "nodes": [
       {"id": "agent", "type": "agent"},
@@ -79,6 +83,7 @@ from app.adapters.tool_registry import ToolDefinition
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.run import RunStatus
+from app.runtime.memory_window import fit_messages_to_window, parse_memory_config
 from app.runtime.pricing import estimate_cost_usd
 from app.runtime.tokens import estimate_tokens
 
@@ -809,6 +814,14 @@ class LangGraphAdapter(OrchestratorAdapter):
         mock_tool_round: int | None = None,
     ) -> ModelResponse:
         """Call the configured chat model, optionally streaming token deltas."""
+        memory_cfg = parse_memory_config(ctx.agent_config)
+        if memory_cfg.window_tokens > 0:
+            messages = fit_messages_to_window(
+                messages,
+                window_tokens=memory_cfg.window_tokens,
+                summarize=memory_cfg.summarize,
+            )
+
         settings = get_settings()
         if not settings.openai_api_key:
             return await self._invoke_mock(

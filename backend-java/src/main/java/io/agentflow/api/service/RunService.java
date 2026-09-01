@@ -168,27 +168,23 @@ public class RunService {
         }
 
         List<CheckpointEntity> cps = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId());
-        Map<String, Object> checkpointState = null;
         Integer checkpointIndex = null;
         if (!cps.isEmpty()) {
             Integer requested = req != null ? req.getCheckpointIndex() : null;
-            CheckpointEntity chosen;
             if (requested != null) {
-                chosen = cps.stream()
+                CheckpointEntity chosen = cps.stream()
                         .filter(cp -> cp.getIndex() == requested)
                         .findFirst()
                         .orElseThrow(() -> new RunConflictException(
                                 "Cannot retry run " + id + " (checkpoint " + requested + " missing)"));
+                checkpointIndex = chosen.getIndex();
             } else {
-                chosen = cps.get(cps.size() - 1);
+                checkpointIndex = cps.get(cps.size() - 1).getIndex();
             }
-            checkpointState = chosen.getState();
-            checkpointIndex = chosen.getIndex();
         }
 
         Map<String, Object> meta = ResumeMetadata.withoutResume(run.getMetadata());
-        ResumeMetadata.mergeInto(
-                meta, ResumeMetadata.retry(checkpointState, checkpointIndex));
+        ResumeMetadata.mergeInto(meta, ResumeMetadata.retry(checkpointIndex));
         run.setStatus(RunStatus.PENDING);
         run.setError(null);
         run.setMetadata(meta);
@@ -214,17 +210,14 @@ public class RunService {
         }
 
         List<CheckpointEntity> cps = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId());
-        Map<String, Object> checkpointState = null;
         Integer checkpointIndex = null;
         if (!cps.isEmpty()) {
-            CheckpointEntity latest = cps.get(cps.size() - 1);
-            checkpointState = latest.getState();
-            checkpointIndex = latest.getIndex();
+            checkpointIndex = cps.get(cps.size() - 1).getIndex();
         }
 
         Map<String, Object> meta = ResumeMetadata.withoutResume(run.getMetadata());
         ResumeMetadata.mergeInto(
-                meta, ResumeMetadata.resume(checkpointState, checkpointIndex, humanInput));
+                meta, ResumeMetadata.resume(checkpointIndex, humanInput));
         run.setStatus(RunStatus.PENDING);
         run.setMetadata(meta);
         RunEntity saved = runs.save(run);

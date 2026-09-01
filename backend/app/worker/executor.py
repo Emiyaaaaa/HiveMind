@@ -114,6 +114,9 @@ class RunExecutor:
             resume_ctx = parse_resume_context(run.metadata_)
             if resume_ctx is not None:
                 run.metadata_ = without_resume_metadata(dict(run.metadata_ or {}))
+                resume_ctx = await self._hydrate_resume_checkpoint(
+                    service, run.id, resume_ctx
+                )
 
             # Worker crash / Temporal activity retry: the row is still RUNNING
             # (or WAITING_HUMAN if a resume signal raced). Resume from the
@@ -221,6 +224,34 @@ class RunExecutor:
             checkpoint_state=latest.state,
             checkpoint_index=latest.index,
         )
+
+    async def _hydrate_resume_checkpoint(
+        self,
+        service: Any,
+        run_id: str,
+        resume_ctx: RunResumeContext,
+    ) -> RunResumeContext:
+        """Load checkpoint state from DB; metadata only carries the index."""
+        if resume_ctx.checkpoint_index is not None:
+            cp = await service.get_checkpoint_by_index(
+                run_id, resume_ctx.checkpoint_index
+            )
+            if cp is not None:
+                return RunResumeContext(
+                    mode=resume_ctx.mode,
+                    checkpoint_state=cp.state,
+                    checkpoint_index=cp.index,
+                    human_input=resume_ctx.human_input,
+                )
+        latest = await service._latest_checkpoint(run_id)
+        if latest is not None:
+            return RunResumeContext(
+                mode=resume_ctx.mode,
+                checkpoint_state=latest.state,
+                checkpoint_index=latest.index,
+                human_input=resume_ctx.human_input,
+            )
+        return resume_ctx
 
     async def _invoke_adapter(
         self,
