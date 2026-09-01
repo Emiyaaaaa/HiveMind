@@ -89,6 +89,9 @@ _step_duration: Histogram | None = None
 _tool_calls: Counter | None = None
 _tool_errors: Counter | None = None
 _tool_duration: Histogram | None = None
+_memory_checkpoint_bytes: Histogram | None = None
+_memory_messages_per_run: Histogram | None = None
+_memory_prompt_tokens_from_history: Histogram | None = None
 _worker_job_durations = DurationWindow()
 
 
@@ -170,6 +173,8 @@ def shutdown_telemetry() -> None:
     global _worker_utilization, _worker_in_flight, _worker_capacity
     global _llm_tokens, _llm_cost, _run_outcomes
     global _step_outcomes, _step_duration, _tool_calls, _tool_errors, _tool_duration
+    global _memory_checkpoint_bytes, _memory_messages_per_run
+    global _memory_prompt_tokens_from_history
 
     if not _initialized:
         return
@@ -216,6 +221,9 @@ def shutdown_telemetry() -> None:
     _tool_calls = None
     _tool_errors = None
     _tool_duration = None
+    _memory_checkpoint_bytes = None
+    _memory_messages_per_run = None
+    _memory_prompt_tokens_from_history = None
 
 
 def get_tracer() -> Tracer:
@@ -448,6 +456,69 @@ def _ensure_run_instruments() -> None:
             description="Tool call duration",
             unit="s",
         )
+
+
+def _ensure_memory_instruments() -> None:
+    global _memory_checkpoint_bytes, _memory_messages_per_run
+    global _memory_prompt_tokens_from_history
+
+    if _meter is None:
+        setup_telemetry()
+    meter = _meter or metrics.get_meter(get_settings().otel_service_name)
+
+    if _memory_checkpoint_bytes is None:
+        _memory_checkpoint_bytes = meter.create_histogram(
+            "agentflow.memory.checkpoint_bytes",
+            description="Serialized checkpoint JSON size",
+            unit="By",
+        )
+        _memory_messages_per_run = meter.create_histogram(
+            "agentflow.memory.messages_per_run",
+            description="Message count when a run finishes",
+            unit="1",
+        )
+        _memory_prompt_tokens_from_history = meter.create_histogram(
+            "agentflow.memory.prompt_tokens_from_history",
+            description=(
+                "Estimated tokens from prior conversation turns in an LLM prompt"
+            ),
+            unit="1",
+        )
+
+
+def record_checkpoint_bytes(*, adapter: str, checkpoint_bytes: int) -> None:
+    """Record checkpoint blob size (``agentflow.memory.checkpoint_bytes``)."""
+    if not is_enabled() or checkpoint_bytes <= 0:
+        return
+    _ensure_memory_instruments()
+    assert _memory_checkpoint_bytes is not None
+    _memory_checkpoint_bytes.record(
+        checkpoint_bytes, attributes={"adapter": adapter}
+    )
+
+
+def record_messages_per_run(*, adapter: str, message_count: int) -> None:
+    """Record persisted message count at run completion."""
+    if not is_enabled() or message_count <= 0:
+        return
+    _ensure_memory_instruments()
+    assert _memory_messages_per_run is not None
+    _memory_messages_per_run.record(
+        message_count, attributes={"adapter": adapter}
+    )
+
+
+def record_prompt_tokens_from_history(
+    *, adapter: str, tokens: int
+) -> None:
+    """Record history token share of an LLM prompt."""
+    if not is_enabled() or tokens <= 0:
+        return
+    _ensure_memory_instruments()
+    assert _memory_prompt_tokens_from_history is not None
+    _memory_prompt_tokens_from_history.record(
+        tokens, attributes={"adapter": adapter}
+    )
 
 
 def record_llm_usage(

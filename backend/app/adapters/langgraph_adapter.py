@@ -82,7 +82,12 @@ from app.adapters.tool_errors import (
 from app.adapters.tool_registry import ToolDefinition
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import record_prompt_tokens_from_history
 from app.models.run import RunStatus
+from app.runtime.memory_metrics import (
+    estimate_prompt_tokens_from_history,
+    maybe_alert_prompt_tokens_from_history,
+)
 from app.runtime.memory_window import fit_messages_to_window, parse_memory_config
 from app.runtime.pricing import estimate_cost_usd
 from app.runtime.tokens import estimate_tokens
@@ -278,6 +283,7 @@ class _RunState:
     tool_error_policy: ToolErrorPolicy = DEFAULT_TOOL_ERROR_POLICY
     step_index: int = 0
     node_indices: dict[str, int] = field(default_factory=dict)
+    emitted_system_prompts: set[str] = field(default_factory=set)
 
     def next_step_index(self, node_id: str) -> int:
         if node_id not in self.node_indices:
@@ -330,6 +336,9 @@ class LangGraphAdapter(OrchestratorAdapter):
             ),
             max_tool_rounds=max(1, max_rounds),
             tool_error_policy=tool_error_policy,
+            emitted_system_prompts=_emitted_system_prompts_from_messages(
+                ctx.run_messages
+            ),
         )
 
         graph = StateGraph(dict)
@@ -570,10 +579,11 @@ class LangGraphAdapter(OrchestratorAdapter):
             policy = run_state.tool_error_policy
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
-            await ctx.emit_message(role="system", content=system_prompt)
+            await _emit_llm_system_prompt(
+                ctx, run_state, node_id=spec.id, system_prompt=system_prompt
+            )
             user_seed = str(state.get("input", ""))
-            if user_seed:
-                await ctx.emit_message(role="user", content=user_seed)
+            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_seed)
 
             try:
                 for round_idx in range(max_rounds):
@@ -737,8 +747,10 @@ class LangGraphAdapter(OrchestratorAdapter):
                 user_input = f"{user_input}\n\n" + "\n".join(context_bits)
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
-            await ctx.emit_message(role="system", content=system_prompt)
-            await ctx.emit_message(role="user", content=user_input)
+            await _emit_llm_system_prompt(
+                ctx, run_state, node_id=spec.id, system_prompt=system_prompt
+            )
+            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_input)
 
             stream_tokens = run_state.config.get("stream_tokens", True)
             started = time.monotonic()
@@ -821,6 +833,17 @@ class LangGraphAdapter(OrchestratorAdapter):
                 window_tokens=memory_cfg.window_tokens,
                 summarize=memory_cfg.summarize,
             )
+
+        history_tokens = estimate_prompt_tokens_from_history(messages)
+        record_prompt_tokens_from_history(
+            adapter=self.name, tokens=history_tokens
+        )
+        maybe_alert_prompt_tokens_from_history(
+            run_id=ctx.run_id,
+            adapter=self.name,
+            tokens=history_tokens,
+            step_index=step_index,
+        )
 
         settings = get_settings()
         if not settings.openai_api_key:
@@ -1006,6 +1029,62 @@ def _with_completed(state: dict[str, Any], node_id: str) -> list[str]:
     if node_id not in completed:
         completed.append(node_id)
     return completed
+
+
+def _emitted_system_prompts_from_messages(
+    messages: list[dict[str, Any]] | None,
+) -> set[str]:
+    """Seed dedupe state from persisted messages on retry / resume."""
+    if not messages:
+        return set()
+    emitted: set[str] = set()
+    for message in messages:
+        if message.get("role") != "system":
+            continue
+        extra = message.get("extra") or {}
+        if extra.get("kind") == "prompt_echo":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            emitted.add(content)
+    return emitted
+
+
+async def _emit_llm_system_prompt(
+    ctx: AdapterContext,
+    run_state: _RunState,
+    *,
+    node_id: str,
+    system_prompt: str,
+) -> None:
+    """Emit system once per unique prompt; repeats are tagged for UI collapse."""
+    if system_prompt in run_state.emitted_system_prompts:
+        await ctx.emit_message(
+            role="system",
+            content=system_prompt,
+            kind="prompt_echo",
+            node=node_id,
+        )
+        return
+    await ctx.emit_message(role="system", content=system_prompt)
+    run_state.emitted_system_prompts.add(system_prompt)
+
+
+async def _emit_llm_user_prompt(
+    ctx: AdapterContext,
+    *,
+    node_id: str,
+    content: str,
+) -> None:
+    """Record the user-side LLM input without flooding the transcript."""
+    if not content:
+        return
+    await ctx.emit_message(
+        role="user",
+        content=content,
+        kind="prompt_echo",
+        node=node_id,
+    )
 
 
 def _seed_agent_messages(

@@ -42,10 +42,16 @@ def _run_messages_from_events(
         if data.get("tool_call_id"):
             msg["tool_call_id"] = data["tool_call_id"]
         extra = data.get("extra") or {}
+        if extra:
+            msg["extra"] = extra
         if extra.get("tool_calls"):
             msg["tool_calls"] = extra["tool_calls"]
         rows.append(msg)
     return rows
+
+
+def _message_events(events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [data for event, data in events if event == "message.created"]
 
 
 @pytest.mark.asyncio
@@ -136,6 +142,77 @@ async def test_langgraph_multi_node_with_tool():
     assert step_nodes == ["draft", "echo_step", "finalize"]
     tool_events = [e for e, _ in ctx.events if e.startswith("tool_call.")]
     assert len(tool_events) == 2
+
+
+@pytest.mark.asyncio
+async def test_langgraph_dedupes_system_and_tags_user_prompt_echo():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "system_prompt": "Be brief.",
+        "graph": {
+            "nodes": [
+                {"id": "draft", "type": "model"},
+                {"id": "finalize", "type": "model"},
+            ],
+            "edges": [
+                ["__start__", "draft"],
+                ["draft", "finalize"],
+                ["finalize", "__end__"],
+            ],
+        },
+    }
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+
+    messages = _message_events(ctx.events)
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    user_msgs = [m for m in messages if m["role"] == "user"]
+
+    assert len(system_msgs) == 2
+    assert (system_msgs[0].get("extra") or {}).get("kind") is None
+    assert (system_msgs[1].get("extra") or {}).get("kind") == "prompt_echo"
+    assert (system_msgs[1].get("extra") or {}).get("node") == "finalize"
+
+    assert len(user_msgs) == 2
+    assert all((m.get("extra") or {}).get("kind") == "prompt_echo" for m in user_msgs)
+    assert (user_msgs[0].get("extra") or {}).get("node") == "draft"
+    assert (user_msgs[1].get("extra") or {}).get("node") == "finalize"
+
+
+@pytest.mark.asyncio
+async def test_langgraph_resume_seeds_emitted_system_from_run_messages():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "system_prompt": "Be brief.",
+        "graph": {
+            "nodes": [{"id": "draft", "type": "model"}],
+            "edges": [["__start__", "draft"], ["draft", "__end__"]],
+        },
+    }
+    await adapter.run(ctx)
+
+    resume_ctx = _RecordingContext(
+        run_messages=_run_messages_from_events(ctx.events),
+        step_index_base=1,
+    )
+    resume_ctx.agent_config = {
+        **ctx.agent_config,
+        "graph": {
+            "nodes": [{"id": "finalize", "type": "model"}],
+            "edges": [["__start__", "finalize"], ["finalize", "__end__"]],
+        },
+    }
+    await adapter.run(resume_ctx)
+
+    resume_system = [
+        m for m in _message_events(resume_ctx.events) if m["role"] == "system"
+    ]
+    assert len(resume_system) == 1
+    assert (resume_system[0].get("extra") or {}).get("kind") == "prompt_echo"
 
 
 @pytest.mark.asyncio

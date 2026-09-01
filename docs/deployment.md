@@ -72,12 +72,18 @@ needed when running adapters that call external models.
 | `AGENTFLOW_OTEL_EXPORTER_ENDPOINT` | API | OTLP HTTP traces URL (default `http://localhost:4318/v1/traces`) |
 | `AGENTFLOW_OTEL_METRICS_ENDPOINT` | API | OTLP HTTP metrics URL (default `http://localhost:4318/v1/metrics`) |
 | `AGENTFLOW_OTEL_EXPORTER_ENDPOINT` | Worker | OTLP HTTP base URL without path (default `http://localhost:4318`) |
+| `AGENTFLOW_MEMORY_CHECKPOINT_BYTES_ALERT_THRESHOLD` | API + worker | Warn when a checkpoint JSON blob exceeds this many bytes (default `262144`) |
+| `AGENTFLOW_MEMORY_MESSAGES_PER_RUN_ALERT_THRESHOLD` | API + worker | Warn when a finished run persisted this many messages (default `500`) |
+| `AGENTFLOW_MEMORY_PROMPT_TOKENS_FROM_HISTORY_ALERT_THRESHOLD` | API + worker | Warn when an LLM prompt includes this many estimated history tokens (default `8000`) |
 
 RED metric names (both stacks): `agentflow.http.server.*`, `agentflow.worker.job.*`,
 `agentflow.adapter.run.*`. The Python worker also exports queue gauges
 (`agentflow.queue.*`) from the queue monitor and per-process slot usage
 (`agentflow.worker.utilization`, `agentflow.worker.in_flight`,
-`agentflow.worker.capacity`). Run jobs carry W3C `trace_context` in the Redis payload so
+`agentflow.worker.capacity`). Memory volume histograms
+(`agentflow.memory.checkpoint_bytes`, `agentflow.memory.messages_per_run`,
+`agentflow.memory.prompt_tokens_from_history`) track checkpoint blob size,
+message accumulation, and history token pressure. Run jobs carry W3C `trace_context` in the Redis payload so
 worker spans link to the API trace.
 
 Local collector + Prometheus scrape:
@@ -152,6 +158,8 @@ GitHub Actions job `integration` (see `.github/workflows/ci.yml`) runs:
   `app.worker`. Look for `queue.metrics` (baseline depth/lag), `queue.consumer_delay_alert`
   (oldest job wait exceeded threshold), `queue.depth_alert` (backlog count exceeded),
   and `worker.job_p95_alert` (rolling worker-job p95 exceeded threshold).
+  Memory alerts: `memory.checkpoint_bytes_alert`, `memory.messages_per_run_alert`,
+  and `memory.prompt_tokens_from_history_alert` when volume thresholds are exceeded.
 
 ## What not to run in production
 

@@ -11,7 +11,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload, attributes
@@ -31,10 +31,18 @@ from app.models import (
     ToolCall,
 )
 from app.core.telemetry import (
+    record_checkpoint_bytes,
     record_llm_usage,
+    record_messages_per_run,
     record_run_outcome,
     record_step_outcome,
     record_tool_call,
+)
+from app.runtime.memory_metrics import (
+    checkpoint_state_bytes,
+    clear_memory_alerts,
+    maybe_alert_checkpoint_bytes,
+    maybe_alert_messages_per_run,
 )
 from app.runtime.messages import messages_from_rows
 from app.runtime.usage import aggregate_run_usage
@@ -412,6 +420,16 @@ class RunService:
                 tokens_out=usage.tokens_out,
                 cost_usd=usage.cost_usd,
             )
+            message_count = await self._count_messages(run_id)
+            record_messages_per_run(
+                adapter=run.adapter, message_count=message_count
+            )
+            maybe_alert_messages_per_run(
+                run_id=run_id,
+                adapter=run.adapter,
+                message_count=message_count,
+            )
+            clear_memory_alerts(run_id)
 
         usage_payload = usage.model_dump()
         if status == RunStatus.SUCCEEDED:
@@ -571,6 +589,14 @@ class RunService:
             self.session.add(cp)
             await self.session.commit()
             await self._prune_checkpoints(run_id, keep_index=cp_index)
+            run = await self._get_run(run_id)
+            cp_bytes = checkpoint_state_bytes(cp.state)
+            record_checkpoint_bytes(adapter=run.adapter, checkpoint_bytes=cp_bytes)
+            maybe_alert_checkpoint_bytes(
+                run_id=run_id,
+                adapter=run.adapter,
+                checkpoint_bytes=cp_bytes,
+            )
 
         await self._broadcast(event_type, run_id, data)
 
@@ -742,6 +768,11 @@ class RunService:
             if cp.id not in keep_ids:
                 await self.session.delete(cp)
         await self.session.commit()
+
+    async def _count_messages(self, run_id: str) -> int:
+        stmt = select(func.count()).select_from(Message).where(Message.run_id == run_id)
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one() or 0)
 
     async def _next_message_index(self, run_id: str) -> int:
         stmt = (
