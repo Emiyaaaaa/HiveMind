@@ -195,7 +195,6 @@ class RunService:
         if run.status != RunStatus.FAILED:
             raise RunConflict(run_id, run.status, "retry")
 
-        checkpoint_state: dict[str, Any] | None = None
         checkpoint_index: int | None = None
         if run.checkpoints:
             req_index = payload.checkpoint_index if payload else None
@@ -208,18 +207,14 @@ class RunService:
                     raise RunConflict(
                         run_id, run.status, f"retry (checkpoint {req_index} missing)"
                     )
-                checkpoint_state = match.state
                 checkpoint_index = match.index
             else:
-                latest = run.checkpoints[-1]
-                checkpoint_state = latest.state
-                checkpoint_index = latest.index
+                checkpoint_index = run.checkpoints[-1].index
 
         meta = without_resume_metadata(dict(run.metadata_ or {}))
         meta.update(
             resume_metadata(
                 mode="retry",
-                checkpoint_state=checkpoint_state,
                 checkpoint_index=checkpoint_index,
             )
         )
@@ -257,18 +252,14 @@ class RunService:
             merged.update(human_input)
             run.input = merged
 
-        checkpoint_state: dict[str, Any] | None = None
         checkpoint_index: int | None = None
         if run.checkpoints:
-            latest = run.checkpoints[-1]
-            checkpoint_state = latest.state
-            checkpoint_index = latest.index
+            checkpoint_index = run.checkpoints[-1].index
 
         meta = without_resume_metadata(dict(run.metadata_ or {}))
         meta.update(
             resume_metadata(
                 mode="resume",
-                checkpoint_state=checkpoint_state,
                 checkpoint_index=checkpoint_index,
                 human_input=human_input or None,
             )
@@ -710,6 +701,20 @@ class RunService:
             select(Checkpoint)
             .where(Checkpoint.run_id == run_id)
             .order_by(Checkpoint.index.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_checkpoint_by_index(
+        self, run_id: str, checkpoint_index: int
+    ) -> Checkpoint | None:
+        stmt = (
+            select(Checkpoint)
+            .where(
+                Checkpoint.run_id == run_id,
+                Checkpoint.index == checkpoint_index,
+            )
             .limit(1)
         )
         result = await self.session.execute(stmt)

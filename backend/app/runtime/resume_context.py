@@ -10,7 +10,11 @@ RESUME_META_KEY = "_resume"
 
 @dataclass(frozen=True)
 class RunResumeContext:
-    """Adapter-facing resume instructions for a single execution attempt."""
+    """Adapter-facing resume instructions for a single execution attempt.
+
+    ``checkpoint_state`` is hydrated by the worker from the checkpoints table;
+    it is not serialized into ``Run.metadata`` (only ``checkpoint_index`` is).
+    """
 
     mode: Literal["retry", "resume"]
     checkpoint_state: dict[str, Any] | None = None
@@ -21,13 +25,11 @@ class RunResumeContext:
 def resume_metadata(
     *,
     mode: Literal["retry", "resume"],
-    checkpoint_state: dict[str, Any] | None = None,
     checkpoint_index: int | None = None,
     human_input: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build the small ``_resume`` block stored on ``Run.metadata``."""
     payload: dict[str, Any] = {"mode": mode}
-    if checkpoint_state is not None:
-        payload["checkpoint_state"] = checkpoint_state
     if checkpoint_index is not None:
         payload["checkpoint_index"] = checkpoint_index
     if human_input is not None:
@@ -44,9 +46,6 @@ def parse_resume_context(metadata: dict[str, Any] | None) -> RunResumeContext | 
     mode = raw.get("mode")
     if mode not in ("retry", "resume"):
         return None
-    checkpoint_state = raw.get("checkpoint_state")
-    if checkpoint_state is not None and not isinstance(checkpoint_state, dict):
-        checkpoint_state = None
     human_input = raw.get("human_input")
     if human_input is not None and not isinstance(human_input, dict):
         human_input = None
@@ -58,7 +57,6 @@ def parse_resume_context(metadata: dict[str, Any] | None) -> RunResumeContext | 
             checkpoint_index = None
     return RunResumeContext(
         mode=mode,
-        checkpoint_state=checkpoint_state,
         checkpoint_index=checkpoint_index,
         human_input=human_input,
     )
