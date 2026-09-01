@@ -128,6 +128,10 @@ class RunExecutor:
             if resume_ctx is not None and resume_ctx.mode in ("retry", "resume"):
                 step_index_base = (await service._max_step_index(run.id)) + 1
 
+            run_messages = None
+            if resume_ctx is not None:
+                run_messages = await service.load_run_messages(run.id)
+
             run.status = RunStatus.RUNNING
             await session.commit()
             await service._broadcast("run.started", run.id, {})
@@ -147,6 +151,7 @@ class RunExecutor:
                 input=run.input,
                 metadata=run.metadata_,
                 resume=resume_ctx,
+                run_messages=run_messages,
                 step_index_base=step_index_base,
                 emit=_emit,
             )

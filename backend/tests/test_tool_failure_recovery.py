@@ -45,6 +45,23 @@ class _RecordingContext(AdapterContext):
         self.events.append((event_type, data))
 
 
+def _run_messages_from_events(
+    events: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for event, data in events:
+        if event != "message.created":
+            continue
+        msg: dict[str, Any] = {"role": data["role"], "content": data.get("content", "")}
+        if data.get("tool_call_id"):
+            msg["tool_call_id"] = data["tool_call_id"]
+        extra = data.get("extra") or {}
+        if extra.get("tool_calls"):
+            msg["tool_calls"] = extra["tool_calls"]
+        rows.append(msg)
+    return rows
+
+
 def _agent_graph_config(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "model": "openai/gpt-4o-mini",
@@ -280,7 +297,9 @@ async def test_feedback_parallel_success_and_recoverable(monkeypatch: pytest.Mon
     checkpoints = [
         data for event, data in ctx.events if event == "checkpoint.created"
     ]
-    messages = checkpoints[-1]["state"]["graph_state"]["messages"]
+    graph_state = checkpoints[-1]["state"]["graph_state"]
+    assert "messages" not in graph_state
+    messages = _run_messages_from_events(ctx.events)
     tool_msgs = [
         (m["tool_call_id"], json.loads(m["content"]))
         for m in messages
@@ -423,8 +442,7 @@ async def test_provider_tool_call_id_paired_with_lifecycle_call_id():
         data for event, data in ctx.events if event == "checkpoint.created"
     ]
     tool_msgs = [
-        m for m in checkpoints[-1]["state"]["graph_state"]["messages"]
-        if m.get("role") == "tool"
+        m for m in _run_messages_from_events(ctx.events) if m.get("role") == "tool"
     ]
     assert started[0]["call_id"] == completed[0]["call_id"]
     assert len(started[0]["call_id"]) == 26

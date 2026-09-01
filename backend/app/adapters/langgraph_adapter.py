@@ -471,7 +471,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 }
                 await ctx.emit_checkpoint(
                     label=spec.id,
-                    state={"graph_state": {**state, **next_state}},
+                    state=_checkpoint_payload({**state, **next_state}),
                 )
                 return next_state
             except Exception as exc:
@@ -516,7 +516,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 )
                 await ctx.emit_checkpoint(
                     label=spec.id,
-                    state={"graph_state": {**state, **next_state}},
+                    state=_checkpoint_payload({**state, **next_state}),
                 )
                 return next_state
 
@@ -528,7 +528,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             }
             await ctx.emit_checkpoint(
                 label=spec.id,
-                state={"graph_state": pause_state},
+                state=_checkpoint_payload(pause_state),
             )
             raise WaitingHumanInterrupt(
                 output={
@@ -585,15 +585,21 @@ class LangGraphAdapter(OrchestratorAdapter):
                     total_out += response.tokens_out
 
                     if response.tool_calls:
+                        tool_call_payload = [
+                            _openai_tool_call_payload(tc)
+                            for tc in response.tool_calls
+                        ]
                         messages.append(
                             {
                                 "role": "assistant",
                                 "content": response.content or None,
-                                "tool_calls": [
-                                    _openai_tool_call_payload(tc)
-                                    for tc in response.tool_calls
-                                ],
+                                "tool_calls": tool_call_payload,
                             }
+                        )
+                        await ctx.emit_message(
+                            role="assistant",
+                            content=response.content or "",
+                            tool_calls=tool_call_payload,
                         )
 
                         async def _run_one_tool(tc: dict[str, Any]) -> ToolOutcome:
@@ -642,6 +648,11 @@ class LangGraphAdapter(OrchestratorAdapter):
                                     "content": content,
                                 }
                             )
+                            await ctx.emit_message(
+                                role="tool",
+                                content=content,
+                                tool_call_id=str(tc.get("id") or name),
+                            )
                         continue
 
                     final_reply = response.content or ""
@@ -683,7 +694,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 }
                 await ctx.emit_checkpoint(
                     label=spec.id,
-                    state={"graph_state": {**state, **next_state}},
+                    state=_checkpoint_payload({**state, **next_state}),
                 )
                 return next_state
             except WaitingHumanInterrupt:
@@ -780,7 +791,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             }
             await ctx.emit_checkpoint(
                 label=spec.id,
-                state={"graph_state": {**state, **next_state}},
+                state=_checkpoint_payload({**state, **next_state}),
             )
             return next_state
 
@@ -1034,6 +1045,26 @@ def _openai_tool_call_payload(tc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_GRAPH_CONTROL_KEYS = (
+    "input",
+    "reply",
+    "tool_results",
+    "completed_nodes",
+    "pending_human",
+    "human_input",
+    "route",
+)
+
+
+def _graph_control_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Graph control fields only — messages are rebuilt from the messages table."""
+    return {key: state[key] for key in _GRAPH_CONTROL_KEYS if key in state}
+
+
+def _checkpoint_payload(state: dict[str, Any]) -> dict[str, Any]:
+    return {"graph_state": _graph_control_state(state)}
+
+
 def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
     default: dict[str, Any] = {
         "input": ctx.input.get("prompt", ""),
@@ -1048,7 +1079,13 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
     if ctx.resume and ctx.resume.checkpoint_state:
         saved = ctx.resume.checkpoint_state.get("graph_state")
         if isinstance(saved, dict):
-            return {**default, **saved}
+            merged = {**default, **saved}
+            if ctx.run_messages is not None:
+                merged["messages"] = list(ctx.run_messages)
+            elif isinstance(saved.get("messages"), list):
+                # Legacy checkpoints that still inlined messages.
+                merged["messages"] = list(saved["messages"])
+            return merged
     return default
 
 

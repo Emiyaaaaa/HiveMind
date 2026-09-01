@@ -36,6 +36,7 @@ from app.core.telemetry import (
     record_step_outcome,
     record_tool_call,
 )
+from app.runtime.messages import messages_from_rows
 from app.runtime.usage import aggregate_run_usage
 from app.schemas.run import EventType, RunCreate, RunEvent, RunResume, RunRetry
 from app.runtime.resume_context import (
@@ -512,6 +513,7 @@ class RunService:
                 step.status = RunStatus.FAILED
                 step.error = data.get("error")
                 await self.session.commit()
+                await self._retain_latest_checkpoint(run_id, reason="pre_failure")
                 run = await self._get_run(run_id)
                 record_step_outcome(
                     adapter=run.adapter,
@@ -578,6 +580,7 @@ class RunService:
             )
             self.session.add(cp)
             await self.session.commit()
+            await self._prune_checkpoints(run_id, keep_index=cp_index)
 
         await self._broadcast(event_type, run_id, data)
 
@@ -633,6 +636,52 @@ class RunService:
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def load_run_messages(self, run_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            select(Message)
+            .where(Message.run_id == run_id)
+            .order_by(Message.index)
+        )
+        result = await self.session.execute(stmt)
+        return messages_from_rows(list(result.scalars().all()))
+
+    async def _retain_latest_checkpoint(
+        self, run_id: str, *, reason: str
+    ) -> None:
+        cp = await self._latest_checkpoint(run_id)
+        if cp is None:
+            return
+        state = dict(cp.state or {})
+        if state.get("retain"):
+            return
+        state["retain"] = True
+        state["retain_reason"] = reason
+        cp.state = state
+        await self.session.commit()
+
+    async def _prune_checkpoints(self, run_id: str, *, keep_index: int) -> None:
+        stmt = (
+            select(Checkpoint)
+            .where(Checkpoint.run_id == run_id)
+            .order_by(Checkpoint.index)
+        )
+        result = await self.session.execute(stmt)
+        checkpoints = list(result.scalars().all())
+        keep_ids: set[str] = set()
+        for cp in checkpoints:
+            state = cp.state or {}
+            graph = state.get("graph_state") or {}
+            if cp.index == keep_index:
+                keep_ids.add(cp.id)
+            elif graph.get("pending_human"):
+                keep_ids.add(cp.id)
+            elif state.get("retain"):
+                keep_ids.add(cp.id)
+        for cp in checkpoints:
+            if cp.id not in keep_ids:
+                await self.session.delete(cp)
+        await self.session.commit()
 
     async def _next_message_index(self, run_id: str) -> int:
         stmt = (
