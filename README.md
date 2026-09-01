@@ -1,4 +1,4 @@
-# AgentFlow
+# HiveMind
 
 > A Python-first runtime layer for multi-agent systems, with persistent run
 > state, streaming execution events, and a pluggable orchestration interface.
