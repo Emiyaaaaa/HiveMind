@@ -15,7 +15,10 @@ from app.core.telemetry import (
     capture_trace_context,
     get_worker_job_duration_window,
     is_enabled,
+    record_checkpoint_bytes,
     record_llm_usage,
+    record_messages_per_run,
+    record_prompt_tokens_from_history,
     record_queue_metrics,
     record_run_outcome,
     record_step_outcome,
@@ -150,6 +153,9 @@ def test_otel_queue_and_worker_gauges_export():
             outcome="error",
             latency_ms=40,
         )
+        record_checkpoint_bytes(adapter="langgraph", checkpoint_bytes=4096)
+        record_messages_per_run(adapter="langgraph", message_count=12)
+        record_prompt_tokens_from_history(adapter="langgraph", tokens=1500)
         exported = _metric_values(reader)
         assert exported["agentflow.queue.backlog"] == 5.0
         assert exported["agentflow.queue.consumer_delay"] == 30.0
@@ -161,3 +167,6 @@ def test_otel_queue_and_worker_gauges_export():
         assert exported["agentflow.step.outcomes"] == 1.0
         assert exported["agentflow.tool.calls"] == 1.0
         assert exported["agentflow.tool.errors"] == 1.0
+        assert exported["agentflow.memory.checkpoint_bytes"] == 4096.0
+        assert exported["agentflow.memory.messages_per_run"] == 12.0
+        assert exported["agentflow.memory.prompt_tokens_from_history"] == 1500.0

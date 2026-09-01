@@ -31,6 +31,53 @@ groups:
             HTTP server p95 duration has exceeded 5s for 5 minutes
             (current value {{ $value | humanizeDuration }}).
 
+  - name: agentflow_memory
+    rules:
+      - alert: AgentFlowCheckpointBytesHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(agentflow_memory_checkpoint_bytes_bucket[5m])) by (le)
+          ) > 262144
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Checkpoint JSON blobs are large
+          description: >
+            p95 checkpoint size exceeds 256 KiB
+            (current value {{ $value | humanize1024 }}B).
+
+      - alert: AgentFlowMessagesPerRunHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(agentflow_memory_messages_per_run_bucket[5m])) by (le)
+          ) > 500
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Runs are accumulating many messages
+          description: >
+            p95 messages per run exceeds 500
+            (current value {{ $value }}).
+
+      - alert: AgentFlowPromptTokensFromHistoryHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(agentflow_memory_prompt_tokens_from_history_bucket[5m])) by (le)
+          ) > 8000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: LLM prompts include large conversation history
+          description: >
+            p95 prompt history tokens exceeds 8000
+            (current value {{ $value }}).
+
   - name: agentflow_reliability
     rules:
       - alert: AgentFlowDlqGrowing

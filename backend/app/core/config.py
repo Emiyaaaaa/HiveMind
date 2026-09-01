@@ -273,6 +273,28 @@ class Settings(BaseSettings):
         description="Upper bound for limit on GET /v1/runs/{id}/messages.",
     )
 
+    memory_checkpoint_bytes_alert_threshold: int = Field(
+        default=262_144,
+        ge=1024,
+        description=(
+            "Log a warning when a checkpoint JSON blob exceeds this many bytes "
+            "(default 256 KiB)."
+        ),
+    )
+    memory_messages_per_run_alert_threshold: int = Field(
+        default=500,
+        ge=1,
+        description="Log a warning when a run persists this many messages.",
+    )
+    memory_prompt_tokens_from_history_alert_threshold: int = Field(
+        default=8000,
+        ge=1,
+        description=(
+            "Log a warning when an LLM prompt includes at least this many "
+            "estimated tokens from prior conversation turns."
+        ),
+    )
+
 
 def effective_jobs_impl(settings: Settings | None = None) -> JobsImpl:
     """Resolve the job protocol Java and Python must agree on."""

@@ -11,6 +11,10 @@ interface MessagesPanelProps {
   messagesTruncated: boolean;
 }
 
+function isPromptEcho(message: Message): boolean {
+  return message.extra?.kind === "prompt_echo";
+}
+
 function mergeMessages(...groups: Message[][]): Message[] {
   const byIndex = new Map<number, Message>();
   for (const group of groups) {
@@ -19,6 +23,41 @@ function mergeMessages(...groups: Message[][]): Message[] {
     }
   }
   return [...byIndex.values()].sort((a, b) => a.index - b.index);
+}
+
+function PromptEchoRow({
+  message,
+  expanded,
+  onToggle,
+}: {
+  message: Message;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const node =
+    typeof message.extra.node === "string" ? message.extra.node : null;
+
+  return (
+    <li className="rounded border border-dashed border-border bg-surface/60 p-2 text-sm">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 text-left text-xs text-muted hover:text-foreground"
+        onClick={onToggle}
+      >
+        <span>
+          {message.role} prompt echo
+          {node ? ` · ${node}` : ""}
+          <span className="ml-2 font-mono normal-case">#{message.index}</span>
+        </span>
+        <span>{expanded ? "Hide" : "Show"}</span>
+      </button>
+      {expanded ? (
+        <div className="mt-2 whitespace-pre-wrap text-foreground">
+          {message.content}
+        </div>
+      ) : null}
+    </li>
+  );
 }
 
 export function MessagesPanel({
@@ -30,16 +69,25 @@ export function MessagesPanel({
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(messagesTruncated);
   const [loading, setLoading] = useState(false);
+  const [expandedEchoes, setExpandedEchoes] = useState<Set<number>>(
+    () => new Set(),
+  );
 
   useEffect(() => {
     setOlder([]);
     setNextCursor(null);
     setHasMore(messagesTruncated);
+    setExpandedEchoes(new Set());
   }, [runId, messagesTruncated]);
 
   const displayed = useMemo(
     () => mergeMessages(older, messages),
     [older, messages],
+  );
+
+  const promptEchoCount = useMemo(
+    () => displayed.filter(isPromptEcho).length,
+    [displayed],
   );
 
   async function loadOlder() {
@@ -58,6 +106,18 @@ export function MessagesPanel({
     }
   }
 
+  function toggleEcho(index: number) {
+    setExpandedEchoes((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  }
+
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
@@ -65,6 +125,9 @@ export function MessagesPanel({
         {displayed.length > 0 ? (
           <span className="text-xs text-muted">
             {displayed.length} shown
+            {promptEchoCount > 0
+              ? ` · ${promptEchoCount} prompt echo${promptEchoCount === 1 ? "" : "es"} collapsed`
+              : ""}
             {hasMore ? " · older available" : ""}
           </span>
         ) : null}
@@ -82,19 +145,30 @@ export function MessagesPanel({
       ) : null}
 
       <ol className="max-h-[32rem] space-y-2 overflow-y-auto pr-1">
-        {displayed.map((message) => (
-          <li
-            key={message.id}
-            className="rounded border border-border bg-surface p-3 text-sm"
-          >
-            <div className="mb-1 text-xs uppercase tracking-wide text-muted">
-              {message.role}
-              {message.name ? ` · ${message.name}` : ""}
-              <span className="ml-2 font-mono normal-case">#{message.index}</span>
-            </div>
-            <div className="whitespace-pre-wrap">{message.content}</div>
-          </li>
-        ))}
+        {displayed.map((message) =>
+          isPromptEcho(message) ? (
+            <PromptEchoRow
+              key={message.id}
+              message={message}
+              expanded={expandedEchoes.has(message.index)}
+              onToggle={() => toggleEcho(message.index)}
+            />
+          ) : (
+            <li
+              key={message.id}
+              className="rounded border border-border bg-surface p-3 text-sm"
+            >
+              <div className="mb-1 text-xs uppercase tracking-wide text-muted">
+                {message.role}
+                {message.name ? ` · ${message.name}` : ""}
+                <span className="ml-2 font-mono normal-case">
+                  #{message.index}
+                </span>
+              </div>
+              <div className="whitespace-pre-wrap">{message.content}</div>
+            </li>
+          ),
+        )}
       </ol>
 
       {displayed.length === 0 ? (
