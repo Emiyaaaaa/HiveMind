@@ -43,6 +43,8 @@ class AdapterContext:
     input: dict[str, Any]
     metadata: dict[str, Any] = field(default_factory=dict)
     resume: RunResumeContext | None = None
+    # Ordered chat history loaded from the messages table on retry / resume.
+    run_messages: list[dict[str, Any]] | None = None
     step_index_base: int = 0
     emit: EmitCallback = field(
         default=None  # type: ignore[assignment]
@@ -103,12 +105,23 @@ class AdapterContext:
         )
 
     async def emit_message(
-        self, *, role: str, content: str, name: str | None = None, **extra: Any
+        self,
+        *,
+        role: str,
+        content: str,
+        name: str | None = None,
+        tool_call_id: str | None = None,
+        **extra: Any,
     ) -> None:
-        await self.emit(
-            "message.created",
-            {"role": role, "content": content, "name": name, "extra": extra},
-        )
+        payload: dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "name": name,
+            "extra": extra,
+        }
+        if tool_call_id is not None:
+            payload["tool_call_id"] = tool_call_id
+        await self.emit("message.created", payload)
 
     async def emit_tool_call_started(
         self,

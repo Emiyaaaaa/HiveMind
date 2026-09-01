@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from app.adapters.base import AdapterContext
-from app.adapters.langgraph_adapter import GraphSpec, LangGraphAdapter
+from app.adapters.langgraph_adapter import GraphSpec, LangGraphAdapter, _checkpoint_payload
 from app.adapters.tool_registry import get_tool, list_tools, register_tool, resolve_tools
 from app.models.run import RunStatus
 from app.runtime.resume_context import RunResumeContext
@@ -27,6 +27,25 @@ class _RecordingContext(AdapterContext):
 
     async def _emit(self, event_type: str, data: dict[str, Any]) -> None:
         self.events.append((event_type, data))
+
+
+def _run_messages_from_events(
+    events: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for event, data in events:
+        if event != "message.created":
+            continue
+        msg: dict[str, Any] = {"role": data["role"], "content": data.get("content", "")}
+        if data.get("name"):
+            msg["name"] = data["name"]
+        if data.get("tool_call_id"):
+            msg["tool_call_id"] = data["tool_call_id"]
+        extra = data.get("extra") or {}
+        if extra.get("tool_calls"):
+            msg["tool_calls"] = extra["tool_calls"]
+        rows.append(msg)
+    return rows
 
 
 @pytest.mark.asyncio
@@ -277,6 +296,7 @@ async def test_langgraph_human_node_pauses_and_resumes():
     graph_state = checkpoints[-1]["state"]["graph_state"]
     assert graph_state["pending_human"] == "approve"
     assert "draft" in graph_state["completed_nodes"]
+    assert "messages" not in graph_state
 
     resume_ctx = _RecordingContext(
         resume=RunResumeContext(
@@ -284,6 +304,7 @@ async def test_langgraph_human_node_pauses_and_resumes():
             checkpoint_state={"graph_state": graph_state},
             human_input={"route": "approved", "note": "lgtm"},
         ),
+        run_messages=_run_messages_from_events(ctx.events),
         step_index_base=1,
     )
     resume_ctx.agent_config = ctx.agent_config
@@ -351,3 +372,18 @@ async def test_langgraph_conditional_reject_skips_finalize():
     ]
     assert step_nodes == ["approve"]
     assert result.output == {"reply": "[mock] draft"}
+
+
+def test_checkpoint_payload_omits_messages():
+    state = {
+        "input": "hello",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reply": "done",
+        "completed_nodes": ["draft"],
+        "pending_human": "approve",
+    }
+    payload = _checkpoint_payload(state)
+    graph = payload["graph_state"]
+    assert graph["reply"] == "done"
+    assert graph["pending_human"] == "approve"
+    assert "messages" not in graph
