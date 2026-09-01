@@ -1,4 +1,4 @@
-import type { Agent, AgentVersion, AgentVersionDiff, Run } from "./types";
+import type { Agent, AgentVersion, AgentVersionDiff, MessagePage, Run } from "./types";
 import { normalizeUsage } from "./usage";
 
 function authHeaders(): Record<string, string> {
@@ -35,6 +35,22 @@ export const api = {
     return runs.map(normalizeRun);
   },
   getRun: async (id: string) => normalizeRun(await request<Run>(`/v1/runs/${id}`)),
+  listRunMessages: async (
+    id: string,
+    params?: { cursor?: number; limit?: number },
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.cursor != null) {
+      search.set("cursor", String(params.cursor));
+    }
+    if (params?.limit != null) {
+      search.set("limit", String(params.limit));
+    }
+    const query = search.toString();
+    return request<MessagePage>(
+      `/v1/runs/${id}/messages${query ? `?${query}` : ""}`,
+    );
+  },
   cancelRun: (id: string) =>
     request<void>(`/v1/runs/${id}/cancel`, { method: "POST" }),
   retryRun: async (id: string, body?: { checkpoint_index?: number }) =>

@@ -4,7 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthPrincipal, Role, require_role
 from app.db.session import get_session
 from app.events import EventBus, get_event_bus
-from app.schemas.run import RunCreate, RunRead, RunResume, RunRetry, run_read_from_orm
+from app.schemas.run import (
+    MessagePage,
+    RunCreate,
+    RunRead,
+    RunResume,
+    RunRetry,
+    run_read_from_orm,
+)
 from app.services.run_service import (
     AgentNotFound,
     RunConflict,
@@ -20,6 +27,27 @@ def get_run_service(
     bus: EventBus = Depends(get_event_bus),
 ) -> RunService:
     return RunService(session=session, bus=bus)
+
+
+async def _run_read(
+    service: RunService,
+    run_id: str,
+    principal: AuthPrincipal,
+) -> RunRead:
+    run = await service.get_run(
+        run_id,
+        with_relations=True,
+        tenant_id=principal.tenant_id,
+        project_id=principal.project_id,
+        agent_id=principal.agent_id,
+    )
+    truncated = await service.hydrate_run_messages(
+        run,
+        tenant_id=principal.tenant_id,
+        project_id=principal.project_id,
+        agent_id=principal.agent_id,
+    )
+    return run_read_from_orm(run, messages_truncated=truncated)
 
 
 @router.post("", response_model=RunRead, status_code=status.HTTP_202_ACCEPTED)
@@ -39,14 +67,10 @@ async def create_run(
         raise HTTPException(status_code=404, detail=f"Agent not found: {exc}") from exc
 
     await service.start_run(run.id)
-    run = await service.get_run(
-        run.id,
-        with_relations=True,
-        tenant_id=principal.tenant_id,
-        project_id=principal.project_id,
-        agent_id=principal.agent_id,
-    )
-    return run_read_from_orm(run)
+    try:
+        return await _run_read(service, run.id, principal)
+    except RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
 
 
 @router.get("", response_model=list[RunRead])
@@ -71,16 +95,30 @@ async def get_run(
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> RunRead:
     try:
-        run = await service.get_run(
+        return await _run_read(service, run_id, principal)
+    except RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
+
+
+@router.get("/{run_id}/messages", response_model=MessagePage)
+async def list_run_messages(
+    run_id: str,
+    cursor: int | None = None,
+    limit: int = 50,
+    service: RunService = Depends(get_run_service),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
+) -> MessagePage:
+    try:
+        return await service.list_messages(
             run_id,
-            with_relations=True,
+            cursor=cursor,
+            limit=limit,
             tenant_id=principal.tenant_id,
             project_id=principal.project_id,
             agent_id=principal.agent_id,
         )
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
-    return run_read_from_orm(run)
 
 
 @router.post("/{run_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
@@ -106,7 +144,7 @@ async def retry_run(
     principal: AuthPrincipal = Depends(require_role(Role.OPERATOR)),
 ) -> RunRead:
     try:
-        run = await service.retry_run(
+        await service.retry_run(
             run_id, payload, tenant_id=principal.tenant_id,
             project_id=principal.project_id, agent_id=principal.agent_id,
         )
@@ -114,7 +152,7 @@ async def retry_run(
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
     except RunConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return run_read_from_orm(run)
+    return await _run_read(service, run_id, principal)
 
 
 @router.post("/{run_id}/resume", response_model=RunRead, status_code=status.HTTP_202_ACCEPTED)
@@ -125,7 +163,7 @@ async def resume_run(
     principal: AuthPrincipal = Depends(require_role(Role.OPERATOR)),
 ) -> RunRead:
     try:
-        run = await service.resume_run(
+        await service.resume_run(
             run_id, payload, tenant_id=principal.tenant_id,
             project_id=principal.project_id, agent_id=principal.agent_id,
         )
@@ -133,4 +171,4 @@ async def resume_run(
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
     except RunConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return run_read_from_orm(run)
+    return await _run_read(service, run_id, principal)

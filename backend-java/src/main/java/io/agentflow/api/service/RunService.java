@@ -1,6 +1,7 @@
 package io.agentflow.api.service;
 
 import io.agentflow.api.dto.CheckpointResponse;
+import io.agentflow.api.dto.MessagePageResponse;
 import io.agentflow.api.dto.MessageResponse;
 import io.agentflow.api.dto.RunCreateRequest;
 import io.agentflow.api.dto.RunResponse;
@@ -10,6 +11,7 @@ import io.agentflow.api.entity.CheckpointEntity;
 import io.agentflow.api.dto.StepResponse;
 import io.agentflow.api.dto.ToolCallResponse;
 import io.agentflow.api.entity.AgentEntity;
+import io.agentflow.api.entity.MessageEntity;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.entity.RunStatus;
 import io.agentflow.api.entity.StepEntity;
@@ -24,6 +26,7 @@ import io.agentflow.api.repository.ToolCallRepository;
 import io.agentflow.api.security.AccessControl;
 import io.agentflow.api.security.Role;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -145,6 +148,14 @@ public class RunService {
         return toResponse(requireRun(id, Role.VIEWER));
     }
 
+    @Transactional(readOnly = true)
+    public MessagePageResponse listMessages(String id, Integer cursor, int limit) {
+        RunEntity run = requireRun(id, Role.VIEWER);
+        int capped = Math.max(1, Math.min(limit, MessagePagination.PAGE_MAX));
+        MessagePage page = fetchMessagePage(run.getId(), cursor, capped);
+        return MessagePageResponse.of(page.items(), page.nextCursor(), page.hasMore());
+    }
+
     /** Ensure the run exists in the caller's tenant (for SSE and cross-service checks). */
     @Transactional(readOnly = true)
     public void requireAccessible(String id) {
@@ -260,14 +271,47 @@ public class RunService {
         List<StepResponse> stepDtos = stepEntities.stream()
                 .map(s -> StepResponse.fromEntity(s, toolsByStep.getOrDefault(s.getId(), List.of())))
                 .toList();
-        List<MessageResponse> messageDtos = messages.findAllByRunIdOrderByIndexAsc(run.getId())
-                .stream()
-                .map(MessageResponse::fromEntity)
-                .toList();
+        List<MessageResponse> messageDtos;
+        boolean messagesTruncated;
+        if (MessagePagination.PREVIEW_LIMIT <= 0) {
+            messageDtos = List.of();
+            MessagePage probe = fetchMessagePage(run.getId(), null, 1);
+            messagesTruncated = !probe.items().isEmpty();
+        } else {
+            MessagePage preview = fetchMessagePage(
+                    run.getId(), null, MessagePagination.PREVIEW_LIMIT);
+            messageDtos = preview.items();
+            messagesTruncated = preview.hasMore();
+        }
         List<CheckpointResponse> checkpointDtos = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId())
                 .stream()
                 .map(CheckpointResponse::fromEntity)
                 .toList();
-        return RunResponse.fromEntity(run, stepDtos, messageDtos, checkpointDtos);
+        return RunResponse.fromEntity(
+                run, stepDtos, messageDtos, messagesTruncated, checkpointDtos);
     }
+
+    private MessagePage fetchMessagePage(String runId, Integer cursor, int limit) {
+        List<MessageEntity> rows;
+        if (cursor == null) {
+            rows = new ArrayList<>(
+                    messages.findByRunIdOrderByIndexDesc(runId, PageRequest.of(0, limit + 1)));
+        } else {
+            rows = new ArrayList<>(messages.findByRunIdAndIndexLessThanOrderByIndexDesc(
+                    runId, cursor, PageRequest.of(0, limit + 1)));
+        }
+        boolean hasMore = rows.size() > limit;
+        if (hasMore) {
+            rows = rows.subList(0, limit);
+        }
+        Collections.reverse(rows);
+        List<MessageResponse> items = rows.stream()
+                .map(MessageResponse::fromEntity)
+                .toList();
+        Integer nextCursor = !items.isEmpty() && hasMore ? items.getFirst().getIndex() : null;
+        return new MessagePage(items, nextCursor, hasMore);
+    }
+
+    private record MessagePage(
+            List<MessageResponse> items, Integer nextCursor, boolean hasMore) {}
 }

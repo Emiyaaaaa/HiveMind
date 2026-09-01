@@ -1,5 +1,6 @@
 package io.agentflow.api.controller;
 
+import io.agentflow.api.dto.MessagePageResponse;
 import io.agentflow.api.dto.RunCreateRequest;
 import io.agentflow.api.dto.RunResponse;
 import io.agentflow.api.dto.RunResumeRequest;
@@ -41,6 +42,14 @@ public class RunsController {
     @GetMapping("/{id}")
     public RunResponse get(@PathVariable String id) {
         return service.get(id);
+    }
+
+    @GetMapping("/{id}/messages")
+    public MessagePageResponse listMessages(
+            @PathVariable String id,
+            @RequestParam(required = false) Integer cursor,
+            @RequestParam(defaultValue = "50") int limit) {
+        return service.listMessages(id, cursor, limit);
     }
 
     @PostMapping("/{id}/cancel")

@@ -55,6 +55,17 @@ class MessageRead(BaseModel):
     created_at: datetime
 
 
+class MessagePage(BaseModel):
+    """Cursor page of run messages in ascending index order."""
+
+    items: list[MessageRead]
+    next_cursor: int | None = Field(
+        default=None,
+        description="Pass as cursor to fetch older messages (index exclusive).",
+    )
+    has_more: bool = False
+
+
 class StepRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -99,6 +110,7 @@ class RunRead(BaseModel):
     updated_at: datetime
     steps: list[StepRead] = []
     messages: list[MessageRead] = []
+    messages_truncated: bool = False
     checkpoints: list[CheckpointRead] = []
     usage: RunUsage = Field(default_factory=RunUsage)
 
@@ -109,14 +121,25 @@ class RunRead(BaseModel):
         return self
 
 
-def run_read_from_orm(run: Run) -> RunRead:
+def run_read_from_orm(
+    run: Run,
+    *,
+    messages_truncated: bool = False,
+) -> RunRead:
     """Build API run DTO with usage from steps or persisted metadata."""
     dto = RunRead.model_validate(run)
+    updates: dict[str, Any] = {}
+    if messages_truncated:
+        updates["messages_truncated"] = True
     if dto.steps:
+        if updates:
+            return dto.model_copy(update=updates)
         return dto
     stored = usage_from_metadata(run.metadata_)
     if stored is not None:
-        return dto.model_copy(update={"usage": stored})
+        updates["usage"] = stored
+    if updates:
+        return dto.model_copy(update=updates)
     return dto
 
 
