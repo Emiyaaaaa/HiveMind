@@ -8,6 +8,7 @@ public class MessageResponse {
 
     private String id;
     private int index;
+    private String stepId;
     private String role;
     private String name;
     private String content;
@@ -19,6 +20,7 @@ public class MessageResponse {
         MessageResponse dto = new MessageResponse();
         dto.id = entity.getId();
         dto.index = entity.getIndex();
+        dto.stepId = entity.getStepId();
         dto.role = entity.getRole();
         dto.name = entity.getName();
         dto.content = entity.getContent();
@@ -34,6 +36,10 @@ public class MessageResponse {
 
     public int getIndex() {
         return index;
+    }
+
+    public String getStepId() {
+        return stepId;
     }
 
     public String getRole() {

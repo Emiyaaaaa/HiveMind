@@ -125,9 +125,9 @@ L0 属于执行与审计；L1–L3 才是「Agent Memory」。L0 不能删，但
 4. **LLM 上下文窗口。** LangGraph `agent`/`model` 节点在 `_invoke_model` 前做 token 预算：保留 system + 最近 N 轮，超出则先摘要再调用。配置项建议：`memory.window_tokens`、`memory.summarize`。无窗口管理时，长 Run 会同时烧 token 并撑爆 checkpoint。
 5. **Message 分页与投影。** 新增 `GET /v1/runs/{id}/messages?cursor=&limit=`；`GET /v1/runs/{id}` 默认只带最近 K 条或省略 messages。控制台改为分页/虚拟列表。长对话的一次全量 hydrate 会拖垮 API 与前端。
 6. **减少重复 emit。** `model` 节点每个 tick 都 `emit_message(system)` + `emit_message(user)`，transcript 被 system prompt 刷屏。改为 run 级一次 system，或标记 `extra.kind=prompt_echo` 供 UI 折叠。
-7. **`emit_message` 关联 `step_id`。** 当前多数 adapter 不传 step，时间线与消息对不上。契约补 `step_index`，runtime 解析为 `step_id`。
+7. ~~**`emit_message` 关联 `step_id`。**~~ 契约补 `step_index`，runtime 解析为 `step_id`；各 adapter 已传递；SSE/API `Message.step_id` 与控制台 Messages 面板对齐。
 8. **体积与保留指标。** 导出 `agentflow.memory.checkpoint_bytes`、`messages_per_run`、`prompt_tokens_from_history`；超阈值告警。超大 JSON 没有指标时要到磁盘满才发现。
-9. **租户级保留 / 擦除。** `tenant` 或 `thread` TTL、GDPR 式删除（Message + Checkpoint + 未来 Memory 行）。与现有 RBAC `tenant_id` 对齐，避免记忆表成为审计盲区。
+9. ~~**租户级保留 / 擦除。**~~ `POST /v1/runs/{id}/erase`、`POST /v1/organization/erase`、`POST /v1/retention/purge` + worker TTL sweeper；与 RBAC `tenant_id` 对齐；`MemoryErasureHook` 预留未来 Memory 行。
 
 ---
 

@@ -31,7 +31,7 @@ below are relative to that backend root.
 | --- | --- |
 | `viewer` | List/get agents, runs, versions, SSE |
 | `operator` | viewer + create/cancel/retry/resume runs |
-| `admin` | operator + create/update/restore agents |
+| `admin` | operator + create/update/restore agents + data erasure / retention purge |
 
 ## Endpoints
 
@@ -364,6 +364,61 @@ Adapters should pass the ``call_id`` returned from ``emit_tool_call_started``
 into ``emit_tool_call_completed``. When ``call_id`` is omitted on completed,
 the runtime falls back to the oldest incomplete call with a matching name.
 
+``message.created`` — adapters emit ``step_index``; the runtime resolves it to
+the persisted ``step_id`` (nullable when omitted). Broadcast payload:
+
+```json
+{
+  "role": "assistant",
+  "content": "hello",
+  "step_index": 0,
+  "index": 3,
+  "step_id": "01HZ...",
+  "extra": {}
+}
+```
+
+### `POST /v1/runs/{run_id}/erase` → 200
+
+Admin-only GDPR-style erasure of run working memory: deletes all ``Message`` and
+``Checkpoint`` rows, clears ``output`` and ``_resume`` metadata, and drops the
+Redis event replay stream. Step rows are kept for audit. Returns **409** while
+the run is ``pending`` or ``running``.
+
+```json
+{ "run_id": "01HZ...", "messages_deleted": 12, "checkpoints_deleted": 4 }
+```
+
+### `POST /v1/organization/erase` → 200
+
+Admin-only tenant-wide erasure for the authenticated ``tenant_id``.
+
+```json
+{
+  "tenant_id": "default",
+  "runs_processed": 42,
+  "messages_deleted": 900,
+  "checkpoints_deleted": 120
+}
+```
+
+### `POST /v1/retention/purge` → 200
+
+Admin-only TTL purge for terminal runs older than
+``AGENTFLOW_DATA_RETENTION_TENANT_TTL_DAYS`` (0 = disabled). The Python worker
+also runs this sweep in the background when TTL is configured.
+
+```json
+{
+  "tenant_id": "default",
+  "runs_purged": 5,
+  "messages_deleted": 80,
+  "checkpoints_deleted": 10
+}
+```
+
+Optional body: ``{ "tenant_id": "default", "dry_run": false }``.
+
 ## Schemas
 
 ### `Agent`
@@ -489,6 +544,7 @@ ops dashboards.
 {
   id: string;
   index: number;
+  step_id: string | null;
   role: "system" | "user" | "assistant" | "tool";
   name: string | null;
   content: string;

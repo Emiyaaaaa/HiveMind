@@ -16,4 +16,6 @@ public interface RunRepository extends JpaRepository<RunEntity, String> {
             @Param("tenantId") String tenantId, Pageable pageable);
 
     Optional<RunEntity> findByIdAndTenantId(String id, String tenantId);
+
+    List<RunEntity> findAllByTenantId(String tenantId);
 }

@@ -14,6 +14,7 @@ public class AgentflowProperties {
     private Otel otel = new Otel();
     private Auth auth = new Auth();
     private Temporal temporal = new Temporal();
+    private Retention retention = new Retention();
 
     public String getVersion() {
         return version;
@@ -77,6 +78,14 @@ public class AgentflowProperties {
 
     public void setTemporal(Temporal temporal) {
         this.temporal = temporal;
+    }
+
+    public Retention getRetention() {
+        return retention;
+    }
+
+    public void setRetention(Retention retention) {
+        this.retention = retention;
     }
 
     public static class Auth {
@@ -412,6 +421,36 @@ public class AgentflowProperties {
 
         public void setSseHeartbeatSeconds(long sseHeartbeatSeconds) {
             this.sseHeartbeatSeconds = sseHeartbeatSeconds;
+        }
+    }
+
+    public static class Retention {
+        private int tenantTtlDays = 0;
+        private long purgeIntervalSeconds = 3600;
+        private int purgeBatchSize = 100;
+
+        public int getTenantTtlDays() {
+            return tenantTtlDays;
+        }
+
+        public void setTenantTtlDays(int tenantTtlDays) {
+            this.tenantTtlDays = tenantTtlDays;
+        }
+
+        public long getPurgeIntervalSeconds() {
+            return purgeIntervalSeconds;
+        }
+
+        public void setPurgeIntervalSeconds(long purgeIntervalSeconds) {
+            this.purgeIntervalSeconds = purgeIntervalSeconds;
+        }
+
+        public int getPurgeBatchSize() {
+            return purgeBatchSize;
+        }
+
+        public void setPurgeBatchSize(int purgeBatchSize) {
+            this.purgeBatchSize = purgeBatchSize;
         }
     }
 }

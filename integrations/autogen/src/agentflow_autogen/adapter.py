@@ -153,7 +153,8 @@ class _StreamHandler:
 
     async def emit_user_prompt(self, prompt: str) -> None:
         self._pending_user_prompt = prompt
-        await self.ctx.emit_message(role="user", content=prompt)
+        step_index = self._current_step_index if self.step_started else None
+        await self.ctx.emit_message(role="user", content=prompt, step_index=step_index)
 
     async def handle(self, event: Any, *, bridged_names: frozenset[str]) -> None:
         if isinstance(event, ModelClientStreamingChunkEvent):
@@ -185,7 +186,9 @@ class _StreamHandler:
             if self._pending_user_prompt is not None and content == self._pending_user_prompt:
                 self._pending_user_prompt = None
                 return
-            await self.ctx.emit_message(role="user", content=content, name=message.source)
+            await self.ctx.emit_message(
+                role="user", content=content, name=message.source, step_index=self._current_step_index
+            )
             return
 
         if self.per_turn_steps:
@@ -205,6 +208,7 @@ class _StreamHandler:
                 role="assistant",
                 content=content,
                 name=message.source,
+                step_index=self._current_step_index,
             )
 
     async def _handle_tool_request(

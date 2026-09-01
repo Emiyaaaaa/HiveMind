@@ -295,6 +295,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    data_retention_tenant_ttl_days: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "When > 0, terminal runs older than this many days have messages "
+            "and checkpoints purged automatically. 0 disables TTL sweeps."
+        ),
+    )
+    data_retention_purge_interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description="Worker sweeper interval for tenant TTL purge.",
+    )
+    data_retention_purge_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Maximum runs purged per sweeper cycle per tenant.",
+    )
+
 
 def effective_jobs_impl(settings: Settings | None = None) -> JobsImpl:
     """Resolve the job protocol Java and Python must agree on."""

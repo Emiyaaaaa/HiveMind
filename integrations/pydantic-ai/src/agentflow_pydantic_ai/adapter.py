@@ -46,7 +46,7 @@ class PydanticAIAdapter(OrchestratorAdapter):
         bridged_tool_calls: set[str] = set()
 
         await ctx.emit_step_started(index=step_index, node=node)
-        await ctx.emit_message(role="user", content=prompt)
+        await ctx.emit_message(role="user", content=prompt, step_index=step_index)
         started = time.monotonic()
 
         try:
@@ -104,7 +104,7 @@ class PydanticAIAdapter(OrchestratorAdapter):
             if usage.cost is not None:
                 metrics["cost_usd"] = float(usage.cost)
 
-            await ctx.emit_message(role="assistant", content=output["reply"])
+            await ctx.emit_message(role="assistant", content=output["reply"], step_index=step_index)
             await ctx.emit_step_completed(
                 index=step_index,
                 node=node,

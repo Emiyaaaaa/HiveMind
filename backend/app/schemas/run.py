@@ -47,6 +47,7 @@ class MessageRead(BaseModel):
 
     id: str
     index: int
+    step_id: str | None = None
     role: str
     name: str | None
     content: str
