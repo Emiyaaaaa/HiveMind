@@ -530,9 +530,16 @@ class RunService:
                 )
         elif event_type == "message.created":
             index = await self._next_message_index(run_id)
+            step_id: str | None = None
+            raw_step_index = data.get("step_index")
+            if isinstance(raw_step_index, int):
+                step = await self._find_step(run_id, raw_step_index)
+                if step is not None:
+                    step_id = step.id
             message = Message(
                 run_id=run_id,
                 index=index,
+                step_id=step_id,
                 role=data["role"],
                 name=data.get("name"),
                 content=data.get("content", ""),
@@ -541,6 +548,11 @@ class RunService:
             )
             self.session.add(message)
             await self.session.commit()
+            data = {
+                **data,
+                "index": index,
+                "step_id": step_id,
+            }
         elif event_type == "tool_call.started":
             step = await self._find_step(run_id, data["step_index"])
             if step is not None:

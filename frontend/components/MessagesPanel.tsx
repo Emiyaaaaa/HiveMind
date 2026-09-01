@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
-import type { Message } from "@/lib/types";
+import type { Message, Step } from "@/lib/types";
 
 interface MessagesPanelProps {
   runId: string;
   messages: Message[];
   messagesTruncated: boolean;
+  steps?: Step[];
 }
 
 function isPromptEcho(message: Message): boolean {
@@ -64,7 +65,15 @@ export function MessagesPanel({
   runId,
   messages,
   messagesTruncated,
+  steps = [],
 }: MessagesPanelProps) {
+  const stepById = useMemo(() => {
+    const map = new Map<string, Step>();
+    for (const step of steps) {
+      map.set(step.id, step);
+    }
+    return map;
+  }, [steps]);
   const [older, setOlder] = useState<Message[]>([]);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(messagesTruncated);
@@ -161,6 +170,17 @@ export function MessagesPanel({
               <div className="mb-1 text-xs uppercase tracking-wide text-muted">
                 {message.role}
                 {message.name ? ` · ${message.name}` : ""}
+                {message.step_id ? (
+                  <span className="ml-2 font-mono normal-case">
+                    step{" "}
+                    {(() => {
+                      const step = stepById.get(message.step_id!);
+                      return step
+                        ? `#${step.index} ${step.node}`
+                        : message.step_id!.slice(0, 8);
+                    })()}
+                  </span>
+                ) : null}
                 <span className="ml-2 font-mono normal-case">
                   #{message.index}
                 </span>

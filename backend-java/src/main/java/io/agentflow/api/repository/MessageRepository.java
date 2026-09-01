@@ -13,4 +13,8 @@ public interface MessageRepository extends JpaRepository<MessageEntity, String> 
 
     List<MessageEntity> findByRunIdAndIndexLessThanOrderByIndexDesc(
             String runId, int index, Pageable pageable);
+
+    long deleteByRunId(String runId);
+
+    long deleteByRunIdIn(Iterable<String> runIds);
 }

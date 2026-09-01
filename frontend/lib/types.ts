@@ -46,6 +46,7 @@ export interface RunUsage {
 export interface Message {
   id: string;
   index: number;
+  step_id: string | null;
   role: "system" | "user" | "assistant" | "tool";
   name: string | null;
   content: string;

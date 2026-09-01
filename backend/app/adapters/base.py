@@ -111,6 +111,7 @@ class AdapterContext:
         content: str,
         name: str | None = None,
         tool_call_id: str | None = None,
+        step_index: int | None = None,
         **extra: Any,
     ) -> None:
         payload: dict[str, Any] = {
@@ -121,6 +122,8 @@ class AdapterContext:
         }
         if tool_call_id is not None:
             payload["tool_call_id"] = tool_call_id
+        if step_index is not None:
+            payload["step_index"] = step_index
         await self.emit("message.created", payload)
 
     async def emit_tool_call_started(

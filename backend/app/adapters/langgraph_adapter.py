@@ -580,10 +580,10 @@ class LangGraphAdapter(OrchestratorAdapter):
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
             await _emit_llm_system_prompt(
-                ctx, run_state, node_id=spec.id, system_prompt=system_prompt
+                ctx, run_state, node_id=spec.id, system_prompt=system_prompt, step_index=step_idx
             )
             user_seed = str(state.get("input", ""))
-            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_seed)
+            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_seed, step_index=step_idx)
 
             try:
                 for round_idx in range(max_rounds):
@@ -615,6 +615,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                             role="assistant",
                             content=response.content or "",
                             tool_calls=tool_call_payload,
+                            step_index=step_idx,
                         )
 
                         async def _run_one_tool(tc: dict[str, Any]) -> ToolOutcome:
@@ -667,6 +668,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                                 role="tool",
                                 content=content,
                                 tool_call_id=str(tc.get("id") or name),
+                                step_index=step_idx,
                             )
                         continue
 
@@ -684,7 +686,7 @@ class LangGraphAdapter(OrchestratorAdapter):
 
                 latency_ms = int((time.monotonic() - started) * 1000)
                 cost_usd = estimate_cost_usd(model, total_in, total_out)
-                await ctx.emit_message(role="assistant", content=final_reply)
+                await ctx.emit_message(role="assistant", content=final_reply, step_index=step_idx)
                 await ctx.emit_step_updated(
                     index=step_idx,
                     tokens_in=total_in,
@@ -748,9 +750,9 @@ class LangGraphAdapter(OrchestratorAdapter):
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
             await _emit_llm_system_prompt(
-                ctx, run_state, node_id=spec.id, system_prompt=system_prompt
+                ctx, run_state, node_id=spec.id, system_prompt=system_prompt, step_index=step_idx
             )
-            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_input)
+            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_input, step_index=step_idx)
 
             stream_tokens = run_state.config.get("stream_tokens", True)
             started = time.monotonic()
@@ -783,7 +785,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
             )
-            await ctx.emit_message(role="assistant", content=reply)
+            await ctx.emit_message(role="assistant", content=reply, step_index=step_idx)
             await ctx.emit_step_completed(
                 index=step_idx,
                 node=spec.id,
@@ -1056,6 +1058,7 @@ async def _emit_llm_system_prompt(
     *,
     node_id: str,
     system_prompt: str,
+    step_index: int,
 ) -> None:
     """Emit system once per unique prompt; repeats are tagged for UI collapse."""
     if system_prompt in run_state.emitted_system_prompts:
@@ -1064,9 +1067,10 @@ async def _emit_llm_system_prompt(
             content=system_prompt,
             kind="prompt_echo",
             node=node_id,
+            step_index=step_index,
         )
         return
-    await ctx.emit_message(role="system", content=system_prompt)
+    await ctx.emit_message(role="system", content=system_prompt, step_index=step_index)
     run_state.emitted_system_prompts.add(system_prompt)
 
 
@@ -1075,6 +1079,7 @@ async def _emit_llm_user_prompt(
     *,
     node_id: str,
     content: str,
+    step_index: int,
 ) -> None:
     """Record the user-side LLM input without flooding the transcript."""
     if not content:
@@ -1084,6 +1089,7 @@ async def _emit_llm_user_prompt(
         content=content,
         kind="prompt_echo",
         node=node_id,
+        step_index=step_index,
     )
 
 

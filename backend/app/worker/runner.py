@@ -34,6 +34,7 @@ from app.events import get_event_bus
 from app.worker.cancel import get_cancel_registry
 from app.worker.executor import RunExecutor
 from app.worker.monitor import run_queue_monitor
+from app.worker.retention import run_retention_sweeper
 from app.worker.queue import JobLease, JobQueue, get_job_queue
 from app.worker.temporal.worker import run_temporal_worker
 
@@ -179,9 +180,14 @@ async def run_forever() -> None:
             signal.signal(sig, lambda *_: _request_stop())
 
     monitor_task: asyncio.Task[None] | None = None
+    retention_task: asyncio.Task[None] | None = None
     if settings.job_queue_monitor_enabled and backend != "temporal":
         monitor_task = asyncio.create_task(
             run_queue_monitor(queue, stop, settings=settings)
+        )
+    if settings.data_retention_tenant_ttl_days > 0:
+        retention_task = asyncio.create_task(
+            run_retention_sweeper(stop, settings=settings)
         )
 
     try:
@@ -200,6 +206,8 @@ async def run_forever() -> None:
         if monitor_task is not None:
             stop.set()
             await monitor_task
+        if retention_task is not None:
+            await retention_task
         logger.info("worker.shutting_down")
         await queue.aclose()
         await cancel_registry.aclose()

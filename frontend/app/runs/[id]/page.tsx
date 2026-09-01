@@ -113,6 +113,7 @@ export default function RunDetailPage({ params }: PageProps) {
         runId={id}
         messages={r.messages}
         messagesTruncated={r.messages_truncated ?? false}
+        steps={r.steps}
       />
 
       <EventStream events={run.events} status={run.streamStatus} />

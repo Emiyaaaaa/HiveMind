@@ -160,8 +160,9 @@ function appendMessage(messages: Message[], data: Record<string, unknown>, at: s
 
   const role = data.role;
   const message: Message = {
-    id: `sse-msg-${index}`,
+    id: typeof data.id === "string" ? data.id : `sse-msg-${index}`,
     index,
+    step_id: typeof data.step_id === "string" ? data.step_id : null,
     role:
       role === "system" ||
       role === "user" ||
