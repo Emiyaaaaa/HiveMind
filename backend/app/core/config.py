@@ -257,6 +257,22 @@ class Settings(BaseSettings):
         description="Periodic metric reader export interval in milliseconds.",
     )
 
+    run_messages_preview_limit: int = Field(
+        default=50,
+        ge=0,
+        le=500,
+        description=(
+            "Maximum messages embedded in GET /v1/runs/{id} (most recent). "
+            "Use GET /v1/runs/{id}/messages for older pages."
+        ),
+    )
+    run_messages_page_max: int = Field(
+        default=200,
+        ge=1,
+        le=500,
+        description="Upper bound for limit on GET /v1/runs/{id}/messages.",
+    )
+
 
 def effective_jobs_impl(settings: Settings | None = None) -> JobsImpl:
     """Resolve the job protocol Java and Python must agree on."""

@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, attributes
 
 from app.adapters import get_adapter
 from app.core.config import get_settings, jobs_backend
@@ -38,7 +38,7 @@ from app.core.telemetry import (
 )
 from app.runtime.messages import messages_from_rows
 from app.runtime.usage import aggregate_run_usage
-from app.schemas.run import EventType, RunCreate, RunEvent, RunResume, RunRetry
+from app.schemas.run import EventType, MessagePage, MessageRead, RunCreate, RunEvent, RunResume, RunRetry
 from app.runtime.resume_context import (
     RunResumeContext,
     parse_resume_context,
@@ -365,7 +365,6 @@ class RunService:
         if with_relations:
             stmt = stmt.options(
                 selectinload(Run.steps).selectinload(Step.tool_calls),
-                selectinload(Run.messages),
                 selectinload(Run.checkpoints),
             )
         try:
@@ -636,6 +635,76 @@ class RunService:
         )
         result = await self.session.execute(stmt)
         return messages_from_rows(list(result.scalars().all()))
+
+    async def list_messages(
+        self,
+        run_id: str,
+        *,
+        cursor: int | None = None,
+        limit: int = 50,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        require_access: bool = True,
+    ) -> MessagePage:
+        """Return a page of messages in ascending index order (newest page first)."""
+        if require_access:
+            await self._get_run(
+                run_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                agent_id=agent_id,
+            )
+
+        capped = max(1, min(limit, get_settings().run_messages_page_max))
+        rows, has_more, next_cursor = await self._fetch_message_page(
+            run_id, cursor=cursor, limit=capped
+        )
+        items = [MessageRead.model_validate(row) for row in rows]
+        return MessagePage(items=items, next_cursor=next_cursor, has_more=has_more)
+
+    async def hydrate_run_messages(
+        self,
+        run: Run,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> bool:
+        """Attach a message preview to ``run``; return whether older rows exist."""
+        preview_limit = get_settings().run_messages_preview_limit
+        if preview_limit <= 0:
+            attributes.set_committed_value(run, "messages", [])
+            rows, _, _ = await self._fetch_message_page(run.id, limit=1)
+            return bool(rows)
+
+        rows, has_more, _ = await self._fetch_message_page(
+            run.id, limit=preview_limit
+        )
+        attributes.set_committed_value(run, "messages", rows)
+        return has_more
+
+    async def _fetch_message_page(
+        self,
+        run_id: str,
+        *,
+        cursor: int | None = None,
+        limit: int,
+    ) -> tuple[list[Message], bool, int | None]:
+        stmt = select(Message).where(Message.run_id == run_id)
+        if cursor is not None:
+            stmt = stmt.where(Message.index < cursor)
+        stmt = stmt.order_by(Message.index.desc()).limit(limit + 1)
+
+        result = await self.session.execute(stmt)
+        rows = list(result.scalars().all())
+        has_more = len(rows) > limit
+        if has_more:
+            rows = rows[:limit]
+        rows.reverse()
+
+        next_cursor = rows[0].index if rows and has_more else None
+        return rows, has_more, next_cursor
 
     async def _retain_latest_checkpoint(
         self, run_id: str, *, reason: str

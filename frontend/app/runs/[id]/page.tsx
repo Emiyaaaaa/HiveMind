@@ -6,6 +6,7 @@ import { use } from "react";
 
 import { CheckpointPanel } from "@/components/CheckpointPanel";
 import { EventStream } from "@/components/EventStream";
+import { MessagesPanel } from "@/components/MessagesPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepTimeline } from "@/components/StepTimeline";
 import { TokenCostSummary } from "@/components/TokenCostSummary";
@@ -108,23 +109,11 @@ export default function RunDetailPage({ params }: PageProps) {
 
       <ToolCallPanel steps={r.steps} />
 
-      <section className="space-y-3">
-        <h2 className="font-medium">Messages</h2>
-        <ol className="space-y-2">
-          {r.messages.map((m) => (
-            <li
-              key={m.id}
-              className="rounded border border-border bg-surface p-3 text-sm"
-            >
-              <div className="text-xs uppercase tracking-wide text-muted mb-1">
-                {m.role}
-                {m.name ? ` · ${m.name}` : ""}
-              </div>
-              <div className="whitespace-pre-wrap">{m.content}</div>
-            </li>
-          ))}
-        </ol>
-      </section>
+      <MessagesPanel
+        runId={id}
+        messages={r.messages}
+        messagesTruncated={r.messages_truncated ?? false}
+      />
 
       <EventStream events={run.events} status={run.streamStatus} />
     </div>

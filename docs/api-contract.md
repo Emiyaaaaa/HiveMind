@@ -158,8 +158,29 @@ sensible upper bound on the server (default 50).
 
 ### `GET /v1/runs/{id}` → 200
 
-Response: a `Run` populated with `steps`, `messages`, and `checkpoints`.
-404 if missing.
+Response: a `Run` populated with `steps`, a **preview** of `messages` (most
+recent *K*, default 50), and `checkpoints`. When older messages exist,
+`messages_truncated` is `true`; use `GET /v1/runs/{id}/messages` to page
+backward. 404 if missing.
+
+### `GET /v1/runs/{id}/messages?cursor=&limit=50` → 200
+
+Cursor-paginated run transcript in ascending `index` order. Omit `cursor` to
+fetch the newest page; pass `next_cursor` from a prior response to load older
+messages (`index` exclusive upper bound). `limit` clamps on the server
+(default 50, max 200).
+
+Response:
+
+```json
+{
+  "items": [/* Message */],
+  "next_cursor": 12,
+  "has_more": true
+}
+```
+
+404 if the run does not exist.
 
 ### `POST /v1/runs/{id}/cancel` → 204
 
@@ -413,6 +434,7 @@ is disabled). Agent `name` is unique **per tenant**.
   updated_at: string;
   steps: Step[];
   messages: Message[];
+  messages_truncated?: boolean;
   checkpoints: Checkpoint[];
   usage: RunUsage;
 }
@@ -473,6 +495,16 @@ ops dashboards.
   tool_call_id: string | null;
   extra: Record<string, unknown>;
   created_at: string;
+}
+```
+
+### `MessagePage`
+
+```ts
+{
+  items: Message[];
+  next_cursor: number | null;
+  has_more: boolean;
 }
 ```
 

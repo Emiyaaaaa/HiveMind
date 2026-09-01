@@ -54,6 +54,12 @@ export interface Message {
   created_at: string;
 }
 
+export interface MessagePage {
+  items: Message[];
+  next_cursor: number | null;
+  has_more: boolean;
+}
+
 export interface Checkpoint {
   id: string;
   index: number;
@@ -74,6 +80,7 @@ export interface Run {
   updated_at: string;
   steps: Step[];
   messages: Message[];
+  messages_truncated?: boolean;
   checkpoints: Checkpoint[];
   usage: RunUsage;
 }
