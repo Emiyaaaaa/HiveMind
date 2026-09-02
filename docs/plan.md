@@ -2,7 +2,7 @@
 
 架构与数据模型见 [architecture.md](architecture.md) 与 [data-model.md](data-model.md)。
 
-**最后核对：** 2026-09-01
+**最后核对：** 2026-09-02
 
 ## 优化方向
 
@@ -50,7 +50,7 @@
 - [x] Adapter 插件注册表（entry points / 动态加载）
 - [x] 官方 adapter：AutoGen、CrewAI、PydanticAI（按需求选 2 个；已完成 AutoGen + PydanticAI）
 - [x] MCP tool adapter
-- [ ] OpenAPI 规范 + Python/TypeScript SDK 自动生成
+- [x] OpenAPI 规范 + Python/TypeScript SDK 自动生成
 - [ ] Webhook 出站事件（`run.completed` 等）
 - [x] Agent 版本管理与配置 diff
 
