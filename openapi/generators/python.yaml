@@ -1,0 +1,8 @@
+generatorName: python
+inputSpec: openapi/openapi.yaml
+outputDir: sdk/python/.gen/python
+additionalProperties:
+  projectName: agentflow-sdk
+  packageName: agentflow_sdk.generated
+  packageVersion: 0.1.0
+  library: urllib3

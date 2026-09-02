@@ -118,10 +118,29 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-path: |
+            **/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Python SDK tests
+        working-directory: sdk/python
+        run: uv run --with pytest pytest -q
+      - name: TypeScript SDK build
+        working-directory: sdk/typescript
+        run: npm install && npm run build && npm run lint
+
   report-scheduled-failure:
     name: Open Issue on scheduled CI failure
     runs-on: ubuntu-latest
-    needs: [backend, backend-java, integration, frontend]
+    needs: [backend, backend-java, integration, frontend, sdk]
     if: |
       always() &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
@@ -129,7 +148,8 @@ jobs:
         needs.backend.result == 'failure' ||
         needs.backend-java.result == 'failure' ||
         needs.integration.result == 'failure' ||
-        needs.frontend.result == 'failure'
+        needs.frontend.result == 'failure' ||
+        needs.sdk.result == 'failure'
       )
     steps:
       - uses: actions/checkout@v4
@@ -140,6 +160,7 @@ jobs:
           JAVA_RESULT: ${{ needs.backend-java.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
+          SDK_RESULT: ${{ needs.sdk.result }}
         run: |
           set -euo pipefail
           chmod +x scripts/ci/upsert_automation_issue.sh
@@ -158,6 +179,7 @@ jobs:
             echo "| backend-java | \`${JAVA_RESULT}\` |"
             echo "| integration | \`${INTEGRATION_RESULT}\` |"
             echo "| frontend | \`${FRONTEND_RESULT}\` |"
+            echo "| sdk | \`${SDK_RESULT}\` |"
             echo
             echo "This issue is refreshed while scheduled/manual CI keeps failing."
             echo "Close it after the failing jobs are green again."
@@ -172,14 +194,15 @@ jobs:
   close-scheduled-success:
     name: Close CI failure Issue when green
     runs-on: ubuntu-latest
-    needs: [backend, backend-java, integration, frontend]
+    needs: [backend, backend-java, integration, frontend, sdk]
     if: |
       always() &&
       github.event_name == 'schedule' &&
       needs.backend.result == 'success' &&
       needs.backend-java.result == 'success' &&
       needs.integration.result == 'success' &&
-      needs.frontend.result == 'success'
+      needs.frontend.result == 'success' &&
+      needs.sdk.result == 'success'
     steps:
       - name: Close open automation CI failure issue
         env:

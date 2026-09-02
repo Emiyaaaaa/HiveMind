@@ -1,0 +1,1128 @@
+openapi: 3.0.3
+info:
+  title: AgentFlow API
+  version: 0.1.0
+  description: |
+    HTTP surface for AgentFlow runs, agents, and streaming events.
+    Behavioral notes and SSE event types are documented in docs/api-contract.md.
+  license:
+    name: Apache 2.0
+servers:
+  - url: http://localhost:8000
+    description: Local development (Java API default port)
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+paths:
+  /v1/health:
+    get:
+      tags: [Health]
+      summary: Health probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /v1/agents:
+    get:
+      tags: [Agents]
+      summary: List agents
+      responses:
+        "200":
+          description: Agents ordered by created_at descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Agent"
+    post:
+      tags: [Agents]
+      summary: Create agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentCreateRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/agents/{id}:
+    get:
+      tags: [Agents]
+      summary: Get agent
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: Agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Agents]
+      summary: Update agent
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentUpdateRequest"
+      responses:
+        "200":
+          description: Updated agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/agents/{id}/versions:
+    get:
+      tags: [Agents]
+      summary: List agent versions
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: Version snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentVersion"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/agents/{id}/versions/diff:
+    get:
+      tags: [Agents]
+      summary: Diff two agent versions
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Diff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentVersionDiff"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/agents/{id}/versions/{version}:
+    get:
+      tags: [Agents]
+      summary: Get agent version snapshot
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentVersion"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/agents/{id}/versions/{version}/restore:
+    post:
+      tags: [Agents]
+      summary: Restore agent from version snapshot
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Restored agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/runs:
+    get:
+      tags: [Runs]
+      summary: List runs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Runs ordered by created_at descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Run"
+    post:
+      tags: [Runs]
+      summary: Create run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunCreateRequest"
+      responses:
+        "202":
+          description: Run accepted (pending)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/runs/{id}:
+    get:
+      tags: [Runs]
+      summary: Get run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run with steps, message preview, checkpoints
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/runs/{id}/messages:
+    get:
+      tags: [Runs]
+      summary: Page run messages
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Message page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/runs/{id}/cancel:
+    post:
+      tags: [Runs]
+      summary: Cancel run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "204":
+          description: Cancel signal sent
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/runs/{id}/retry:
+    post:
+      tags: [Runs]
+      summary: Retry failed run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunRetryRequest"
+      responses:
+        "202":
+          description: Run re-queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/runs/{id}/resume:
+    post:
+      tags: [Runs]
+      summary: Resume run waiting for human approval
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunResumeRequest"
+      responses:
+        "202":
+          description: Run re-queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/runs/{runId}/erase:
+    post:
+      tags: [Retention]
+      summary: Erase run working memory (admin)
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Erased
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EraseRunDataResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/events/{runId}:
+    get:
+      tags: [Events]
+      summary: Subscribe to run events (SSE)
+      description: |
+        Opens a Server-Sent Events stream of RunEvent frames until the run reaches
+        a terminal state. Reconnect with Last-Event-ID or last_event_id to replay
+        missed events before resuming live delivery.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: last_event_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: text/event-stream of RunEvent JSON payloads
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/RunEvent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/run-comparisons/preview:
+    post:
+      tags: [Regression]
+      summary: Preview run comparison
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunComparisonPreviewRequest"
+      responses:
+        "200":
+          description: Comparison summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunComparisonResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+  /v1/regression-executions:
+    post:
+      tags: [Regression]
+      summary: Start regression execution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegressionExecutionCreateRequest"
+      responses:
+        "202":
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegressionExecutionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "503":
+          description: Redis manifest unavailable
+  /v1/regression-executions/{executionId}:
+    get:
+      tags: [Regression]
+      summary: Get regression execution progress
+      parameters:
+        - name: executionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegressionExecutionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/regression-executions/{executionId}/results:
+    get:
+      tags: [Regression]
+      summary: Get regression execution results
+      parameters:
+        - name: executionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegressionExecutionResultsResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/organization/erase:
+    post:
+      tags: [Retention]
+      summary: Erase tenant data (admin)
+      responses:
+        "200":
+          description: Erased
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EraseTenantDataResponse"
+  /v1/retention/purge:
+    post:
+      tags: [Retention]
+      summary: Purge expired terminal runs (admin)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetentionPurgeRequest"
+      responses:
+        "200":
+          description: Purge summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetentionPurgeResponse"
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT or API key
+  parameters:
+    AgentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    RunId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+    UnprocessableEntity:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+  schemas:
+    ErrorDetail:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+    HealthResponse:
+      type: object
+      required: [status, version, adapters]
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        adapters:
+          type: array
+          items:
+            type: string
+    Agent:
+      type: object
+      required:
+        - id
+        - tenant_id
+        - name
+        - adapter
+        - config
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        project_id:
+          type: string
+          nullable: true
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        adapter:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        version:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AgentCreateRequest:
+      type: object
+      required: [name, adapter]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        adapter:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        project_id:
+          type: string
+          nullable: true
+    AgentUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        adapter:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        note:
+          type: string
+          nullable: true
+    AgentVersion:
+      type: object
+      required:
+        - id
+        - agent_id
+        - version
+        - adapter
+        - config
+        - created_at
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        version:
+          type: integer
+        description:
+          type: string
+          nullable: true
+        adapter:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        note:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    AgentVersionDiff:
+      type: object
+      required: [from_version, to_version, config]
+      properties:
+        from_version:
+          type: integer
+        to_version:
+          type: integer
+        adapter:
+          type: object
+          nullable: true
+          properties:
+            from:
+              type: string
+            to:
+              type: string
+        description:
+          type: object
+          nullable: true
+          properties:
+            from:
+              type: string
+              nullable: true
+            to:
+              type: string
+              nullable: true
+        config:
+          type: object
+          properties:
+            added:
+              type: object
+              additionalProperties: true
+            removed:
+              type: object
+              additionalProperties: true
+            changed:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  from: {}
+                  to: {}
+    RunStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - succeeded
+        - failed
+        - cancelled
+        - waiting_human
+    RunCreateRequest:
+      type: object
+      required: [agent_id]
+      properties:
+        agent_id:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        adapter:
+          type: string
+          nullable: true
+    RunRetryRequest:
+      type: object
+      properties:
+        checkpoint_index:
+          type: integer
+    RunResumeRequest:
+      type: object
+      properties:
+        input:
+          type: object
+          additionalProperties: true
+    RunUsage:
+      type: object
+      required:
+        - tokens_in
+        - tokens_out
+        - cost_usd
+        - step_count
+        - failed_step_count
+        - tool_call_count
+        - failed_tool_call_count
+      properties:
+        tokens_in:
+          type: integer
+        tokens_out:
+          type: integer
+        cost_usd:
+          type: number
+          format: double
+        latency_ms:
+          type: integer
+          nullable: true
+        step_count:
+          type: integer
+        failed_step_count:
+          type: integer
+        tool_call_count:
+          type: integer
+        failed_tool_call_count:
+          type: integer
+    ToolCall:
+      type: object
+      required: [id, name, arguments]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        arguments:
+          type: object
+          additionalProperties: true
+        result:
+          type: object
+          additionalProperties: true
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        latency_ms:
+          type: integer
+          nullable: true
+    Step:
+      type: object
+      required:
+        - id
+        - index
+        - node
+        - status
+        - input
+        - tool_calls
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        index:
+          type: integer
+        node:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        latency_ms:
+          type: integer
+          nullable: true
+        tokens_in:
+          type: integer
+          nullable: true
+        tokens_out:
+          type: integer
+          nullable: true
+        cost_usd:
+          type: number
+          format: double
+          nullable: true
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Message:
+      type: object
+      required: [id, index, role, content, extra, created_at]
+      properties:
+        id:
+          type: string
+        index:
+          type: integer
+        step_id:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        name:
+          type: string
+          nullable: true
+        content:
+          type: string
+        tool_call_id:
+          type: string
+          nullable: true
+        extra:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    MessagePage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        next_cursor:
+          type: integer
+          nullable: true
+        has_more:
+          type: boolean
+    Checkpoint:
+      type: object
+      required: [id, index, created_at]
+      properties:
+        id:
+          type: string
+        index:
+          type: integer
+        label:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    Run:
+      type: object
+      required:
+        - id
+        - tenant_id
+        - agent_id
+        - adapter
+        - status
+        - input
+        - created_at
+        - updated_at
+        - steps
+        - messages
+        - checkpoints
+        - usage
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        project_id:
+          type: string
+          nullable: true
+        agent_id:
+          type: string
+        adapter:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/Step"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        messages_truncated:
+          type: boolean
+        checkpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Checkpoint"
+        usage:
+          $ref: "#/components/schemas/RunUsage"
+    RunEvent:
+      type: object
+      required: [type, run_id, at, data]
+      properties:
+        type:
+          type: string
+        run_id:
+          type: string
+        at:
+          type: string
+          format: date-time
+        data:
+          type: object
+          additionalProperties: true
+    RunComparisonPreviewRequest:
+      type: object
+      required: [baseline_run_id, candidate_run_id]
+      properties:
+        baseline_run_id:
+          type: string
+        candidate_run_id:
+          type: string
+    RunComparisonResponse:
+      type: object
+      required:
+        - baseline
+        - candidate
+        - agent_version_changed
+        - status_changed
+        - error_changed
+        - input_changed
+        - output_changed
+      properties:
+        baseline:
+          $ref: "#/components/schemas/RunComparisonSide"
+        candidate:
+          $ref: "#/components/schemas/RunComparisonSide"
+        agent_version_changed:
+          type: boolean
+        status_changed:
+          type: boolean
+        error_changed:
+          type: boolean
+        input_changed:
+          type: boolean
+        output_changed:
+          type: boolean
+    RunComparisonSide:
+      type: object
+      required: [run_id, agent_id, status]
+      properties:
+        run_id:
+          type: string
+        agent_id:
+          type: string
+        agent_version:
+          type: integer
+          nullable: true
+        status:
+          type: string
+        error:
+          type: string
+          nullable: true
+    RegressionExecutionCreateRequest:
+      type: object
+      required: [baseline_run_ids]
+      properties:
+        baseline_run_ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+    RegressionExecutionResponse:
+      type: object
+      required:
+        - execution_id
+        - candidate_agent_version
+        - status
+        - total_cases
+        - completed_cases
+        - cases
+      properties:
+        execution_id:
+          type: string
+        candidate_agent_version:
+          type: integer
+        status:
+          type: string
+        total_cases:
+          type: integer
+        completed_cases:
+          type: integer
+        cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegressionRunPair"
+    RegressionRunPair:
+      type: object
+      required: [baseline_run_id, candidate_run_id]
+      properties:
+        baseline_run_id:
+          type: string
+        candidate_run_id:
+          type: string
+    RegressionExecutionResultsResponse:
+      type: object
+      required:
+        - execution_id
+        - passed
+        - total_cases
+        - passed_cases
+        - failed_cases
+        - cases
+      properties:
+        execution_id:
+          type: string
+        passed:
+          type: boolean
+        total_cases:
+          type: integer
+        passed_cases:
+          type: integer
+        failed_cases:
+          type: integer
+        cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegressionCaseResult"
+    RegressionCaseResult:
+      type: object
+      required: [baseline_run_id, candidate_run_id, passed, failures]
+      properties:
+        baseline_run_id:
+          type: string
+        candidate_run_id:
+          type: string
+        passed:
+          type: boolean
+        failures:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegressionFailure"
+    RegressionFailure:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    EraseRunDataResponse:
+      type: object
+      required: [run_id, messages_deleted, checkpoints_deleted]
+      properties:
+        run_id:
+          type: string
+        messages_deleted:
+          type: integer
+        checkpoints_deleted:
+          type: integer
+    EraseTenantDataResponse:
+      type: object
+      required: [tenant_id, runs_processed, messages_deleted, checkpoints_deleted]
+      properties:
+        tenant_id:
+          type: string
+        runs_processed:
+          type: integer
+        messages_deleted:
+          type: integer
+        checkpoints_deleted:
+          type: integer
+    RetentionPurgeRequest:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        dry_run:
+          type: boolean
+          default: false
+    RetentionPurgeResponse:
+      type: object
+      required: [tenant_id, runs_purged, messages_deleted, checkpoints_deleted]
+      properties:
+        tenant_id:
+          type: string
+        runs_purged:
+          type: integer
+        messages_deleted:
+          type: integer
+        checkpoints_deleted:
+          type: integer
