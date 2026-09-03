@@ -11,6 +11,7 @@ public class RunResponse {
     private String id;
     private String tenantId;
     private String agentId;
+    private String threadId;
     private String adapter;
     private RunStatus status;
     private Map<String, Object> input;
@@ -74,6 +75,7 @@ public class RunResponse {
         dto.id = entity.getId();
         dto.tenantId = entity.getTenantId();
         dto.agentId = entity.getAgentId();
+        dto.threadId = entity.getThreadId();
         dto.adapter = entity.getAdapter();
         dto.status = entity.getStatus();
         dto.input = entity.getInput();
@@ -99,6 +101,10 @@ public class RunResponse {
 
     public String getAgentId() {
         return agentId;
+    }
+
+    public String getThreadId() {
+        return threadId;
     }
 
     public String getAdapter() {

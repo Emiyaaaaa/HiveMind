@@ -7,6 +7,7 @@ import io.agentflow.api.service.RegressionExecutionException;
 import io.agentflow.api.service.RunComparisonValidationException;
 import io.agentflow.api.service.RunConflictException;
 import io.agentflow.api.service.RunNotFoundException;
+import io.agentflow.api.service.ThreadNotFoundException;
 import io.agentflow.api.security.ForbiddenException;
 import io.agentflow.api.security.UnauthorizedException;
 import java.util.Map;
@@ -30,6 +31,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AgentVersionNotFoundException.class)
     public ResponseEntity<Map<String, String>> handleAgentVersionNotFound(
             AgentVersionNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(ThreadNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleThreadNotFound(ThreadNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
     }
 

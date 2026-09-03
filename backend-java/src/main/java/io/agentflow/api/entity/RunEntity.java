@@ -28,6 +28,9 @@ public class RunEntity {
     @Column(name = "agent_id", nullable = false, length = 26)
     private String agentId;
 
+    @Column(name = "thread_id", length = 26)
+    private String threadId;
+
     @Column(nullable = false, length = 64)
     private String adapter;
 
@@ -99,6 +102,14 @@ public class RunEntity {
 
     public void setAgentId(String agentId) {
         this.agentId = agentId;
+    }
+
+    public String getThreadId() {
+        return threadId;
+    }
+
+    public void setThreadId(String threadId) {
+        this.threadId = threadId;
     }
 
     public String getAdapter() {

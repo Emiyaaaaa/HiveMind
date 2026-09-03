@@ -119,6 +119,42 @@ config added·removed·changed).
 Copy the snapshot's adapter/config/description onto the live agent as a **new**
 version (does not delete history). No-op (no bump) when already identical.
 
+### `POST /v1/threads` → 201
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "title": "Support chat",
+  "user_id": "user-42",
+  "project_id": null
+}
+```
+
+Creates a conversation thread scoped to the agent (and tenant). `title` and
+`user_id` are optional. `project_id` defaults to the agent's project when
+omitted. Returns 404 if the agent is not visible to the caller.
+
+### `GET /v1/threads?limit=50` → 200
+
+Response: `Thread[]` for the caller's tenant/project/agent scope, newest first.
+
+### `GET /v1/threads/{id}` → 200
+
+Response: one `Thread`. 404 if missing or not visible (including cross-tenant).
+
+### `GET /v1/threads/{id}/messages?cursor=&limit=50` → 200
+
+Merged transcript across all Runs in the thread, ordered by run time then
+message index. Each item includes `run_id` plus the usual Message fields.
+`cursor` is an opaque string for older pages. 404 if the thread is not visible.
+
+### `GET /v1/threads/{id}/runs?limit=50` → 200
+
+Response: `Run[]` belonging to the thread, oldest first. 404 if the thread is
+not visible.
+
 ### `POST /v1/runs` → 202
 
 Request:
@@ -128,12 +164,18 @@ Request:
   "agent_id": "01HZ...",
   "input": { "prompt": "hi" },
   "metadata": {},
-  "adapter": "echo"
+  "adapter": "echo",
+  "thread_id": "01HZ..."
 }
 ```
 
-`metadata` and `adapter` are optional. When `adapter` is omitted the agent's
-default adapter is used. The server replaces the reserved `_agentflow`
+`metadata`, `adapter`, and `thread_id` are optional. When `adapter` is omitted
+the agent's default adapter is used. When `thread_id` is set, the run is linked
+to that thread and the worker seeds prior thread turns into
+`AdapterContext.thread_messages` (window-trimmed). Returns 404 if the thread is
+missing, belongs to another tenant/agent, or is otherwise not visible.
+
+The server replaces the reserved `_agentflow`
 metadata namespace and records the agent's current version as
 `_agentflow.agent_version`; client-supplied values in that namespace are never
 trusted.

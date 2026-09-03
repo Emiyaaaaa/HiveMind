@@ -11,6 +11,8 @@ erDiagram
     Project ||--o{ Agent : contains
     Agent ||--o{ Run : has
     Agent ||--o{ AgentVersion : versions
+    Agent ||--o{ Thread : has
+    Thread ||--o{ Run : contains
     Run ||--o{ Step : has
     Run ||--o{ Message : has
     Run ||--o{ Checkpoint : has
@@ -40,11 +42,20 @@ erDiagram
         json config
         string note
     }
+    Thread {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        string user_id
+        string title
+    }
     Run {
         string id PK
         string tenant_id
         string project_id
         string agent_id FK
+        string thread_id FK
         string adapter
         string status
         json input
@@ -132,6 +143,9 @@ stateDiagram-v2
 - **`Message.step_id` is optional** so an adapter can attach a message to a
   specific node tick when it makes sense, while keeping the run-level
   ordering authoritative.
+- **`Thread` groups Runs for L1 short memory.** `Run.thread_id` is optional;
+  when set, the worker seeds `AdapterContext.thread_messages` from prior runs
+  in the same thread (window-trimmed). Messages remain Run-scoped rows.
 - **`ToolCall.id` is the lifecycle association key.** SSE
   ``tool_call.started`` / ``tool_call.completed`` carry the same ``call_id``
   (equal to ``ToolCall.id``) so parallel or same-name tool invocations within
@@ -148,6 +162,10 @@ stateDiagram-v2
 | `ix_projects_tenant_id` | list projects for an organization |
 | `ix_runs_tenant_id` | filter runs by tenant |
 | `ix_runs_project_id` | apply project-scoped access to runs |
+| `ix_runs_thread_id` | list / join runs by conversation thread |
+| `ix_threads_tenant_id` | list threads for a tenant |
+| `ix_threads_tenant_agent` | filter threads by tenant + agent |
+| `ix_threads_agent_id` | cascade / lookup threads by agent |
 | `ix_runs_tenant_created` | tenant-scoped recent runs |
 | `ix_runs_status` | filter pending / running runs from a worker |
 | `ix_runs_agent_id` | list runs for an agent |

@@ -20,8 +20,10 @@ from app.models import (  # noqa: F401 -- ensure models are imported
     Agent,
     Checkpoint,
     Message,
+    Project,
     Run,
     Step,
+    Thread,
     ToolCall,
 )
 
