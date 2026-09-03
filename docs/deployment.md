@@ -94,9 +94,10 @@ docker compose --profile observability --profile app up --build
 export AGENTFLOW_OTEL_ENABLED=true
 ```
 
-Prometheus scrapes the OTel collector on `:8889` and evaluates p95 latency rules in
-`docker/prometheus/alerts.yml` (worker job p95 > 60s, HTTP p95 > 5s, both sustained
-for 5 minutes). View firing alerts at `http://localhost:9090/alerts`.
+Prometheus scrapes the OTel collector on `:8889` and evaluates rules in
+`docker/prometheus/alerts.yml` (worker job p95 > 60s, HTTP p95 > 5s, queue
+consumer delay > 30s, all sustained for 5 minutes). View firing alerts at
+`http://localhost:9090/alerts`.
 
 Import `docker/grafana/dashboards/agentflow-observability.json` into Grafana (or add a
 Grafana service to compose) for worker utilization, queue depth, consumer delay, and
@@ -125,6 +126,43 @@ worker. Scale workers horizontally by running additional `worker` containers
 
 Health check: `GET /v1/health` should return `{"status":"ok",...}`.
 
+## Helm + Terraform
+
+The Compose stack is the local reference. Production packaging lives under
+`deploy/`:
+
+| Path | Role |
+| --- | --- |
+| `deploy/helm/agentflow` | Chart: Java API, Python workers, Alembic migrate, optional in-cluster Postgres/Redis |
+| `deploy/terraform` | Installs the chart (and optionally [KEDA](https://keda.sh)) against an existing cluster |
+
+Worker autoscaling is driven by the Prometheus gauge
+`agentflow_queue_consumer_delay` (OTel `agentflow.queue.consumer_delay`, seconds
+of wait on the oldest lagging or pending Redis Stream job). Default trigger:
+KEDA `ScaledObject` with `max(agentflow_queue_consumer_delay) or vector(0)` and
+`targetConsumerDelaySeconds: 30`. Set `worker.autoscaling.provider: hpa` only
+when Prometheus Adapter already publishes that name as an External metric.
+
+Workers must run with `AGENTFLOW_OTEL_ENABLED=true` (chart `otel.enabled`) and
+Prometheus must scrape the OTel collector, or the scaler sees `vector(0)` and
+stays at `minReplicas`.
+
+```bash
+# Dev cluster (in-chart Postgres/Redis, autoscaling off — no KEDA required)
+helm upgrade --install agentflow deploy/helm/agentflow \
+  -f deploy/helm/agentflow/values-dev.yaml \
+  --set api.image.repository=... \
+  --set worker.image.repository=...
+
+# Production: Terraform applies the chart + KEDA
+cd deploy/terraform
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+`helm lint deploy/helm/agentflow` and `terraform validate` are covered in CI.
+
 ## Startup order
 
 1. Postgres and Redis
@@ -150,9 +188,10 @@ GitHub Actions job `integration` (see `.github/workflows/ci.yml`) runs:
   `AGENTFLOW_REDIS_QUEUE_IMPL=streams`). Switching to the LIST protocol
   requires rolling API and workers together and clearing the old key — see
   [api-contract.md](api-contract.md).
-- **Horizontal scale:** Add worker replicas; keep a single Java API tier (or
-  put it behind a load balancer — SSE subscribers stick to one instance unless
-  you add shared pub/sub bridging).
+- **Horizontal scale:** Add worker replicas (Helm `worker.replicaCount`, or KEDA
+  on `agentflow_queue_consumer_delay`). Keep a single Java API tier (or put it
+  behind a load balancer — SSE subscribers stick to one instance unless you add
+  shared pub/sub bridging).
 - **Backups:** Postgres holds all durable state; Redis is ephemeral coordination.
 - **Logs:** Java API logs Spring Boot output; worker logs structlog from
   `app.worker`. Look for `queue.metrics` (baseline depth/lag), `queue.consumer_delay_alert`

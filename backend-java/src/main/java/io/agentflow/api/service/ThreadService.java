@@ -13,7 +13,9 @@ import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.ThreadRepository;
 import io.agentflow.api.security.AccessControl;
 import io.agentflow.api.security.Role;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -45,9 +47,11 @@ public class ThreadService {
         ThreadEntity thread = new ThreadEntity();
         thread.setTenantId(agent.getTenantId());
         thread.setAgentId(agent.getId());
-        thread.setProjectId(req.getProjectId());
-        thread.setUserId(req.getUserId());
-        thread.setTitle(req.getTitle());
+        // Prefer explicit project_id; otherwise leave null (Java AgentEntity
+        // does not yet mirror agents.project_id — Python create inherits it).
+        thread.setProjectId(blankToNull(req.getProjectId()));
+        thread.setUserId(blankToNull(req.getUserId()));
+        thread.setTitle(blankToNull(req.getTitle()));
         return ThreadResponse.fromEntity(threads.save(thread));
     }
 
@@ -68,22 +72,39 @@ public class ThreadService {
     @Transactional(readOnly = true)
     public ThreadMessageResponse.Page listMessages(String id, String cursor, int limit) {
         ThreadEntity thread = requireThread(id);
-        int capped = Math.max(1, Math.min(limit, 200));
-        List<RunEntity> threadRuns = runs.findAllByThreadIdOrderByCreatedAtAsc(thread.getId());
-        List<ThreadMessageResponse> all = new ArrayList<>();
-        for (RunEntity run : threadRuns) {
-            for (MessageEntity message : messages.findAllByRunIdOrderByIndexAsc(run.getId())) {
-                all.add(ThreadMessageResponse.from(message, run.getId()));
-            }
+        int capped = Math.max(1, Math.min(limit, MessagePagination.PAGE_MAX));
+        PageRequest page = PageRequest.of(0, capped + 1);
+
+        List<Object[]> rows;
+        CursorParts parsed = parseCursor(cursor);
+        if (parsed != null) {
+            rows =
+                    messages.findThreadMessagesOlderThan(
+                            thread.getId(),
+                            parsed.createdAt(),
+                            parsed.index(),
+                            parsed.id(),
+                            page);
+        } else {
+            rows = messages.findThreadMessagesNewestFirst(thread.getId(), page);
         }
-        if (cursor != null && !cursor.isBlank()) {
-            all = all.stream().filter(m -> cursorKey(m).compareTo(cursor) < 0).toList();
+
+        List<ThreadMessageResponse> newestFirst = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            MessageEntity message = (MessageEntity) row[0];
+            RunEntity run = (RunEntity) row[1];
+            newestFirst.add(
+                    ThreadMessageResponse.from(message, run.getId(), run.getCreatedAt()));
         }
-        boolean hasMore = all.size() > capped;
-        List<ThreadMessageResponse> page =
-                hasMore ? all.subList(Math.max(0, all.size() - capped), all.size()) : all;
-        String nextCursor = hasMore && !page.isEmpty() ? cursorKey(page.get(0)) : null;
-        return new ThreadMessageResponse.Page(List.copyOf(page), nextCursor, hasMore);
+
+        boolean hasMore = newestFirst.size() > capped;
+        List<ThreadMessageResponse> pageDesc =
+                hasMore ? newestFirst.subList(0, capped) : newestFirst;
+        List<ThreadMessageResponse> ascending = new ArrayList<>(pageDesc);
+        Collections.reverse(ascending);
+        String nextCursor =
+                hasMore && !ascending.isEmpty() ? cursorKey(ascending.get(0)) : null;
+        return new ThreadMessageResponse.Page(List.copyOf(ascending), nextCursor, hasMore);
     }
 
     @Transactional(readOnly = true)
@@ -103,11 +124,43 @@ public class ThreadService {
                 .orElseThrow(() -> new ThreadNotFoundException(id));
     }
 
+    /**
+     * Cursor uses the run's created_at (sort key) plus message index/id so
+     * pagination matches transcript order across runs.
+     */
     private static String cursorKey(ThreadMessageResponse message) {
-        return message.getCreatedAt()
+        Instant sortAt =
+                message.getRunCreatedAt() != null
+                        ? message.getRunCreatedAt()
+                        : message.getCreatedAt();
+        return sortAt
                 + "|"
                 + String.format("%08d", message.getIndex())
                 + "|"
                 + message.getId();
     }
+
+    private static CursorParts parseCursor(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return null;
+        }
+        String[] parts = cursor.split("\\|", 3);
+        if (parts.length != 3) {
+            return null;
+        }
+        try {
+            return new CursorParts(Instant.parse(parts[0]), Integer.parseInt(parts[1]), parts[2]);
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
+    }
+
+    private record CursorParts(Instant createdAt, int index, String id) {}
 }

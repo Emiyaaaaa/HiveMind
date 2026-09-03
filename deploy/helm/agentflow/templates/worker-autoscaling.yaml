@@ -1,0 +1,65 @@
+{{- if and .Values.worker.autoscaling.enabled (eq .Values.worker.autoscaling.provider "keda") }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "agentflow.fullname" . }}-worker
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "agentflow.fullname" . }}-worker
+  minReplicaCount: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.worker.autoscaling.maxReplicas }}
+  pollingInterval: {{ .Values.worker.autoscaling.pollingInterval }}
+  cooldownPeriod: {{ .Values.worker.autoscaling.cooldownPeriod }}
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.worker.autoscaling.prometheus.serverAddress | quote }}
+        metricName: agentflow_queue_consumer_delay
+        query: max(agentflow_queue_consumer_delay) or vector(0)
+        threshold: {{ .Values.worker.autoscaling.targetConsumerDelaySeconds | quote }}
+        activationThreshold: {{ .Values.worker.autoscaling.activationConsumerDelaySeconds | quote }}
+    {{- if gt (int .Values.worker.autoscaling.backlogThreshold) 0 }}
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.worker.autoscaling.prometheus.serverAddress | quote }}
+        metricName: agentflow_queue_backlog
+        query: max(agentflow_queue_backlog) or vector(0)
+        threshold: {{ .Values.worker.autoscaling.backlogThreshold | quote }}
+    {{- end }}
+{{- end }}
+{{- if and .Values.worker.autoscaling.enabled (eq .Values.worker.autoscaling.provider "hpa") }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "agentflow.fullname" . }}-worker
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "agentflow.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: agentflow_queue_consumer_delay
+        target:
+          type: Value
+          value: {{ .Values.worker.autoscaling.targetConsumerDelaySeconds | quote }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.cpu.targetAverageUtilization }}
+{{- end }}

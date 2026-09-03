@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "agentflow.fullname" . }}-test-api"
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+spec:
+  restartPolicy: Never
+  containers:
+    - name: wget
+      image: busybox:1.36
+      command:
+        - wget
+        - -qO-
+        - {{ printf "http://%s-api:%v/v1/health" (include "agentflow.fullname" .) .Values.api.service.port | quote }}

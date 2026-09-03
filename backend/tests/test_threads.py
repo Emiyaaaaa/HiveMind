@@ -26,10 +26,11 @@ async def test_thread_cross_run_messages_and_seed(client, monkeypatch):
     """Two runs share a thread; the second AdapterContext gets prior turns."""
     captured: list[list[dict]] = []
 
-    from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
-    from app.adapters import register_adapter
-    from app.models.run import RunStatus
     from ulid import ULID
+
+    from app.adapters import register_adapter
+    from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
+    from app.models.run import RunStatus
 
     adapter_name = f"thread-capture-{ULID()}"
 
@@ -195,3 +196,119 @@ async def test_missing_thread_on_create_run_404(client):
         },
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_thread_message_pagination(client):
+    agent = await client.post(
+        "/v1/agents",
+        json={"name": "page-bot", "adapter": "echo", "config": {"delay": 0}},
+    )
+    agent_id = agent.json()["id"]
+    thread = await client.post(
+        "/v1/threads",
+        json={"agent_id": agent_id, "title": "paged"},
+    )
+    thread_id = thread.json()["id"]
+
+    for i in range(3):
+        run = await client.post(
+            "/v1/runs",
+            json={
+                "agent_id": agent_id,
+                "thread_id": thread_id,
+                "input": {"prompt": f"turn-{i}"},
+            },
+        )
+        body = await _poll_until(client, run.json()["id"], {"succeeded", "failed"})
+        assert body["status"] == "succeeded"
+
+    first = await client.get(f"/v1/threads/{thread_id}/messages?limit=2")
+    assert first.status_code == 200
+    page1 = first.json()
+    assert len(page1["items"]) == 2
+    assert page1["has_more"] is True
+    assert page1["next_cursor"]
+
+    second = await client.get(
+        f"/v1/threads/{thread_id}/messages",
+        params={"limit": 2, "cursor": page1["next_cursor"]},
+    )
+    assert second.status_code == 200
+    page2 = second.json()
+    assert page2["items"]
+    ids1 = {m["id"] for m in page1["items"]}
+    ids2 = {m["id"] for m in page2["items"]}
+    assert ids1.isdisjoint(ids2)
+
+
+@pytest.mark.asyncio
+async def test_load_thread_window_skips_tool_and_prompt_echo():
+    from app.db.base import Base
+    from app.db.session import SessionLocal, engine
+    from app.models import Agent, Message, Run, Thread
+    from app.models.run import RunStatus
+    from app.services.thread_service import ThreadService
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with SessionLocal() as session:
+        agent = Agent(name="win-bot", adapter="echo", config={})
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+
+        thread = Thread(tenant_id=agent.tenant_id, agent_id=agent.id, title="w")
+        session.add(thread)
+        await session.commit()
+        await session.refresh(thread)
+
+        run = Run(
+            tenant_id=agent.tenant_id,
+            agent_id=agent.id,
+            thread_id=thread.id,
+            adapter="echo",
+            status=RunStatus.SUCCEEDED,
+            input={"prompt": "hi"},
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+
+        session.add_all(
+            [
+                Message(
+                    run_id=run.id,
+                    index=0,
+                    role="system",
+                    content="sys",
+                    extra={"kind": "prompt_echo"},
+                ),
+                Message(run_id=run.id, index=1, role="user", content="hello"),
+                Message(
+                    run_id=run.id,
+                    index=2,
+                    role="assistant",
+                    content="",
+                    extra={"tool_calls": [{"id": "c1", "name": "echo"}]},
+                ),
+                Message(
+                    run_id=run.id,
+                    index=3,
+                    role="tool",
+                    content='{"ok":true}',
+                    tool_call_id="c1",
+                ),
+                Message(run_id=run.id, index=4, role="assistant", content="done"),
+            ]
+        )
+        await session.commit()
+
+        service = ThreadService(session)
+        window = await service.load_thread_window(thread.id)
+        assert window == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "done"},
+        ]

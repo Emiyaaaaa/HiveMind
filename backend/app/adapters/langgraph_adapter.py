@@ -1193,14 +1193,19 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
         "human_input": None,
         "route": None,
     }
-    if ctx.thread_messages:
-        default["messages"] = list(ctx.thread_messages)
+    # Prior thread turns (other runs) + this run's transcript on resume.
+    # run_messages alone used to drop L1 context across HITL / retry.
+    seed: list[dict[str, Any]] = list(ctx.thread_messages or [])
+    if ctx.run_messages is not None:
+        seed = [*seed, *ctx.run_messages]
+    if seed:
+        default["messages"] = seed
     if ctx.resume and ctx.resume.checkpoint_state:
         saved = ctx.resume.checkpoint_state.get("graph_state")
         if isinstance(saved, dict):
             merged = {**default, **saved}
-            if ctx.run_messages is not None:
-                merged["messages"] = list(ctx.run_messages)
+            if ctx.run_messages is not None or ctx.thread_messages:
+                merged["messages"] = list(default["messages"])
             elif isinstance(saved.get("messages"), list):
                 # Legacy checkpoints that still inlined messages.
                 merged["messages"] = list(saved["messages"])

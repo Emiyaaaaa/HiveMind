@@ -1,0 +1,51 @@
+{{- if .Values.console.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentflow.fullname" . }}-console
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  replicas: {{ .Values.console.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentflow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: console
+  template:
+    metadata:
+      labels:
+        {{- include "agentflow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: console
+    spec:
+      serviceAccountName: {{ include "agentflow.serviceAccountName" . }}
+      containers:
+        - name: console
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag }}"
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          env:
+            - name: AGENTFLOW_API_URL
+              value: {{ printf "http://%s-api:%v" (include "agentflow.fullname" .) .Values.api.service.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.console.service.port }}
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentflow.fullname" . }}-console
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  type: {{ .Values.console.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.console.service.port }}
+      targetPort: http
+  selector:
+    {{- include "agentflow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+{{- end }}

@@ -148,7 +148,8 @@ Response: one `Thread`. 404 if missing or not visible (including cross-tenant).
 
 Merged transcript across all Runs in the thread, ordered by run time then
 message index. Each item includes `run_id` plus the usual Message fields.
-`cursor` is an opaque string for older pages. 404 if the thread is not visible.
+The first response is the newest page; `next_cursor` is an opaque
+`run.created_at|index|id` key for older pages. 404 if the thread is not visible.
 
 ### `GET /v1/threads/{id}/runs?limit=50` → 200
 

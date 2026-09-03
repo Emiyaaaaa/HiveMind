@@ -80,6 +80,17 @@ groups:
 
   - name: agentflow_reliability
     rules:
+      - alert: AgentFlowQueueConsumerDelayHigh
+        expr: agentflow_queue_consumer_delay > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Run-job queue consumer delay is high
+          description: >
+            Oldest lagging or pending job has waited {{ $value | humanizeDuration }}
+            (threshold 30s). Worker replicas should scale out via KEDA/HPA.
+
       - alert: AgentFlowDlqGrowing
         expr: agentflow_queue_dlq_length > 0
         for: 10m
