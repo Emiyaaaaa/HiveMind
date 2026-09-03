@@ -1,0 +1,169 @@
+---
+name: create-pr
+description: >-
+  Create a GitHub pull request with `gh pr create`. Title and body are English,
+  AI-generated from the latest git commit (HEAD) plus the current branch vs the
+  default base. Use only when the user explicitly asks to create a PR, open a
+  pull request, run this skill, or invoke create-pr.
+disable-model-invocation: true
+---
+
+# Create PR
+
+从当前分支的 git 记录生成**英文**标题与正文，调用 `gh pr create` 开 PR。不要用 `--fill` / `--fill-first`。
+
+## 何时执行
+
+仅在用户显式要求创建 PR、打开 pull request、执行本 skill 时运行。不要在提交、推送、或闲聊里主动开 PR。
+
+## 工作流
+
+按顺序执行。任一步失败则停下并说明原因，不要继续 `gh pr create`。
+
+```
+- [ ] 1. 收集 git 上下文
+- [ ] 2. 预检（脏工作区 / 在默认分支 / 已有 PR）
+- [ ] 3. 根据 git 记录生成 title + body
+- [ ] 4. 如未跟踪远程则 `git push -u origin HEAD`
+- [ ] 5. `gh pr create`
+- [ ] 6. 把 PR URL 回给用户
+```
+
+### 1. 收集 git 上下文
+
+从仓库根目录执行 `.cursor/skills/create-pr/scripts/collect-context.sh`。它会打印：
+
+- **HEAD**：上一条 git 记录（`git log -1` + `git show --stat`）
+- 当前分支、默认 base、是否已 push
+- `base...HEAD` 的 commit 列表与 diffstat
+- 工作区是否干净
+
+标题与正文**以上一条（HEAD）提交为主**。若该分支相对 base 还有更早提交，把它们并入 Changes / Test plan，不要只复述 HEAD 的 subject 而漏掉其余 diff。
+
+需要补细节时再跑（不要打印带凭据的 remote URL）：
+
+```bash
+git show --format= --no-ext-diff HEAD
+git diff --stat "${BASE}...HEAD"
+```
+
+`${BASE}` 用脚本输出的 default base（通常是 `origin/main`）。
+
+### 2. 预检
+
+| 情况 | 动作 |
+|------|------|
+| 当前就在默认分支（`main` / `master`） | 停止。请用户切到 feature 分支后再执行。 |
+| 工作区有未提交改动 | 警告用户：PR 只包含已提交内容。不要擅自 commit。 |
+| `gh pr view` 对该分支已有 **OPEN** 的 PR | 停止，返回已有 URL，不要再 create。MERGED / CLOSED 不挡。 |
+| HEAD 与默认分支没有 diff | 停止，没有可开的 PR。 |
+| `gh` 未登录 / 无权限 | 停止，说明要用 `gh auth status` 检查。 |
+
+禁止：改 git config、`--force` / `--force-with-lease` push、`--no-verify` / `--no-gpg-sign`、interactive rebase、`git add .`。
+
+### 3. 生成 title 与 body
+
+只根据收集到的 git 记录与 diff 生成，不要编造未出现的功能、文件或测试。
+
+**Language: English only.** Title and body must be English, even if the git record, branch name, or user prompt is Chinese. Translate; do not copy non-English commit text into the PR.
+
+**Title**
+
+- English imperative sentence, ≤72 characters, no trailing period.
+- 仓库已用 Conventional Commits（`feat:` / `fix:` / `docs:` 等）则沿用；HEAD subject 已经合适就微调复用，不要为了炫技重写。若 HEAD subject 不是英文，先译成英文再套 conventional prefix。
+- 范围以 HEAD 为准：HEAD 是 bugfix 就不要写成巨大 refactor。
+
+**Body（GitHub Flavored Markdown，多段式）**
+
+必须用下面结构。空段删掉，不要留占位符。语气像给 reviewer 的简报：先 What+Why，再可扫的 Changes，最后可执行的 Test plan。
+
+```markdown
+## Summary
+
+<1–3 条 bullet：做了什么、为什么。写意图，不要列文件名。>
+
+## Changes
+
+- <按主题分组的具体改动，点出行为 / API / schema / 兼容性>
+- <必要时用 **Area:** 前缀，如 **Worker:** / **API:** / **Console:**>
+
+## Test plan
+
+- [ ] <可执行的验证步骤：命令、路径、手动操作>
+
+## Notes
+
+<可选：breaking change、rollout、follow-up、截图。没有就整段省略。>
+```
+
+风格约束：
+
+- 用 GFM：`##` 标题、`-` 列表、`- [ ]` task list。需要折叠大段日志时才用 `<details>`。
+- 关联 issue 写成 `Closes #123` / `Fixes #123`（仅当 git 记录或用户明确提到）。
+- 不要写 “This PR …”、不要贴完整 diff、不要空话 checklist（“tested locally” 这种不算）。
+- Test plan 要能在本仓库执行：点名 `backend/`、`backend-java/`、`frontend/` 等真实路径与命令。
+- Title 和 body 一律英文。专有名词、代码标识符、路径保持原样；不要写中文段落或中英混排说明。
+
+### 4. Push
+
+分支未跟踪远程，或 local 超前 remote 时：
+
+```bash
+git push -u origin HEAD
+```
+
+不要 force push。不要 push 到 `main`/`master`。
+
+### 5. 创建 PR
+
+用 HEREDOC 传 body，避免转义问题：
+
+```bash
+gh pr create --base "${BASE_NAME}" --title "${TITLE}" --body "$(cat <<'EOF'
+## Summary
+
+- ...
+
+## Changes
+
+- ...
+
+## Test plan
+
+- [ ] ...
+
+EOF
+)"
+```
+
+`${BASE_NAME}` 是短名（`main`），不是 `origin/main`。仅当用户明确要求 draft 时加 `--draft`。
+
+### 6. 收尾
+
+把 `gh pr create` 打印的 URL 原样发给用户。不要再改 PR。若 create 失败，贴错误并停下。
+
+## 示例
+
+HEAD: `feat: integrate Temporal backend for durable workflows`
+
+Title: `feat: integrate Temporal backend for durable workflows`
+
+```markdown
+## Summary
+
+- Add Temporal as an opt-in durable backend so agent runs survive worker restarts.
+- Keep the existing Redis job path as the default when Temporal is unset.
+
+## Changes
+
+- **Worker:** Temporal workflow + worker process for `Run` execution.
+- **API:** persist workflow id on the run; map cancel to the Temporal handle.
+- **Config:** `TEMPORAL_TARGET` / task-queue settings; no change to the default adapter.
+
+## Test plan
+
+- [ ] `uv run pytest` in `backend/`
+- [ ] Start API + Temporal worker, create a run, confirm it completes
+- [ ] Kill the worker mid-run, restart, confirm the run resumes
+- [ ] Cancel an in-flight run and confirm the Temporal workflow is cancelled
+```
