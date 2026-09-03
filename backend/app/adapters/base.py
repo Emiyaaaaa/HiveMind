@@ -45,6 +45,9 @@ class AdapterContext:
     resume: RunResumeContext | None = None
     # Ordered chat history loaded from the messages table on retry / resume.
     run_messages: list[dict[str, Any]] | None = None
+    # Prior turns from the same thread (window-trimmed); empty when no thread.
+    thread_id: str | None = None
+    thread_messages: list[dict[str, Any]] = field(default_factory=list)
     step_index_base: int = 0
     emit: EmitCallback = field(
         default=None  # type: ignore[assignment]

@@ -28,6 +28,7 @@ from app.models import (
     Run,
     RunStatus,
     Step,
+    Thread,
     ToolCall,
 )
 from app.core.telemetry import (
@@ -64,6 +65,10 @@ class RunNotFound(Exception):
 
 
 class AgentNotFound(Exception):
+    pass
+
+
+class ThreadNotFound(Exception):
     pass
 
 
@@ -120,10 +125,26 @@ class RunService:
         ):
             raise AgentNotFound(payload.agent_id)
 
+        thread_id: str | None = payload.thread_id
+        if thread_id is not None:
+            thread = await self.session.get(Thread, thread_id)
+            if (
+                thread is None
+                or thread.tenant_id != agent.tenant_id
+                or thread.agent_id != agent.id
+                or (
+                    project_id is not None
+                    and thread.project_id is not None
+                    and thread.project_id != project_id
+                )
+            ):
+                raise ThreadNotFound(thread_id)
+
         run = Run(
             tenant_id=agent.tenant_id,
             project_id=agent.project_id,
             agent_id=agent.id,
+            thread_id=thread_id,
             adapter=payload.adapter or agent.adapter,
             status=RunStatus.PENDING,
             input=payload.input,

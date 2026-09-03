@@ -51,6 +51,7 @@ class PydanticAIAdapter(OrchestratorAdapter):
 
         try:
             agent = load_agent(ctx.agent_config.get("agent_factory"))
+            message_history = openai_dicts_to_pydantic_history(ctx.thread_messages)
             async with AsyncExitStack() as stack:
                 bridge: AgentFlowToolset | None = None
                 if uses_agentflow_tools(ctx.agent_config):
@@ -58,12 +59,15 @@ class PydanticAIAdapter(OrchestratorAdapter):
                     if surface.tools:
                         bridge = AgentFlowToolset(surface, ctx, step_index)
 
-                async with agent.run_stream_events(
-                    prompt,
-                    run_id=ctx.run_id,
-                    metadata=dict(ctx.metadata) or None,
-                    toolsets=[bridge] if bridge is not None else None,
-                ) as events:
+                run_kwargs: dict[str, Any] = {
+                    "run_id": ctx.run_id,
+                    "metadata": dict(ctx.metadata) or None,
+                    "toolsets": [bridge] if bridge is not None else None,
+                }
+                if message_history:
+                    run_kwargs["message_history"] = message_history
+
+                async with agent.run_stream_events(prompt, **run_kwargs) as events:
                     async for event in events:
                         if delta := text_delta(event):
                             await ctx.emit_token_delta(step_index=step_index, delta=delta)
@@ -217,6 +221,31 @@ def prompt_from_input(run_input: dict[str, Any]) -> str:
             value = run_input[key]
             return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return json.dumps(run_input, ensure_ascii=False)
+
+
+def openai_dicts_to_pydantic_history(messages: list[dict[str, Any]]) -> list[Any]:
+    """Convert OpenAI-style dicts to PydanticAI ModelMessage history when available."""
+    if not messages:
+        return []
+    try:
+        from pydantic_ai.messages import (
+            ModelRequest,
+            ModelResponse,
+            TextPart,
+            UserPromptPart,
+        )
+    except ImportError:
+        return []
+
+    history: list[Any] = []
+    for message in messages:
+        role = message.get("role")
+        content = str(message.get("content") or "")
+        if role == "user" and content:
+            history.append(ModelRequest(parts=[UserPromptPart(content=content)]))
+        elif role == "assistant" and content:
+            history.append(ModelResponse(parts=[TextPart(content=content)]))
+    return history
 
 
 def adapter_output(value: Any) -> dict[str, Any]:

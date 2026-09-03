@@ -272,6 +272,15 @@ class Settings(BaseSettings):
         le=500,
         description="Upper bound for limit on GET /v1/runs/{id}/messages.",
     )
+    thread_messages_max: int = Field(
+        default=40,
+        ge=0,
+        le=500,
+        description=(
+            "Maximum prior thread messages seeded into AdapterContext "
+            "(0 = no count cap; token window from agent memory config still applies)."
+        ),
+    )
 
     memory_checkpoint_bytes_alert_threshold: int = Field(
         default=262_144,

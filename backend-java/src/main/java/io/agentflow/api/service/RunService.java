@@ -15,6 +15,7 @@ import io.agentflow.api.entity.MessageEntity;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.entity.RunStatus;
 import io.agentflow.api.entity.StepEntity;
+import io.agentflow.api.entity.ThreadEntity;
 import io.agentflow.api.entity.ToolCallEntity;
 import io.agentflow.api.jobs.CancelSignal;
 import io.agentflow.api.jobs.JobProducer;
@@ -22,6 +23,7 @@ import io.agentflow.api.repository.CheckpointRepository;
 import io.agentflow.api.repository.MessageRepository;
 import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
+import io.agentflow.api.repository.ThreadRepository;
 import io.agentflow.api.repository.ToolCallRepository;
 import io.agentflow.api.security.AccessControl;
 import io.agentflow.api.security.Role;
@@ -55,6 +57,7 @@ public class RunService {
     private final ToolCallRepository toolCalls;
     private final CheckpointRepository checkpoints;
     private final AgentService agentService;
+    private final ThreadRepository threads;
     private final JobProducer jobProducer;
     private final CancelSignal cancelSignal;
 
@@ -65,6 +68,7 @@ public class RunService {
             ToolCallRepository toolCalls,
             CheckpointRepository checkpoints,
             AgentService agentService,
+            ThreadRepository threads,
             JobProducer jobProducer,
             CancelSignal cancelSignal) {
         this.runs = runs;
@@ -73,6 +77,7 @@ public class RunService {
         this.toolCalls = toolCalls;
         this.checkpoints = checkpoints;
         this.agentService = agentService;
+        this.threads = threads;
         this.jobProducer = jobProducer;
         this.cancelSignal = cancelSignal;
     }
@@ -85,9 +90,22 @@ public class RunService {
                 ? req.getAdapter()
                 : agent.getAdapter();
 
+        String threadId = req.getThreadId();
+        if (threadId != null && !threadId.isBlank()) {
+            ThreadEntity thread = threads
+                    .findByIdAndTenantId(threadId, agent.getTenantId())
+                    .orElseThrow(() -> new ThreadNotFoundException(threadId));
+            if (!agent.getId().equals(thread.getAgentId())) {
+                throw new ThreadNotFoundException(threadId);
+            }
+        } else {
+            threadId = null;
+        }
+
         RunEntity run = new RunEntity();
         run.setTenantId(agent.getTenantId());
         run.setAgentId(agent.getId());
+        run.setThreadId(threadId);
         run.setAdapter(adapter);
         run.setStatus(RunStatus.PENDING);
         run.setInput(new HashMap<>(req.getInput()));

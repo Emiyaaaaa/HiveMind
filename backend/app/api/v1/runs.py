@@ -17,6 +17,7 @@ from app.services.run_service import (
     RunConflict,
     RunNotFound,
     RunService,
+    ThreadNotFound,
 )
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -65,6 +66,8 @@ async def create_run(
         )
     except AgentNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {exc}") from exc
+    except ThreadNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Thread not found: {exc}") from exc
 
     await service.start_run(run.id)
     try:

@@ -1,4 +1,12 @@
-import type { Agent, AgentVersion, AgentVersionDiff, MessagePage, Run } from "./types";
+import type {
+  Agent,
+  AgentVersion,
+  AgentVersionDiff,
+  MessagePage,
+  Run,
+  Thread,
+  ThreadMessagePage,
+} from "./types";
 import { normalizeUsage } from "./usage";
 
 function authHeaders(): Record<string, string> {
@@ -70,6 +78,7 @@ export const api = {
   createRun: async (body: {
     agent_id: string;
     input: Record<string, unknown>;
+    thread_id?: string;
   }) =>
     normalizeRun(
       await request<Run>("/v1/runs", {
@@ -77,6 +86,37 @@ export const api = {
         body: JSON.stringify(body),
       }),
     ),
+  listThreads: () => request<Thread[]>("/v1/threads"),
+  getThread: (id: string) => request<Thread>(`/v1/threads/${id}`),
+  createThread: (body: {
+    agent_id: string;
+    title?: string;
+    user_id?: string;
+  }) =>
+    request<Thread>("/v1/threads", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listThreadMessages: async (
+    id: string,
+    params?: { cursor?: string; limit?: number },
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.cursor != null) {
+      search.set("cursor", params.cursor);
+    }
+    if (params?.limit != null) {
+      search.set("limit", String(params.limit));
+    }
+    const query = search.toString();
+    return request<ThreadMessagePage>(
+      `/v1/threads/${id}/messages${query ? `?${query}` : ""}`,
+    );
+  },
+  listThreadRuns: async (id: string) => {
+    const runs = await request<Run[]>(`/v1/threads/${id}/runs`);
+    return runs.map(normalizeRun);
+  },
   listAgents: () => request<Agent[]>("/v1/agents"),
   createAgent: (body: {
     name: string;
