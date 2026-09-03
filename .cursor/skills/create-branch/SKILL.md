@@ -1,0 +1,121 @@
+---
+name: create-branch
+description: >-
+  Create a feature branch from staged working-tree changes, switch to it,
+  run git add ., and commit. Use when the user asks to create a branch,
+  switch branch from staged changes, commit staged work, run this skill,
+  or invoke create-branch. Does not push or open a PR.
+disable-model-invocation: true
+---
+
+# Create Branch
+
+根据暂存区的代码内容生成分支名并切分支，把暂存区的代码执行git add . 然后commit。
+
+不 push、不开 PR。开 PR 走 `create-pr` skill。
+
+## 何时执行
+
+仅在用户显式要求切分支、从暂存区建分支、提交暂存改动、执行本 skill 时运行。不要在创建 PR、闲聊、或无关编辑后主动执行。
+
+## 工作流
+
+按顺序执行。任一步失败则停下，不要 commit。
+
+```
+- [ ] 1. 收集暂存区 / 工作区改动
+- [ ] 2. 预检（无改动 / 机密文件）
+- [ ] 3. 根据暂存区内容生成分支名并切分支
+- [ ] 4. git add .
+- [ ] 5. 根据暂存区内容生成 commit message 并 commit
+- [ ] 6. 把分支名和 commit 回给用户
+```
+
+### 1. 收集改动
+
+从仓库根目录执行 `.cursor/skills/create-branch/scripts/collect-changes.sh`。它会打印：
+
+- 当前分支、默认 base、`on_default`
+- `has_staged` / `has_unstaged`
+- **staged (index)**：暂存区 diff（命名与 commit 的主依据）
+- unstaged / untracked：随后 `git add .` 也会纳入，生成名字时一并考虑
+
+不要打印带凭据的 remote URL。
+
+### 2. 预检
+
+| 情况 | 动作 |
+|------|------|
+| `has_staged: false` 且 `has_unstaged: false` | 停止。没有可提交的改动。 |
+| `has_staged: false` 但工作区有改动 | 继续。用 unstaged / untracked 生成分支名；下一步 `git add .` 会把它们送进暂存区。 |
+| 改动里有 `.env`、`credentials.json`、私钥、或其它机密 | 停止并指出路径。不要 `git add .`，不要 commit。 |
+| detached HEAD | 脚本会失败。停下。 |
+
+禁止：改 git config、`--force`、`--no-verify` / `--no-gpg-sign`、interactive rebase、push、`gh pr create`、reset 默认分支。
+
+### 3. 生成分支名并切分支
+
+根据暂存区的代码内容生成分支名并切分支。以 staged diff 为主；暂存区为空时用 unstaged + untracked。不要问用户要名字，除非脚本因重名失败。
+
+**命名规则**（对齐本仓库：`feat/openapi-sdk`、`fix/run-message-pagination`）：
+
+- `{type}/{kebab-slug}`。`type` 按改动推断（`feat` / `fix` / `docs` / `chore` / `refactor` / `perf` / `test` / `ci`），默认 `feat`。
+- `slug`：2–5 个英文词，来自改动意图（diff 内容 + 主要路径），全小写、连字符、ASCII。
+- 总长 ≤ 50。不要用日期、username、随机 hash 当主体。
+- 禁止：`main` / `master` / `HEAD` / 默认分支名。本地或 `origin/` 已存在则在 slug 末尾加 `-2`（再冲突 `-3`）。
+
+示例：暂存区是 create-pr skill 的新增文件 → `feat/create-pr-skill`。
+
+无论当前是否在默认分支，都切到新分支（`git switch -c` 会带走暂存区和工作区改动；旧分支停在原 HEAD）。
+
+```bash
+.cursor/skills/create-branch/scripts/create-and-switch.sh "${BRANCH}"
+```
+
+失败则贴错误并停下。不要 checkout 回默认分支，不要 reset。切完后确认当前分支已不是 `main` / `master`，**然后才允许 add / commit**。绝对不要在默认分支上 commit。
+
+### 4. git add .
+
+把暂存区的代码执行git add . 然后commit。本步只做 add：
+
+```bash
+git add .
+```
+
+`git add .` 之后立刻 `git diff --cached --name-only`。若出现机密文件，`git restore --staged` 掉它们并停止，不要 commit。若 add 完暂存区仍为空，停止。
+
+### 5. commit
+
+只根据暂存区 diff 生成英文 Conventional Commit，不要编造未出现的功能或文件。
+
+**Language: English only.** Subject 即使源 diff / 路径是中文也要翻译。
+
+- 一行 subject：`feat:` / `fix:` / `docs:` 等前缀 + 祈使句，≤72 字符，句末无句号。
+- 需要时再加空行和 1–3 句 body（意图，不列文件名）。不需要就不写 body。
+- 范围跟 diff 走：小修复不要写成巨大 refactor。
+
+```bash
+git commit -m "$(cat <<'EOF'
+feat: add create-branch skill for staged work
+
+EOF
+)"
+```
+
+不要 `--amend`。不要 `--no-verify`。hook 失败则修好再 **新建** commit，不要 amend。
+
+### 6. 收尾
+
+把新分支名、`git log -1 --oneline`、以及 `git status --short` 发给用户。提醒开 PR 用 `create-pr`。不要 push。
+
+## 示例
+
+Staged: 新增 `.cursor/skills/create-branch/SKILL.md` 与两个脚本。
+
+Branch: `feat/create-branch-skill`
+
+Commit:
+
+```
+feat: add create-branch skill for staged work
+```

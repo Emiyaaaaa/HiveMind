@@ -1,21 +1,20 @@
 ---
 name: create-pr
 description: >-
-  Create a GitHub pull request with `gh pr create`. If currently on main/master,
-  generate a branch name from recent git history, switch to it, then open the PR.
-  Title and body are English, AI-generated from the latest git commit (HEAD)
-  plus the current branch vs the default base. Use only when the user explicitly
-  asks to create a PR, open a pull request, run this skill, or invoke create-pr.
+  Create a GitHub pull request with `gh pr create`. Title and body are English,
+  AI-generated from the latest git commit (HEAD) plus the current branch vs the
+  default base. Use only when the user explicitly asks to create a PR, open a
+  pull request, run this skill, or invoke create-pr.
 disable-model-invocation: true
 ---
 
 # Create PR
 
-从当前分支的 git 记录生成**英文**标题与正文，调用 `gh pr create` 开 PR。若当前在默认分支，先根据历史改动切出 feature 分支再开 PR。不要用 `--fill` / `--fill-first`。
+从当前分支的 git 记录生成**英文**标题与正文，调用 `gh pr create` 开 PR。不要用 `--fill` / `--fill-first`。
 
 ## 何时执行
 
-仅在用户显式要求创建 PR、打开 pull request、执行本 skill 时运行。不要在提交、推送、或闲聊里主动开 PR。
+仅在用户显式要求创建 PR、打开 pull request、执行本 skill 时运行。不要在提交、推送、或闲聊里主动开 PR。切分支、暂存、commit 走 `create-branch` skill，不要在本 skill 里做。
 
 ## 工作流
 
@@ -23,13 +22,11 @@ disable-model-invocation: true
 
 ```
 - [ ] 1. 收集 git 上下文
-- [ ] 2. 预检（脏工作区 / 无 diff / gh 权限）
-- [ ] 3. 若在默认分支：根据历史改动生成分支名并切换
-- [ ] 4. 当前分支已有 OPEN PR 则停止
-- [ ] 5. 根据 git 记录生成 title + body
-- [ ] 6. 如未跟踪远程则 `git push -u origin HEAD`
-- [ ] 7. `gh pr create`
-- [ ] 8. 把 PR URL 回给用户
+- [ ] 2. 预检（脏工作区 / 在默认分支 / 已有 PR）
+- [ ] 3. 根据 git 记录生成 title + body
+- [ ] 4. 如未跟踪远程则 `git push -u origin HEAD`
+- [ ] 5. `gh pr create`
+- [ ] 6. 把 PR URL 回给用户
 ```
 
 ### 1. 收集 git 上下文
@@ -37,7 +34,7 @@ disable-model-invocation: true
 从仓库根目录执行 `.cursor/skills/create-pr/scripts/collect-context.sh`。它会打印：
 
 - **HEAD**：上一条 git 记录（`git log -1` + `git show --stat`）
-- 当前分支、默认 base、`on_default`、是否已 push
+- 当前分支、默认 base、是否已 push
 - `base...HEAD` 的 commit 列表与 diffstat
 - 工作区是否干净
 
@@ -56,40 +53,15 @@ git diff --stat "${BASE}...HEAD"
 
 | 情况 | 动作 |
 |------|------|
+| 当前就在默认分支（`main` / `master`） | 停止。请用户先执行 `create-branch`，或切到 feature 分支后再执行。 |
 | 工作区有未提交改动 | 警告用户：PR 只包含已提交内容。不要擅自 commit。 |
-| HEAD 与默认分支没有 diff | 停止，没有可开的 PR。不要为了开 PR 去新建空分支。 |
+| `gh pr view` 对该分支已有 **OPEN** 的 PR | 停止，返回已有 URL，不要再 create。MERGED / CLOSED 不挡。 |
+| HEAD 与默认分支没有 diff | 停止，没有可开的 PR。 |
 | `gh` 未登录 / 无权限 | 停止，说明要用 `gh auth status` 检查。 |
-| `on_default: true`（当前就在 `main` / `master`） | **不要停止。** 进入步骤 3 切出 feature 分支。 |
-| `on_default: false` 且 `gh pr view` 已有 **OPEN** 的 PR | 停止，返回已有 URL，不要再 create。MERGED / CLOSED 不挡。 |
 
-禁止：改 git config、`--force` / `--force-with-lease` push、`--no-verify` / `--no-gpg-sign`、interactive rebase、`git add .`、把新分支 reset / 把默认分支回退。
+禁止：改 git config、`--force` / `--force-with-lease` push、`--no-verify` / `--no-gpg-sign`、interactive rebase、`git add .`。
 
-### 3. 从默认分支切出 feature 分支
-
-仅当 `on_default: true` 时执行；否则跳过本步。
-
-根据 collect-context 的 **HEAD** 与 `base_ref..HEAD` 的 commit / diffstat 生成分支名（不要问用户要名字，除非脚本因重名失败）。
-
-**命名规则**（对齐本仓库：`feat/openapi-sdk`、`fix/run-message-pagination`）：
-
-- `{type}/{kebab-slug}`。`type` 取 HEAD 的 Conventional Commits 前缀（`feat` / `fix` / `docs` / `chore` / `refactor` / `perf` / `test` / `ci`）；没有前缀则按改动推断，默认 `feat`。
-- `slug`：2–5 个英文词，来自改动意图（HEAD subject + 主要路径），全小写、连字符、ASCII。
-- 总长 ≤ 50。不要用日期、username、随机 hash 当主体。
-- 禁止：`main` / `master` / `HEAD` / 默认分支名。本地或 `origin/` 已存在则在 slug 末尾加 `-2`（再冲突 `-3`）。
-
-示例：`feat: add create-pr skill...` → `feat/create-pr-skill`。
-
-然后从仓库根目录执行（把生成的名字传进去）：
-
-```bash
-.cursor/skills/create-pr/scripts/switch-from-default.sh "${BRANCH}"
-```
-
-脚本会 `git switch -c`。失败则贴错误并停下。不要 checkout 回默认分支、不要 reset 默认分支、不要 force。
-
-切成功后**再跑一次** `collect-context.sh`，确认 `branch:` 已变且 `on_default: false`。然后检查 `existing_pr`：已有 OPEN PR 则停止并返回 URL。
-
-### 4. 生成 title 与 body
+### 3. 生成 title 与 body
 
 只根据收集到的 git 记录与 diff 生成，不要编造未出现的功能、文件或测试。
 
@@ -132,7 +104,7 @@ git diff --stat "${BASE}...HEAD"
 - Test plan 要能在本仓库执行：点名 `backend/`、`backend-java/`、`frontend/` 等真实路径与命令。
 - Title 和 body 一律英文。专有名词、代码标识符、路径保持原样；不要写中文段落或中英混排说明。
 
-### 5. Push
+### 4. Push
 
 分支未跟踪远程，或 local 超前 remote 时：
 
@@ -142,7 +114,7 @@ git push -u origin HEAD
 
 不要 force push。不要 push 到 `main`/`master`。
 
-### 6. 创建 PR
+### 5. 创建 PR
 
 用 HEREDOC 传 body，避免转义问题：
 
@@ -166,7 +138,7 @@ EOF
 
 `${BASE_NAME}` 是短名（`main`），不是 `origin/main`。仅当用户明确要求 draft 时加 `--draft`。
 
-### 7. 收尾
+### 6. 收尾
 
 把 `gh pr create` 打印的 URL 原样发给用户。不要再改 PR。若 create 失败，贴错误并停下。
 

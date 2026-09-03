@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Create and switch to a new branch from the current default-branch HEAD.
-# Usage: switch-from-default.sh <branch-name>
+# Create and switch to a new branch from the current HEAD.
+# Usage: create-and-switch.sh <branch-name>
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  echo "usage: switch-from-default.sh <branch-name>" >&2
+  echo "usage: create-and-switch.sh <branch-name>" >&2
   exit 2
 fi
 
@@ -27,11 +27,6 @@ if command -v gh >/dev/null 2>&1; then
   if [[ -n "${detected}" ]]; then
     default_base="${detected}"
   fi
-fi
-
-if [[ "${current}" != "${default_base}" ]]; then
-  echo "error: current branch is '${current}', not default '${default_base}'" >&2
-  exit 1
 fi
 
 if [[ ! "${branch_name}" =~ ^[a-z0-9]+[a-z0-9/_-]*[a-z0-9]$ ]]; then

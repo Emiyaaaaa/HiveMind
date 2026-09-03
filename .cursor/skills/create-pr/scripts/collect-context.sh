@@ -43,15 +43,9 @@ if command -v gh >/dev/null 2>&1; then
   existing_pr="$(gh pr view --json url,state --jq '"\(.state) \(.url)"' 2>/dev/null || true)"
 fi
 
-on_default="false"
-if [[ "${branch}" == "${default_base}" ]]; then
-  on_default="true"
-fi
-
 echo "=== meta ==="
 echo "branch: ${branch}"
 echo "default_base: ${default_base}"
-echo "on_default: ${on_default}"
 echo "base_ref: ${base_ref}"
 echo "upstream: ${upstream:-none}"
 if [[ -n "${ahead_behind}" ]]; then
