@@ -72,6 +72,7 @@ export interface Run {
   id: string;
   tenant_id: string;
   agent_id: string;
+  thread_id?: string | null;
   adapter: string;
   status: RunStatus;
   input: Record<string, unknown>;
@@ -84,6 +85,27 @@ export interface Run {
   messages_truncated?: boolean;
   checkpoints: Checkpoint[];
   usage: RunUsage;
+}
+
+export interface Thread {
+  id: string;
+  tenant_id: string;
+  project_id: string | null;
+  agent_id: string;
+  user_id: string | null;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ThreadMessage extends Message {
+  run_id: string;
+}
+
+export interface ThreadMessagePage {
+  items: ThreadMessage[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 export interface Agent {

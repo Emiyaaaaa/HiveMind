@@ -2,7 +2,7 @@
 
 架构与数据模型见 [architecture.md](architecture.md) 与 [data-model.md](data-model.md)。
 
-**最后核对：** 2026-09-02
+**最后核对：** 2026-09-03
 
 ## 优化方向
 
@@ -76,7 +76,7 @@
 **目标：** 在 runtime 之上提供 eval、记忆与路由，而非塞进 adapter。
 
 - [ ] Run 对比与回归套件
-- [ ] Agent 记忆服务（见下方专项；对话线程 + 情景摘要 + 语义事实 + 文档 RAG）
+- [ ] Agent 记忆服务（M1 Thread ✅；M2/M3 情景摘要 + 语义事实 + 文档 RAG 待做）
 - [ ] 模型路由 / fallback 策略
 - [ ] 定时与批量 Run
 - [ ] 细粒度流式：推理块、多模态附件（DB 持久化）
@@ -89,11 +89,11 @@
 
 | 已有 | 实际作用 | 缺口 |
 | --- | --- | --- |
-| `Message`（`backend/app/models/run.py`） | 单次 Run 内有序 transcript；`role` 为 system/user/assistant/tool | 无 `thread_id` / `user_id`；无跨 Run 查询；`content` 仅 TEXT；`GET /v1/runs/{id}` 一次拉全量 |
+| `Message`（`backend/app/models/run.py`） | 单次 Run 内有序 transcript；`role` 为 system/user/assistant/tool | 无跨 Run 语义检索；`content` 仅 TEXT（Thread L1 已补跨 Run 窗口） |
 | `Checkpoint.state` | adapter 不透明快照，供 retry/resume/Temporal 恢复 | LangGraph 每次节点把整份 `graph_state`（含不断增长的 `messages`）写入 JSON；与 `Message` 行重复存储 |
-| `AdapterContext`（`backend/app/adapters/base.py`） | 只写：`emit_message` / `emit_checkpoint` | 无 `recall` / `search` / `store`；adapter 看不到历史 Run |
-| `POST /v1/runs` | 每次调用独立 Run | 无会话/线程；连续对话只能由客户端自己拼 `input` |
-| 控制台 Messages 列表 | 按 `r.messages` 全量渲染 | 无折叠、无检索、无「从哪条记忆注入」的审计 |
+| `AdapterContext`（`backend/app/adapters/base.py`） | 只写：`emit_message` / `emit_checkpoint`；只读：`thread_messages`（L1） | 无 `recall` / `search` / `store`（L2/L3 待做） |
+| `POST /v1/runs` | 可带可选 `thread_id` 绑定会话 | 无语义记忆；连续对话靠 Thread L1 |
+| 控制台 Messages / Threads | Run 级 Messages + Thread 连续对话页 | 无记忆注入审计（M2） |
 
 LangGraph 默认图（`backend/app/adapters/langgraph_adapter.py`）把完整 `messages` 列表交给模型，没有窗口裁剪、摘要或 token 预算。retry 时 Java/Python 把 `checkpoint_state` 塞进 `Run.metadata._resume` 再入队 Redis——长对话会把大 JSON 打进 metadata 和 job payload。
 
@@ -135,14 +135,14 @@ L0 属于执行与审计；L1–L3 才是「Agent Memory」。L0 不能删，但
 
 建议拆成三期，每一期都有独立 API 与验收，避免「记忆服务」变成无边界项目。
 
-#### M1 — Thread 短记忆（跨 Run 对话）
+#### M1 — Thread 短记忆（跨 Run 对话） ✅
 
 **目标：** 同一会话连续 `POST /v1/runs` 时，worker 能自动带上最近对话，而不是让客户端把历史塞进 `input`。
 
-- 数据：`threads`（`id`, `tenant_id`, `project_id`, `agent_id`, 可选 `user_id`, `title`）+ `Run.thread_id`（nullable FK）。
-- API：`POST /v1/threads`；`POST /v1/runs` 接受 `thread_id`；`GET /v1/threads/{id}/messages`（跨 Run 合并，按时间/index）。
-- Runtime：`AdapterContext` 增加只读 `thread_messages: list[Message]`（已按窗口裁剪）。LangGraph / PydanticAI / AutoGen 从这里 seed，不各自查库。
-- 控制台：按 thread 看连续对话；Run 详情显示所属 thread。
+- [x] 数据：`threads`（`id`, `tenant_id`, `project_id`, `agent_id`, 可选 `user_id`, `title`）+ `Run.thread_id`（nullable FK）。
+- [x] API：`POST /v1/threads`；`POST /v1/runs` 接受 `thread_id`；`GET /v1/threads/{id}/messages`（跨 Run 合并，按时间/index）。
+- [x] Runtime：`AdapterContext` 增加只读 `thread_messages: list[Message]`（已按窗口裁剪）。LangGraph / PydanticAI / AutoGen 从这里 seed，不各自查库。
+- [x] 控制台：按 thread 看连续对话；Run 详情显示所属 thread。
 - **非目标：** 向量检索、自动抽事实。
 
 **验收：** 两次 Run 共用 `thread_id`，第二次模型 prompt 含第一次的 user/assistant 回合；不同 `tenant_id` 的 thread 404；不传 `thread_id` 行为与今日一致。
@@ -226,7 +226,7 @@ Adapters **不得** import SQLAlchemy 查 `messages` / `memory_items`（与现�
 
 1. L0 优化 1–3（checkpoint 瘦身 + resume 不塞大 blob）——不改 API 契约，风险低。
 2. L0 优化 4–6（窗口、分页、去重 emit）——开始动 API 与 LangGraph。
-3. M1 Thread —— 第一个用户可感知的「记忆」。
+3. ~~**M1 Thread**~~ — 已完成：`threads` + `Run.thread_id`；`AdapterContext.thread_messages`；控制台 Threads。
 4. M2 MemoryItem + pgvector + `memory.*` 工具 + 注入审计。
 5. M3 治理与评测 —— 与回归套件一起。
 

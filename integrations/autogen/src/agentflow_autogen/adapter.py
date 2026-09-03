@@ -83,7 +83,8 @@ class AutoGenAdapter(OrchestratorAdapter):
                     await handler.begin_step(default_node)
 
                 await handler.emit_user_prompt(prompt)
-                async for event in runnable.run_stream(task=prompt):
+                task = build_autogen_task(prompt, ctx.thread_messages)
+                async for event in runnable.run_stream(task=task):
                     await handler.handle(event, bridged_names=bridged_names)
 
                 if bridged_failure:
@@ -380,6 +381,30 @@ def prompt_from_input(run_input: dict[str, Any]) -> str:
             value = run_input[key]
             return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return json.dumps(run_input, ensure_ascii=False)
+
+
+def build_autogen_task(
+    prompt: str, thread_messages: list[dict[str, Any]] | None
+) -> str | list[TextMessage]:
+    """Seed AutoGen with prior thread turns when present."""
+    if not thread_messages:
+        return prompt
+    history: list[TextMessage] = []
+    for message in thread_messages:
+        role = message.get("role")
+        content = str(message.get("content") or "")
+        if not content:
+            continue
+        if role == "user":
+            history.append(TextMessage(content=content, source=USER_SOURCE))
+        elif role == "assistant":
+            history.append(
+                TextMessage(content=content, source=str(message.get("name") or "assistant"))
+            )
+    if not history:
+        return prompt
+    history.append(TextMessage(content=prompt, source=USER_SOURCE))
+    return history
 
 
 def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
