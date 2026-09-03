@@ -133,6 +133,64 @@ def create_team() -> RoundRobinGroupChat:
     return RoundRobinGroupChat([writer_agent(), editor_agent()], max_turns=2)
 
 
+def bridged_team_agent(
+    name: str,
+    reply: str,
+    *,
+    agentflow_tools=None,
+) -> AssistantAgent:
+    usage = RequestUsage(prompt_tokens=5, completion_tokens=2)
+    tools = list(agentflow_tools or [])
+    tool_name = getattr(tools[0], "name", "echo") if tools else "echo"
+    call = FunctionCall(
+        id=f"{name}-bridge-call",
+        name=tool_name,
+        arguments=json.dumps({"text": name}),
+    )
+    client = ReplayChatCompletionClient(
+        [
+            CreateResult(content=[call], finish_reason="function_calls", usage=usage, cached=False),
+            CreateResult(content=reply, finish_reason="stop", usage=usage, cached=False),
+        ],
+        model_info=ModelInfo(
+            vision=False,
+            function_calling=True,
+            json_output=False,
+            family="unknown",
+        ),
+    )
+    return AssistantAgent(
+        name=name,
+        model_client=client,
+        tools=tools,
+        reflect_on_tool_use=True,
+    )
+
+
+def create_bridged_team(*, agentflow_tools=None) -> RoundRobinGroupChat:
+    tools = list(agentflow_tools or [])
+    return RoundRobinGroupChat(
+        [
+            bridged_team_agent("writer", "Writer used the bridge", agentflow_tools=tools),
+            bridged_team_agent("editor", "Editor used the bridge", agentflow_tools=tools),
+        ],
+        max_turns=2,
+    )
+
+
+class RepeatedMessageTeam:
+    async def run_stream(self, *, task: str):
+        first = TextMessage(content="Draft", source="writer")
+        final = TextMessage(content="Revised draft", source="writer")
+        yield first
+        yield final
+        yield TaskResult(messages=[first, final])
+
+
+def repeated_message_team() -> RepeatedMessageTeam:
+    return RepeatedMessageTeam()
+
+
 def failing_bridged_agent(*, agentflow_tools=None) -> AssistantAgent:
     usage = RequestUsage(prompt_tokens=5, completion_tokens=2)
     call = FunctionCall(id="bridge-call", name="bridge_failure", arguments="{}")
@@ -234,6 +292,61 @@ async def test_team_run_emits_one_step_per_turn() -> None:
     assert result.output["replies"] == ["Writer says hi", "Editor approves"]
     assert [step["node"] for step in ctx.event("step.started")] == ["writer", "editor"]
     assert len(ctx.event("step.completed")) == 2
+
+
+@pytest.mark.asyncio
+async def test_team_bridged_tools_follow_the_live_turn_step() -> None:
+    ctx = RecordingContext(
+        {
+            "team_factory": factory_reference("create_bridged_team"),
+            "per_turn_steps": True,
+            "tools": ["echo"],
+        },
+        prompt="collab with tools",
+    )
+
+    result = await AutoGenAdapter().run(ctx)
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert result.output["replies"] == ["Writer used the bridge", "Editor used the bridge"]
+    assert ctx.event("step.started") == [
+        {"index": 0, "node": "writer"},
+        {"index": 1, "node": "editor"},
+    ]
+    assert [event["step_index"] for event in ctx.event("tool_call.started")] == [0, 1]
+    assert [event["step_index"] for event in ctx.event("tool_call.completed")] == [0, 1]
+    assert [event["step_index"] for event in ctx.event("message.created") if event["role"] == "assistant"] == [0, 1]
+
+    for step_index in (0, 1):
+        step_position = next(
+            index
+            for index, (event_type, data) in enumerate(ctx.events)
+            if event_type == "step.started" and data["index"] == step_index
+        )
+        tool_position = next(
+            index
+            for index, (event_type, data) in enumerate(ctx.events)
+            if event_type == "tool_call.started" and data["step_index"] == step_index
+        )
+        assert step_position < tool_position
+
+
+@pytest.mark.asyncio
+async def test_repeated_messages_from_one_agent_stay_in_the_same_turn_step() -> None:
+    ctx = RecordingContext(
+        {
+            "team_factory": factory_reference("repeated_message_team"),
+            "per_turn_steps": True,
+        }
+    )
+
+    result = await AutoGenAdapter().run(ctx)
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert result.output == {"reply": "Revised draft", "replies": ["Draft", "Revised draft"]}
+    assert ctx.event("step.started") == [{"index": 0, "node": "writer"}]
+    assert len(ctx.event("step.completed")) == 1
+    assert [event["step_index"] for event in ctx.event("message.created") if event["role"] == "assistant"] == [0, 0]
 
 
 @pytest.mark.asyncio
