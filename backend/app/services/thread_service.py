@@ -209,7 +209,7 @@ class ThreadService:
             select(Message, Run)
             .join(Run, Message.run_id == Run.id)
             .where(Run.thread_id == thread_id)
-            .order_by(Run.created_at.asc(), Message.index.asc())
+            .order_by(Run.created_at.asc(), Run.id.asc(), Message.index.asc(), Message.id.asc())
         )
         if exclude_run_id is not None:
             stmt = stmt.where(Run.id != exclude_run_id)
