@@ -16,6 +16,16 @@ function isPromptEcho(message: Message): boolean {
   return message.extra?.kind === "prompt_echo";
 }
 
+function isReasoning(message: Message): boolean {
+  const kind = message.extra?.kind;
+  return kind === "reasoning" || kind === "streaming_reasoning";
+}
+
+function isStreaming(message: Message): boolean {
+  const kind = message.extra?.kind;
+  return kind === "streaming" || kind === "streaming_reasoning";
+}
+
 function mergeMessages(...groups: Message[][]): Message[] {
   const byIndex = new Map<number, Message>();
   for (const group of groups) {
@@ -26,36 +36,42 @@ function mergeMessages(...groups: Message[][]): Message[] {
   return [...byIndex.values()].sort((a, b) => a.index - b.index);
 }
 
-function PromptEchoRow({
-  message,
+function CollapsibleBlock({
+  title,
+  meta,
+  content,
   expanded,
   onToggle,
+  dashed = false,
 }: {
-  message: Message;
+  title: string;
+  meta?: string | null;
+  content: string;
   expanded: boolean;
   onToggle: () => void;
+  dashed?: boolean;
 }) {
-  const node =
-    typeof message.extra.node === "string" ? message.extra.node : null;
-
   return (
-    <li className="rounded border border-dashed border-border bg-surface/60 p-2 text-sm">
+    <li
+      className={
+        dashed
+          ? "rounded border border-dashed border-border bg-surface/60 p-2 text-sm"
+          : "rounded border border-border bg-surface/80 p-2 text-sm"
+      }
+    >
       <button
         type="button"
         className="flex w-full items-center justify-between gap-2 text-left text-xs text-muted hover:text-foreground"
         onClick={onToggle}
       >
         <span>
-          {message.role} prompt echo
-          {node ? ` · ${node}` : ""}
-          <span className="ml-2 font-mono normal-case">#{message.index}</span>
+          {title}
+          {meta ? ` · ${meta}` : ""}
         </span>
         <span>{expanded ? "Hide" : "Show"}</span>
       </button>
       {expanded ? (
-        <div className="mt-2 whitespace-pre-wrap text-foreground">
-          {message.content}
-        </div>
+        <div className="mt-2 whitespace-pre-wrap text-foreground">{content}</div>
       ) : null}
     </li>
   );
@@ -78,7 +94,7 @@ export function MessagesPanel({
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(messagesTruncated);
   const [loading, setLoading] = useState(false);
-  const [expandedEchoes, setExpandedEchoes] = useState<Set<number>>(
+  const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(),
   );
 
@@ -86,7 +102,7 @@ export function MessagesPanel({
     setOlder([]);
     setNextCursor(null);
     setHasMore(messagesTruncated);
-    setExpandedEchoes(new Set());
+    setExpanded(new Set());
   }, [runId, messagesTruncated]);
 
   const displayed = useMemo(
@@ -96,6 +112,10 @@ export function MessagesPanel({
 
   const promptEchoCount = useMemo(
     () => displayed.filter(isPromptEcho).length,
+    [displayed],
+  );
+  const reasoningCount = useMemo(
+    () => displayed.filter(isReasoning).length,
     [displayed],
   );
 
@@ -115,13 +135,13 @@ export function MessagesPanel({
     }
   }
 
-  function toggleEcho(index: number) {
-    setExpandedEchoes((prev) => {
+  function toggle(key: string) {
+    setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(index)) {
-        next.delete(index);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(index);
+        next.add(key);
       }
       return next;
     });
@@ -136,6 +156,9 @@ export function MessagesPanel({
             {displayed.length} shown
             {promptEchoCount > 0
               ? ` · ${promptEchoCount} prompt echo${promptEchoCount === 1 ? "" : "es"} collapsed`
+              : ""}
+            {reasoningCount > 0
+              ? ` · ${reasoningCount} reasoning block${reasoningCount === 1 ? "" : "s"}`
               : ""}
             {hasMore ? " · older available" : ""}
           </span>
@@ -154,21 +177,51 @@ export function MessagesPanel({
       ) : null}
 
       <ol className="max-h-[32rem] space-y-2 overflow-y-auto pr-1">
-        {displayed.map((message) =>
-          isPromptEcho(message) ? (
-            <PromptEchoRow
-              key={message.id}
-              message={message}
-              expanded={expandedEchoes.has(message.index)}
-              onToggle={() => toggleEcho(message.index)}
-            />
-          ) : (
+        {displayed.map((message) => {
+          const key = message.id;
+          if (isPromptEcho(message)) {
+            const node =
+              typeof message.extra.node === "string" ? message.extra.node : null;
+            return (
+              <CollapsibleBlock
+                key={key}
+                title={`${message.role} prompt echo`}
+                meta={
+                  node
+                    ? `${node} #${message.index}`
+                    : `#${message.index}`
+                }
+                content={message.content}
+                expanded={expanded.has(key)}
+                onToggle={() => toggle(key)}
+                dashed
+              />
+            );
+          }
+          if (isReasoning(message)) {
+            return (
+              <CollapsibleBlock
+                key={key}
+                title={
+                  isStreaming(message)
+                    ? "assistant reasoning (streaming…)"
+                    : "assistant reasoning"
+                }
+                meta={`#${message.index}`}
+                content={message.content}
+                expanded={expanded.has(key) || isStreaming(message)}
+                onToggle={() => toggle(key)}
+              />
+            );
+          }
+          return (
             <li
-              key={message.id}
+              key={key}
               className="rounded border border-border bg-surface p-3 text-sm"
             >
               <div className="mb-1 text-xs uppercase tracking-wide text-muted">
                 {message.role}
+                {isStreaming(message) ? " · streaming…" : ""}
                 {message.name ? ` · ${message.name}` : ""}
                 {message.step_id ? (
                   <span className="ml-2 font-mono normal-case">
@@ -187,8 +240,8 @@ export function MessagesPanel({
               </div>
               <div className="whitespace-pre-wrap">{message.content}</div>
             </li>
-          ),
-        )}
+          );
+        })}
       </ol>
 
       {displayed.length === 0 ? (

@@ -79,7 +79,7 @@
 - [ ] Agent 记忆服务（M1 Thread ✅；M2/M3 情景摘要 + 语义事实 + 文档 RAG 待做）
 - [x] 模型路由 / fallback 策略
 - [ ] 定时与批量 Run
-- [ ] 细粒度流式：推理块、多模态附件（DB 持久化）
+- [x] 细粒度流式：推理块（`token.delta.part` + `Message.extra.kind=reasoning`）；多模态附件（DB 持久化）待做
 
 ## Agent Memory 专项
 

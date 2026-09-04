@@ -294,6 +294,7 @@ async def test_langgraph_streams_token_deltas_and_defers_step_tokens():
     ]
     assert len(token_events) > 0
     assert all(e["step_index"] == 0 for e in token_events)
+    assert all(e.get("part", "text") == "text" for e in token_events)
     reply = (result.output or {}).get("reply", "")
     assert "".join(e["delta"] for e in token_events) == reply
 
@@ -313,6 +314,49 @@ async def test_langgraph_streams_token_deltas_and_defers_step_tokens():
     ]
     assert completed[0]["tokens_in"] == updated[0]["tokens_in"]
     assert completed[0]["tokens_out"] == updated[0]["tokens_out"]
+
+
+@pytest.mark.asyncio
+async def test_langgraph_streams_and_persists_reasoning_blocks():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "stream_tokens": True,
+        "stream_reasoning": True,
+    }
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+
+    reasoning_deltas = [
+        data
+        for event, data in ctx.events
+        if event == "token.delta" and data.get("part") == "reasoning"
+    ]
+    text_deltas = [
+        data
+        for event, data in ctx.events
+        if event == "token.delta" and data.get("part", "text") == "text"
+    ]
+    assert reasoning_deltas
+    assert text_deltas
+    reply = (result.output or {}).get("reply", "")
+    assert "".join(e["delta"] for e in text_deltas) == reply
+
+    reasoning_msgs = [
+        m
+        for m in _message_events(ctx.events)
+        if (m.get("extra") or {}).get("kind") == "reasoning"
+    ]
+    assert len(reasoning_msgs) == 1
+    assert "".join(e["delta"] for e in reasoning_deltas) == reasoning_msgs[0]["content"]
+
+    assistant = [
+        m
+        for m in _message_events(ctx.events)
+        if m["role"] == "assistant" and (m.get("extra") or {}).get("kind") != "reasoning"
+    ]
+    assert assistant[-1]["content"] == reply
 
 
 @pytest.mark.asyncio

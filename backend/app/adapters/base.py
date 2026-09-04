@@ -99,12 +99,25 @@ class AdapterContext:
         step_index: int,
         delta: str,
         role: str = "assistant",
+        part: str = "text",
         **data: Any,
     ) -> None:
-        """Stream an incremental token chunk to SSE subscribers (no DB write)."""
+        """Stream an incremental token chunk to SSE subscribers (no DB write).
+
+        ``part`` discriminates fine-grained streams: ``text`` (default) for the
+        visible reply, ``reasoning`` for model thinking / chain-of-thought.
+        Reasoning deltas are still ephemeral; persist the finished block with
+        ``emit_message(..., kind="reasoning")``.
+        """
         await self.emit(
             "token.delta",
-            {"step_index": step_index, "delta": delta, "role": role, **data},
+            {
+                "step_index": step_index,
+                "delta": delta,
+                "role": role,
+                "part": part,
+                **data,
+            },
         )
 
     async def emit_message(

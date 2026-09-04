@@ -226,30 +226,27 @@ When `feedback` is enabled and recoverable observations exhaust
 `max_tool_rounds` without a final model reply, the run fails with
 `tool_recovery_exhausted: reached max_tool_rounds=N`.
 
-## Model routing / fallback
+## Fine-grained streaming (reasoning blocks)
 
-LLM provider selection is a **runtime** concern (`backend/app/runtime/model_router.py`),
-not adapter-private logic. Agent config may set a primary `model` plus optional
-fallbacks:
+`token.delta` carries an optional `part` field:
 
-```json
-{
-  "model": "openai/gpt-4o-mini",
-  "model_routing": {
-    "fallbacks": ["openai/gpt-4o"],
-    "max_attempts_per_model": 1,
-    "retry_on": ["timeout", "rate_limit", "server_error", "connection"]
-  }
-}
-```
+| `part` | Meaning |
+| --- | --- |
+| `text` (default) | Visible assistant reply chunk |
+| `reasoning` | Model thinking / chain-of-thought chunk |
 
-`fallback_models` at the agent-config root is accepted as shorthand for
-`model_routing.fallbacks`. Transient provider errors (HTTP 429/5xx, timeouts,
-connection failures) advance to the next attempt or model; client errors (other
-4xx) fail immediately. LangGraph records the winning model and attempt trail on
-`step.updated` / `step.completed` (`model`, `model_routing`) and emits
-`model_routing_fallback` / `model_routing_exhausted` log events. Metrics:
-`agentflow.llm.routing_fallbacks`, `agentflow.llm.routing_exhausted`.
+Deltas stay SSE-only (no Redis replay log, no DB row). When the model finishes,
+LangGraph persists a `message.created` with `extra.kind = "reasoning"` (full
+text) before the visible assistant message. OpenAI-compatible providers that
+emit `reasoning_content` / `reasoning` / `thinking` on deltas are mapped
+automatically; mock mode uses `stream_reasoning: true` in agent config.
+
+The console folds reasoning in Messages and applies live `token.delta` drafts
+so operators see thinking as it streams. Thread L1 seeding skips reasoning
+rows (same as `prompt_echo`) so chain-of-thought is not replayed into the next
+prompt.
+
+Multimodal attachment persistence is still outstanding.
 
 ## Unit tests
 

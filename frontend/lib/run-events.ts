@@ -181,6 +181,71 @@ function appendMessage(messages: Message[], data: Record<string, unknown>, at: s
   return [...messages, message].sort((a, b) => a.index - b.index);
 }
 
+function streamingDraftId(stepIndex: number, part: "text" | "reasoning"): string {
+  return `sse-stream-${stepIndex}-${part}`;
+}
+
+function appendTokenDelta(
+  messages: Message[],
+  data: Record<string, unknown>,
+  at: string,
+): Message[] {
+  const stepIndex = data.step_index;
+  if (typeof stepIndex !== "number") return messages;
+  const delta = typeof data.delta === "string" ? data.delta : "";
+  if (!delta) return messages;
+
+  const part = data.part === "reasoning" ? "reasoning" : "text";
+  const draftId = streamingDraftId(stepIndex, part);
+  const existing = messages.find((message) => message.id === draftId);
+  if (existing) {
+    return messages.map((message) =>
+      message.id === draftId
+        ? { ...message, content: message.content + delta, created_at: at }
+        : message,
+    );
+  }
+
+  const index =
+    messages.length > 0
+      ? Math.max(...messages.map((message) => message.index)) + 1
+      : 0;
+
+  const draft: Message = {
+    id: draftId,
+    index,
+    step_id: null,
+    role: "assistant",
+    name: null,
+    content: delta,
+    tool_call_id: null,
+    extra: {
+      kind: part === "reasoning" ? "streaming_reasoning" : "streaming",
+      step_index: stepIndex,
+    },
+    created_at: at,
+  };
+  return [...messages, draft].sort((a, b) => a.index - b.index);
+}
+
+function dropStreamingDrafts(
+  messages: Message[],
+  data: Record<string, unknown>,
+): Message[] {
+  const stepIndex =
+    typeof data.step_index === "number" ? data.step_index : null;
+  if (stepIndex == null) return messages;
+
+  const kind = asRecord(data.extra).kind;
+  const dropIds = new Set<string>();
+  if (kind === "reasoning") {
+    dropIds.add(streamingDraftId(stepIndex, "reasoning"));
+  } else {
+    dropIds.add(streamingDraftId(stepIndex, "text"));
+  }
+  return messages.filter((message) => !dropIds.has(message.id));
+}
+
 function appendToolCall(step: Step, data: Record<string, unknown>): ToolCall {
   const callId =
     typeof data.call_id === "string" && data.call_id
@@ -411,10 +476,19 @@ export function applyRunEvent(run: Run, event: RunEvent): Run {
         usage: aggregateUsageFromSteps(steps),
       };
     }
+    case "token.delta":
+      return {
+        ...next,
+        messages: appendTokenDelta(run.messages, data, at),
+      };
     case "message.created":
       return {
         ...next,
-        messages: appendMessage(run.messages, data, at),
+        messages: appendMessage(
+          dropStreamingDrafts(run.messages, data),
+          data,
+          at,
+        ),
       };
     case "tool_call.started": {
       const stepIndex = data.step_index;

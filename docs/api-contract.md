@@ -381,8 +381,14 @@ The supported `type` values are:
 `token.delta` is SSE-only (not persisted). Payload:
 
 ```json
-{ "step_index": 0, "delta": "Hel", "role": "assistant" }
+{ "step_index": 0, "delta": "Hel", "role": "assistant", "part": "text" }
 ```
+
+`part` discriminates fine-grained streams: `"text"` (default, visible reply)
+or `"reasoning"` (model thinking / chain-of-thought). Finished reasoning is
+persisted as a `message.created` with `extra.kind = "reasoning"` so the
+console can show a collapsible block after reconnect; live deltas remain
+ephemeral.
 
 `step.updated` flushes deferred metrics on a running step (tokens, latency)
 before `step.completed`:
@@ -592,10 +598,14 @@ ops dashboards.
   name: string | null;
   content: string;
   tool_call_id: string | null;
-  extra: Record<string, unknown>;
+  extra: Record<string, unknown>;  // kind?: "prompt_echo" | "reasoning" | …
   created_at: string;
 }
 ```
+
+`extra.kind = "reasoning"` marks a persisted reasoning / thinking block
+(content is the full chain-of-thought). These rows stay on the Run transcript
+for the console but are excluded from Thread L1 window seeding.
 
 ### `MessagePage`
 

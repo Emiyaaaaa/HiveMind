@@ -243,7 +243,7 @@ async def test_thread_message_pagination(client):
 
 
 @pytest.mark.asyncio
-async def test_load_thread_window_skips_tool_and_prompt_echo():
+async def test_load_thread_window_skips_tool_prompt_echo_and_reasoning():
     from app.db.base import Base
     from app.db.session import SessionLocal, engine
     from app.models import Agent, Message, Run, Thread
@@ -301,7 +301,14 @@ async def test_load_thread_window_skips_tool_and_prompt_echo():
                     content='{"ok":true}',
                     tool_call_id="c1",
                 ),
-                Message(run_id=run.id, index=4, role="assistant", content="done"),
+                Message(
+                    run_id=run.id,
+                    index=4,
+                    role="assistant",
+                    content="secret chain of thought",
+                    extra={"kind": "reasoning"},
+                ),
+                Message(run_id=run.id, index=5, role="assistant", content="done"),
             ]
         )
         await session.commit()

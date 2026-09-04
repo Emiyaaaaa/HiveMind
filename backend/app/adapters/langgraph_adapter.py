@@ -18,6 +18,7 @@ Expected agent.config shape (all optional except when using custom graphs):
   },
   "system_prompt": "You are a helpful coordinator.",
   "stream_tokens": true,       // emit token.delta SSE; defer tokens to step.updated
+  "stream_reasoning": false,   // mock / providers: also stream part=reasoning blocks
   "tools": ["echo"],           // builtin or MCP keys (mcp/{server}/{tool})
   "mcp_servers": [             // optional MCP stdio/SSE/HTTP servers
     {
@@ -156,6 +157,7 @@ class WaitingHumanInterrupt(Exception):
 @dataclass
 class ModelResponse:
     content: str
+    reasoning: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
@@ -593,6 +595,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             total_out = 0
             total_cost = 0.0
             final_reply = ""
+            final_reasoning = ""
             had_recoverable_feedback = False
             policy = run_state.tool_error_policy
             last_response: ModelResponse | None = None
@@ -698,6 +701,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                         continue
 
                     final_reply = response.content or ""
+                    final_reasoning = response.reasoning or ""
                     messages.append({"role": "assistant", "content": final_reply})
                     break
                 else:
@@ -710,12 +714,13 @@ class LangGraphAdapter(OrchestratorAdapter):
                     messages.append({"role": "assistant", "content": final_reply})
 
                 latency_ms = int((time.monotonic() - started) * 1000)
-                used_model = (
-                    (last_response.model if last_response else None) or model
+                cost_usd = estimate_cost_usd(model, total_in, total_out)
+                await _emit_assistant_messages(
+                    ctx,
+                    step_index=step_idx,
+                    content=final_reply,
+                    reasoning=final_reasoning,
                 )
-                routing_meta = last_response.routing if last_response else None
-                cost_usd = round(total_cost, 6)
-                await ctx.emit_message(role="assistant", content=final_reply, step_index=step_idx)
                 await ctx.emit_step_updated(
                     index=step_idx,
                     tokens_in=total_in,
@@ -827,7 +832,12 @@ class LangGraphAdapter(OrchestratorAdapter):
                 model=used_model,
                 model_routing=response.routing,
             )
-            await ctx.emit_message(role="assistant", content=reply, step_index=step_idx)
+            await _emit_assistant_messages(
+                ctx,
+                step_index=step_idx,
+                content=reply,
+                reasoning=response.reasoning,
+            )
             await ctx.emit_step_completed(
                 index=step_idx,
                 node=spec.id,
@@ -997,6 +1007,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             message = data["choices"][0]["message"]
             tool_calls = _parse_openai_tool_calls(message.get("tool_calls"))
             content = message.get("content") or ""
+            reasoning = _extract_reasoning_text(message)
             usage = data.get("usage") or {}
             prompt_text = json.dumps(messages, default=str)
             tokens_in = int(
@@ -1004,10 +1015,15 @@ class LangGraphAdapter(OrchestratorAdapter):
             )
             tokens_out = int(
                 usage.get("completion_tokens")
-                or estimate_tokens(content or json.dumps(tool_calls, default=str))
+                or estimate_tokens(
+                    (content or "")
+                    + reasoning
+                    + (json.dumps(tool_calls, default=str) if tool_calls else "")
+                )
             )
             return ModelResponse(
                 content=content,
+                reasoning=reasoning,
                 tool_calls=tool_calls,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
@@ -1064,12 +1080,24 @@ class LangGraphAdapter(OrchestratorAdapter):
         else:
             reply = f"[mock:{model}]{suffix} {user_input}"
         tokens_in = estimate_tokens(json.dumps(messages, default=str))
-        tokens_out = estimate_tokens(reply)
+        reasoning = ""
+        if bool(ctx.agent_config.get("stream_reasoning")):
+            preview = user_input[:48].replace("\n", " ")
+            reasoning = f"[think:{model}] weigh options for: {preview}"
+        tokens_out = estimate_tokens(reply + reasoning)
         if stream_tokens:
+            if reasoning:
+                for chunk in _chunk_text(reasoning):
+                    await ctx.emit_token_delta(
+                        step_index=step_index, delta=chunk, part="reasoning"
+                    )
             for chunk in _chunk_text(reply):
-                await ctx.emit_token_delta(step_index=step_index, delta=chunk)
+                await ctx.emit_token_delta(
+                    step_index=step_index, delta=chunk, part="text"
+                )
         return ModelResponse(
             content=reply,
+            reasoning=reasoning,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             model=model,
@@ -1090,6 +1118,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             "stream_options": {"include_usage": True},
         }
         parts: list[str] = []
+        reasoning_parts: list[str] = []
         tokens_in = 0
         tokens_out = 0
 
@@ -1119,20 +1148,34 @@ class LangGraphAdapter(OrchestratorAdapter):
                         )
                     for choice in chunk.get("choices") or []:
                         delta = choice.get("delta") or {}
+                        reasoning_piece = _extract_reasoning_text(delta)
+                        if reasoning_piece:
+                            reasoning_parts.append(reasoning_piece)
+                            await ctx.emit_token_delta(
+                                step_index=step_index,
+                                delta=reasoning_piece,
+                                part="reasoning",
+                            )
                         content = delta.get("content")
                         if content:
                             parts.append(content)
                             await ctx.emit_token_delta(
-                                step_index=step_index, delta=content
+                                step_index=step_index,
+                                delta=content,
+                                part="text",
                             )
 
         reply = "".join(parts)
+        reasoning = "".join(reasoning_parts)
         if not tokens_in:
             tokens_in = estimate_tokens(str(payload.get("messages", "")))
         if not tokens_out:
-            tokens_out = estimate_tokens(reply)
+            tokens_out = estimate_tokens(reply + reasoning)
         return ModelResponse(
-            content=reply, tokens_in=tokens_in, tokens_out=tokens_out
+            content=reply,
+            reasoning=reasoning,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
         )
 
 
@@ -1325,3 +1368,36 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
 def _chunk_text(text: str, *, size: int = 8) -> list[str]:
     """Split text into small chunks for mock streaming."""
     return [text[i : i + size] for i in range(0, len(text), size)] or [text]
+
+
+def _extract_reasoning_text(payload: dict[str, Any] | None) -> str:
+    """Pull reasoning / thinking text from OpenAI-compatible message or delta.
+
+    Providers disagree on the field name (``reasoning_content``, ``reasoning``,
+    Anthropic-style ``thinking``). Empty / missing values are ignored.
+    """
+    if not payload:
+        return ""
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+async def _emit_assistant_messages(
+    ctx: AdapterContext,
+    *,
+    step_index: int,
+    content: str,
+    reasoning: str = "",
+) -> None:
+    """Persist optional reasoning block, then the visible assistant reply."""
+    if reasoning.strip():
+        await ctx.emit_message(
+            role="assistant",
+            content=reasoning,
+            step_index=step_index,
+            kind="reasoning",
+        )
+    await ctx.emit_message(role="assistant", content=content, step_index=step_index)
