@@ -18,6 +18,7 @@ from app.core.telemetry import (
     record_checkpoint_bytes,
     record_llm_usage,
     record_messages_per_run,
+    record_model_routing,
     record_prompt_tokens_from_history,
     record_queue_metrics,
     record_run_outcome,
@@ -146,6 +147,19 @@ def test_otel_queue_and_worker_gauges_export():
             tokens_out=20,
             cost_usd=0.001,
         )
+        record_model_routing(
+            adapter="langgraph",
+            fell_back=True,
+            from_model="openai/a",
+            to_model="openai/b",
+            error_kind="rate_limit",
+        )
+        record_model_routing(
+            adapter="langgraph",
+            exhausted=True,
+            from_model="openai/a",
+            to_model="openai/b",
+        )
         record_step_outcome(adapter="echo", outcome="ok", latency_ms=250)
         record_tool_call(
             adapter="echo",
@@ -164,6 +178,8 @@ def test_otel_queue_and_worker_gauges_export():
         assert exported["agentflow.run.outcomes"] == 1.0
         assert exported["agentflow.llm.tokens"] == 30.0
         assert exported["agentflow.llm.cost_usd"] == pytest.approx(0.001)
+        assert exported["agentflow.llm.routing_fallbacks"] == 1.0
+        assert exported["agentflow.llm.routing_exhausted"] == 1.0
         assert exported["agentflow.step.outcomes"] == 1.0
         assert exported["agentflow.tool.calls"] == 1.0
         assert exported["agentflow.tool.errors"] == 1.0
