@@ -83,6 +83,8 @@ _worker_capacity: Any | None = None
 _gauge_values: dict[str, float] = {}
 _llm_tokens: Counter | None = None
 _llm_cost: Counter | None = None
+_llm_routing_fallbacks: Counter | None = None
+_llm_routing_exhausted: Counter | None = None
 _run_outcomes: Counter | None = None
 _step_outcomes: Counter | None = None
 _step_duration: Histogram | None = None
@@ -408,7 +410,8 @@ def set_worker_utilization(*, in_flight: int, capacity: int) -> None:
 
 
 def _ensure_run_instruments() -> None:
-    global _llm_tokens, _llm_cost, _run_outcomes
+    global _llm_tokens, _llm_cost, _llm_routing_fallbacks, _llm_routing_exhausted
+    global _run_outcomes
     global _step_outcomes, _step_duration, _tool_calls, _tool_errors, _tool_duration
 
     if _meter is None:
@@ -425,6 +428,16 @@ def _ensure_run_instruments() -> None:
             "agentflow.llm.cost_usd",
             description="Estimated LLM spend in USD",
             unit="USD",
+        )
+        _llm_routing_fallbacks = meter.create_counter(
+            "agentflow.llm.routing_fallbacks",
+            description="LLM calls that fell back to a secondary model",
+            unit="1",
+        )
+        _llm_routing_exhausted = meter.create_counter(
+            "agentflow.llm.routing_exhausted",
+            description="LLM calls that exhausted the model routing chain",
+            unit="1",
         )
         _run_outcomes = meter.create_counter(
             "agentflow.run.outcomes",
@@ -543,6 +556,36 @@ def record_llm_usage(
         _llm_tokens.add(tokens_out, attributes={**base, "direction": "out"})
     if cost_usd > 0:
         _llm_cost.add(cost_usd, attributes=base)
+
+
+def record_model_routing(
+    *,
+    adapter: str,
+    fell_back: bool = False,
+    exhausted: bool = False,
+    from_model: str | None = None,
+    to_model: str | None = None,
+    error_kind: str | None = None,
+) -> None:
+    """Count model-routing fallback / exhaustion events."""
+    if not is_enabled():
+        return
+    if not fell_back and not exhausted:
+        return
+    _ensure_run_instruments()
+    attrs: dict[str, str] = {"adapter": adapter}
+    if from_model:
+        attrs["from_model"] = from_model
+    if to_model:
+        attrs["to_model"] = to_model
+    if error_kind:
+        attrs["error_kind"] = error_kind
+    if fell_back:
+        assert _llm_routing_fallbacks is not None
+        _llm_routing_fallbacks.add(1, attributes=attrs)
+    if exhausted:
+        assert _llm_routing_exhausted is not None
+        _llm_routing_exhausted.add(1, attributes=attrs)
 
 
 def record_run_outcome(*, adapter: str, status: str) -> None:

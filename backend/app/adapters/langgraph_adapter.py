@@ -10,6 +10,12 @@ Expected agent.config shape (all optional except when using custom graphs):
 ```jsonc
 {
   "model": "openai/gpt-4o-mini",
+  "fallback_models": ["openai/gpt-4o"],  // shorthand; or model_routing.fallbacks
+  "model_routing": {
+    "fallbacks": ["openai/gpt-4o"],
+    "max_attempts_per_model": 1,
+    "retry_on": ["timeout", "rate_limit", "server_error", "connection"]
+  },
   "system_prompt": "You are a helpful coordinator.",
   "stream_tokens": true,       // emit token.delta SSE; defer tokens to step.updated
   "tools": ["echo"],           // builtin or MCP keys (mcp/{server}/{tool})
@@ -82,13 +88,22 @@ from app.adapters.tool_errors import (
 from app.adapters.tool_registry import ToolDefinition
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.telemetry import record_prompt_tokens_from_history
+from app.core.telemetry import (
+    record_model_routing,
+    record_prompt_tokens_from_history,
+)
 from app.models.run import RunStatus
 from app.runtime.memory_metrics import (
     estimate_prompt_tokens_from_history,
     maybe_alert_prompt_tokens_from_history,
 )
 from app.runtime.memory_window import fit_messages_to_window, parse_memory_config
+from app.runtime.model_router import (
+    ModelAttempt,
+    ModelRoutingExhaustedError,
+    invoke_with_fallback,
+    parse_model_routing,
+)
 from app.runtime.pricing import estimate_cost_usd
 from app.runtime.tokens import estimate_tokens
 
@@ -144,6 +159,8 @@ class ModelResponse:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
+    model: str | None = None
+    routing: dict[str, Any] | None = None
 
 
 @dataclass
@@ -574,9 +591,11 @@ class LangGraphAdapter(OrchestratorAdapter):
             started = time.monotonic()
             total_in = 0
             total_out = 0
+            total_cost = 0.0
             final_reply = ""
             had_recoverable_feedback = False
             policy = run_state.tool_error_policy
+            last_response: ModelResponse | None = None
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
             await _emit_llm_system_prompt(
@@ -596,8 +615,14 @@ class LangGraphAdapter(OrchestratorAdapter):
                         stream_tokens=bool(stream_tokens) and not resolved_tools,
                         mock_tool_round=round_idx if resolved_tools else None,
                     )
+                    last_response = response
                     total_in += response.tokens_in
                     total_out += response.tokens_out
+                    total_cost += estimate_cost_usd(
+                        response.model or model,
+                        response.tokens_in,
+                        response.tokens_out,
+                    )
 
                     if response.tool_calls:
                         tool_call_payload = [
@@ -685,7 +710,11 @@ class LangGraphAdapter(OrchestratorAdapter):
                     messages.append({"role": "assistant", "content": final_reply})
 
                 latency_ms = int((time.monotonic() - started) * 1000)
-                cost_usd = estimate_cost_usd(model, total_in, total_out)
+                used_model = (
+                    (last_response.model if last_response else None) or model
+                )
+                routing_meta = last_response.routing if last_response else None
+                cost_usd = round(total_cost, 6)
                 await ctx.emit_message(role="assistant", content=final_reply, step_index=step_idx)
                 await ctx.emit_step_updated(
                     index=step_idx,
@@ -693,6 +722,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                     tokens_out=total_out,
                     cost_usd=cost_usd,
                     latency_ms=latency_ms,
+                    model=used_model,
+                    model_routing=routing_meta,
                 )
                 await ctx.emit_step_completed(
                     index=step_idx,
@@ -702,6 +733,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                     tokens_out=total_out,
                     cost_usd=cost_usd,
                     latency_ms=latency_ms,
+                    model=used_model,
+                    model_routing=routing_meta,
                 )
                 next_state = {
                     "reply": final_reply,
@@ -780,8 +813,9 @@ class LangGraphAdapter(OrchestratorAdapter):
             else:
                 reply = response.content
             latency_ms = int((time.monotonic() - started) * 1000)
+            used_model = response.model or model
             cost_usd = estimate_cost_usd(
-                model, response.tokens_in, response.tokens_out
+                used_model, response.tokens_in, response.tokens_out
             )
 
             await ctx.emit_step_updated(
@@ -790,6 +824,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                 tokens_out=response.tokens_out,
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
+                model=used_model,
+                model_routing=response.routing,
             )
             await ctx.emit_message(role="assistant", content=reply, step_index=step_idx)
             await ctx.emit_step_completed(
@@ -800,6 +836,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                 tokens_out=response.tokens_out,
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
+                model=used_model,
+                model_routing=response.routing,
             )
             history = list(state.get("messages") or [])
             history.extend(
@@ -833,7 +871,7 @@ class LangGraphAdapter(OrchestratorAdapter):
         stream_tokens: bool = True,
         mock_tool_round: int | None = None,
     ) -> ModelResponse:
-        """Call the configured chat model, optionally streaming token deltas."""
+        """Call the configured chat model with runtime routing / fallback."""
         memory_cfg = parse_memory_config(ctx.agent_config)
         if memory_cfg.window_tokens > 0:
             messages = fit_messages_to_window(
@@ -853,6 +891,73 @@ class LangGraphAdapter(OrchestratorAdapter):
             step_index=step_index,
         )
 
+        routing = parse_model_routing(ctx.agent_config, primary=model)
+
+        async def _on_fallback(attempt: ModelAttempt, next_model: str) -> None:
+            record_model_routing(
+                adapter=self.name,
+                fell_back=True,
+                from_model=attempt.model,
+                to_model=next_model,
+                error_kind=attempt.error_kind,
+            )
+            await ctx.emit_log(
+                "model_routing_fallback",
+                from_model=attempt.model,
+                to_model=next_model,
+                error_kind=attempt.error_kind,
+                error=attempt.error,
+                step_index=step_index,
+            )
+
+        async def _call(candidate: str) -> ModelResponse:
+            return await self._invoke_model_once(
+                ctx,
+                step_index,
+                candidate,
+                messages,
+                tools=tools,
+                stream_tokens=stream_tokens,
+                mock_tool_round=mock_tool_round,
+            )
+
+        try:
+            response, routed = await invoke_with_fallback(
+                _call,
+                routing=routing,
+                on_fallback=_on_fallback,
+            )
+        except ModelRoutingExhaustedError as exc:
+            record_model_routing(
+                adapter=self.name,
+                exhausted=True,
+                from_model=routing.primary,
+                to_model=exc.routing.model,
+            )
+            await ctx.emit_log(
+                "model_routing_exhausted",
+                primary=routing.primary,
+                attempts=exc.routing.as_dict()["attempts"],
+                step_index=step_index,
+            )
+            raise exc.last_error from exc
+
+        response.model = routed.model
+        response.routing = routed.as_dict()
+        return response
+
+    async def _invoke_model_once(
+        self,
+        ctx: AdapterContext,
+        step_index: int,
+        model: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[ToolDefinition] | None = None,
+        stream_tokens: bool = True,
+        mock_tool_round: int | None = None,
+    ) -> ModelResponse:
+        """Single provider attempt (no routing)."""
         settings = get_settings()
         if not settings.openai_api_key:
             return await self._invoke_mock(
@@ -875,9 +980,11 @@ class LangGraphAdapter(OrchestratorAdapter):
             payload["tools"] = tool_schemas_from_definitions(tools)
 
         if stream_tokens and not tools:
-            return await self._invoke_openai_streaming(
+            response = await self._invoke_openai_streaming(
                 ctx, step_index, settings, payload
             )
+            response.model = model
+            return response
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -904,6 +1011,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 tool_calls=tool_calls,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                model=model,
             )
 
     async def _invoke_mock(
@@ -964,6 +1072,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             content=reply,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            model=model,
         )
 
     async def _invoke_openai_streaming(

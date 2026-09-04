@@ -226,6 +226,31 @@ When `feedback` is enabled and recoverable observations exhaust
 `max_tool_rounds` without a final model reply, the run fails with
 `tool_recovery_exhausted: reached max_tool_rounds=N`.
 
+## Model routing / fallback
+
+LLM provider selection is a **runtime** concern (`backend/app/runtime/model_router.py`),
+not adapter-private logic. Agent config may set a primary `model` plus optional
+fallbacks:
+
+```json
+{
+  "model": "openai/gpt-4o-mini",
+  "model_routing": {
+    "fallbacks": ["openai/gpt-4o"],
+    "max_attempts_per_model": 1,
+    "retry_on": ["timeout", "rate_limit", "server_error", "connection"]
+  }
+}
+```
+
+`fallback_models` at the agent-config root is accepted as shorthand for
+`model_routing.fallbacks`. Transient provider errors (HTTP 429/5xx, timeouts,
+connection failures) advance to the next attempt or model; client errors (other
+4xx) fail immediately. LangGraph records the winning model and attempt trail on
+`step.updated` / `step.completed` (`model`, `model_routing`) and emits
+`model_routing_fallback` / `model_routing_exhausted` log events. Metrics:
+`agentflow.llm.routing_fallbacks`, `agentflow.llm.routing_exhausted`.
+
 ## Unit tests
 
 The Python test suite in `backend/tests/` exercises adapter and queue logic
