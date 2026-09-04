@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentflow.fullname" . }}-api
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentflow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "agentflow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      {{- with .Values.api.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agentflow.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.migrate.enabled }}
+      initContainers:
+        {{- include "agentflow.migrateInitContainer" . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.service.port }}
+          env:
+            - name: AGENTFLOW_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentflow.secretName" . }}
+                  key: jdbc-url
+            - name: AGENTFLOW_DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentflow.secretName" . }}
+                  key: {{ .Values.database.existingSecretUsernameKey | default "username" }}
+            - name: AGENTFLOW_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentflow.secretName" . }}
+                  key: {{ .Values.database.existingSecretPasswordKey | default "password" }}
+            - name: AGENTFLOW_REDIS_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentflow.secretName" . }}
+                  key: redis-host
+            - name: AGENTFLOW_REDIS_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentflow.secretName" . }}
+                  key: redis-port
+            - name: AGENTFLOW_SERVER_PORT
+              value: {{ .Values.api.service.port | quote }}
+            - name: AGENTFLOW_JOBS_IMPL
+              value: {{ .Values.jobs.impl | quote }}
+            - name: AGENTFLOW_AUTH_ENABLED
+              value: {{ .Values.auth.enabled | quote }}
+            - name: AGENTFLOW_OTEL_ENABLED
+              value: {{ .Values.otel.enabled | quote }}
+            - name: AGENTFLOW_OTEL_SERVICE_NAME
+              value: agentflow-api
+            - name: AGENTFLOW_OTEL_EXPORTER_ENDPOINT
+              value: {{ printf "%s/v1/traces" (trimSuffix "/" .Values.otel.exporterEndpoint) | quote }}
+            - name: AGENTFLOW_OTEL_METRICS_ENDPOINT
+              value: {{ printf "%s/v1/metrics" (trimSuffix "/" .Values.otel.exporterEndpoint) | quote }}
+            {{- range $k, $v := .Values.api.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- with .Values.api.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentflow.fullname" . }}-api
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: {{ .Values.api.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: http
+  selector:
+    {{- include "agentflow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api

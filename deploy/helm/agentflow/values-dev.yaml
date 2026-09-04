@@ -1,0 +1,15 @@
+# In-cluster Postgres/Redis for kind / minikube. Do not use in production.
+postgres:
+  enabled: true
+  persistence:
+    enabled: false
+
+redis:
+  enabled: true
+
+worker:
+  autoscaling:
+    enabled: false
+
+otel:
+  enabled: false

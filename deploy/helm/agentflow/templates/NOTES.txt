@@ -1,0 +1,11 @@
+1. Apply Alembic migrations (`uv run alembic upgrade head` in the migrate Job / worker init container).
+2. Confirm `GET /v1/health` on the API Service.
+3. With OTel + Prometheus in place, enqueue enough runs that `agentflow_queue_consumer_delay` exceeds `worker.autoscaling.targetConsumerDelaySeconds` and watch worker replicas climb toward `maxReplicas`.
+{{- if .Values.worker.autoscaling.enabled }}
+{{- if eq .Values.worker.autoscaling.provider "keda" }}
+
+Queue-delay autoscaling is a KEDA ScaledObject on `max(agentflow_queue_consumer_delay)` (threshold {{ .Values.worker.autoscaling.targetConsumerDelaySeconds }}s).
+Install KEDA and scrape worker OTLP metrics into Prometheus at:
+  {{ .Values.worker.autoscaling.prometheus.serverAddress }}
+{{- end }}
+{{- end }}

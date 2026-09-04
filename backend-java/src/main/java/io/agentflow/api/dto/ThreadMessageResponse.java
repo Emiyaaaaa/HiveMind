@@ -1,5 +1,6 @@
 package io.agentflow.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.agentflow.api.entity.MessageEntity;
 import java.time.Instant;
 import java.util.List;
@@ -17,8 +18,15 @@ public class ThreadMessageResponse {
     private String toolCallId;
     private Map<String, Object> extra;
     private Instant createdAt;
+    /** Sort key for thread transcript cursors (run.created_at). */
+    private Instant runCreatedAt;
 
     public static ThreadMessageResponse from(MessageEntity entity, String runId) {
+        return from(entity, runId, null);
+    }
+
+    public static ThreadMessageResponse from(
+            MessageEntity entity, String runId, Instant runCreatedAt) {
         ThreadMessageResponse dto = new ThreadMessageResponse();
         dto.id = entity.getId();
         dto.runId = runId;
@@ -30,6 +38,7 @@ public class ThreadMessageResponse {
         dto.toolCallId = entity.getToolCallId();
         dto.extra = entity.getExtra();
         dto.createdAt = entity.getCreatedAt();
+        dto.runCreatedAt = runCreatedAt;
         return dto;
     }
 
@@ -71,6 +80,11 @@ public class ThreadMessageResponse {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    @JsonIgnore
+    public Instant getRunCreatedAt() {
+        return runCreatedAt;
     }
 
     public static class Page {

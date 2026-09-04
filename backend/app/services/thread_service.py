@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -81,7 +82,13 @@ class ThreadService:
             raise ThreadNotFound(thread_id)
         if tenant_id is not None and thread.tenant_id != tenant_id:
             raise ThreadNotFound(thread_id)
-        if project_id is not None and thread.project_id != project_id:
+        # Match create_run: only reject when both sides declare a project and
+        # they disagree. A null thread.project_id stays visible to project keys.
+        if (
+            project_id is not None
+            and thread.project_id is not None
+            and thread.project_id != project_id
+        ):
             raise ThreadNotFound(thread_id)
         if agent_id is not None and thread.agent_id != agent_id:
             raise ThreadNotFound(thread_id)
@@ -98,7 +105,10 @@ class ThreadService:
         capped = max(1, min(limit, 200))
         stmt = select(Thread).where(Thread.tenant_id == tenant_id)
         if project_id is not None:
-            stmt = stmt.where(Thread.project_id == project_id)
+            # Include unscoped threads (null project) for the same tenant.
+            stmt = stmt.where(
+                (Thread.project_id == project_id) | (Thread.project_id.is_(None))
+            )
         if agent_id is not None:
             stmt = stmt.where(Thread.agent_id == agent_id)
         stmt = stmt.order_by(Thread.created_at.desc()).limit(capped)
@@ -123,14 +133,28 @@ class ThreadService:
         )
         capped = max(1, min(limit, get_settings().run_messages_page_max))
 
+        # Newest page first via DESC + limit, then reverse for ASC wire order.
+        # Cursor keys use run.created_at (sort key), not message.created_at.
         stmt = (
             select(Message, Run)
             .join(Run, Message.run_id == Run.id)
             .where(Run.thread_id == thread_id)
-            .order_by(Run.created_at.asc(), Message.index.asc(), Message.id.asc())
+            .order_by(Run.created_at.desc(), Message.index.desc(), Message.id.desc())
         )
-        result = await self.session.execute(stmt)
+        if cursor:
+            parsed = _parse_message_cursor(cursor)
+            if parsed is not None:
+                run_created, index, msg_id = parsed
+                stmt = stmt.where(
+                    tuple_(Run.created_at, Message.index, Message.id)
+                    < (run_created, index, msg_id)
+                )
+
+        result = await self.session.execute(stmt.limit(capped + 1))
         rows = list(result.all())
+        has_more = len(rows) > capped
+        page_rows = rows[:capped]
+        page_rows.reverse()
 
         items = [
             ThreadMessageRead(
@@ -145,26 +169,17 @@ class ThreadService:
                 created_at=msg.created_at,
                 run_id=run.id,
             )
-            for msg, run in rows
+            for msg, run in page_rows
         ]
-
-        # Cursor = exclusive lower bound encoded as created_at|index|id of the
-        # oldest item on the previous (newer) page. For simplicity we page from
-        # the end (newest first window) like run messages.
-        if cursor:
-            items = [m for m in items if _message_cursor_key(m) < cursor]
-
-        # Newest page: take last N, then report has_more for older ones.
-        has_more = len(items) > capped
-        if has_more:
-            page = items[-capped:]
-            next_cursor = _message_cursor_key(page[0])
-        else:
-            page = items
-            next_cursor = None
+        next_cursor = None
+        if has_more and page_rows:
+            oldest_msg, oldest_run = page_rows[0]
+            next_cursor = _message_cursor_key(
+                oldest_run.created_at, oldest_msg.index, oldest_msg.id
+            )
 
         return ThreadMessagePage(
-            items=page, next_cursor=next_cursor, has_more=has_more
+            items=items, next_cursor=next_cursor, has_more=has_more
         )
 
     async def list_thread_runs(
@@ -202,17 +217,30 @@ class ThreadService:
     ) -> list[dict[str, Any]]:
         """Return OpenAI-style chat dicts for prior thread turns, window-trimmed.
 
-        Skips prompt_echo / system rows so adapters can attach their own system
-        prompt. Used by the worker when constructing ``AdapterContext``.
+        Seeds only complete user/assistant turns (no system / prompt_echo / tool).
+        Cross-run tool chains are incomplete and break model APIs, so they are
+        omitted from L1. Used by the worker when constructing ``AdapterContext``.
         """
+        max_messages = get_settings().thread_messages_max
+        # Over-fetch slightly so role filtering still fills the cap.
+        fetch_limit = max_messages * 3 if max_messages > 0 else None
+
         stmt = (
             select(Message, Run)
             .join(Run, Message.run_id == Run.id)
             .where(Run.thread_id == thread_id)
-            .order_by(Run.created_at.asc(), Run.id.asc(), Message.index.asc(), Message.id.asc())
+            .where(Message.role.in_(("user", "assistant")))
+            .order_by(
+                Run.created_at.desc(),
+                Run.id.desc(),
+                Message.index.desc(),
+                Message.id.desc(),
+            )
         )
         if exclude_run_id is not None:
             stmt = stmt.where(Run.id != exclude_run_id)
+        if fetch_limit is not None:
+            stmt = stmt.limit(fetch_limit)
 
         result = await self.session.execute(stmt)
         messages: list[dict[str, Any]] = []
@@ -220,15 +248,21 @@ class ThreadService:
             extra = msg.extra or {}
             if extra.get("kind") == "prompt_echo":
                 continue
-            if msg.role == "system":
+            payload = message_row_to_dict(msg)
+            # Drop incomplete tool-call metadata from prior runs.
+            payload.pop("tool_calls", None)
+            payload.pop("tool_call_id", None)
+            if not str(payload.get("content") or "").strip():
                 continue
-            messages.append(message_row_to_dict(msg))
+            messages.append(payload)
 
-        memory_cfg = parse_memory_config(agent_config or {})
-        max_messages = get_settings().thread_messages_max
+        # Queried newest-first; restore chronological order for adapters.
+        messages.reverse()
+
         if max_messages > 0 and len(messages) > max_messages:
             messages = messages[-max_messages:]
 
+        memory_cfg = parse_memory_config(agent_config or {})
         if memory_cfg.window_tokens > 0:
             messages = fit_messages_to_window(
                 messages,
@@ -238,5 +272,19 @@ class ThreadService:
         return messages
 
 
-def _message_cursor_key(msg: ThreadMessageRead) -> str:
-    return f"{msg.created_at.isoformat()}|{msg.index:08d}|{msg.id}"
+def _message_cursor_key(run_created_at: datetime, index: int, message_id: str) -> str:
+    return f"{run_created_at.isoformat()}|{index:08d}|{message_id}"
+
+
+def _parse_message_cursor(
+    cursor: str,
+) -> tuple[datetime, int, str] | None:
+    parts = cursor.split("|", 2)
+    if len(parts) != 3:
+        return None
+    try:
+        created = datetime.fromisoformat(parts[0])
+        index = int(parts[1])
+    except ValueError:
+        return None
+    return created, index, parts[2]

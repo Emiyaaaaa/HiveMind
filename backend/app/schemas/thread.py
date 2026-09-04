@@ -40,6 +40,6 @@ class ThreadMessagePage(BaseModel):
     items: list[ThreadMessageRead]
     next_cursor: str | None = Field(
         default=None,
-        description="Opaque cursor for older messages (created_at|index|id).",
+        description="Opaque cursor for older messages (run.created_at|index|id).",
     )
     has_more: bool = False
