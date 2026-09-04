@@ -18,4 +18,6 @@ public interface RunRepository extends JpaRepository<RunEntity, String> {
     Optional<RunEntity> findByIdAndTenantId(String id, String tenantId);
 
     List<RunEntity> findAllByTenantId(String tenantId);
+
+    List<RunEntity> findAllByThreadIdOrderByCreatedAtAsc(String threadId);
 }

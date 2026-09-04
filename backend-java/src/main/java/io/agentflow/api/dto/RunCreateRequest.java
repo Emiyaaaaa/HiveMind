@@ -19,6 +19,9 @@ public class RunCreateRequest {
      */
     private String adapter;
 
+    @JsonProperty("thread_id")
+    private String threadId;
+
     public String getAgentId() {
         return agentId;
     }
@@ -49,5 +52,13 @@ public class RunCreateRequest {
 
     public void setAdapter(String adapter) {
         this.adapter = adapter;
+    }
+
+    public String getThreadId() {
+        return threadId;
+    }
+
+    public void setThreadId(String threadId) {
+        this.threadId = threadId;
     }
 }

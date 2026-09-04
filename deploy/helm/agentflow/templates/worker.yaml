@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentflow.fullname" . }}-worker
+  labels:
+    {{- include "agentflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ if .Values.worker.autoscaling.enabled }}{{ .Values.worker.autoscaling.minReplicas }}{{ else }}{{ .Values.worker.replicaCount }}{{ end }}
+  selector:
+    matchLabels:
+      {{- include "agentflow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "agentflow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      {{- with .Values.worker.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agentflow.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.migrate.enabled }}
+      initContainers:
+        {{- include "agentflow.migrateInitContainer" . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          command: ["uv", "run", "python", "-m", "app.worker"]
+          env:
+            - name: AGENTFLOW_WORKER_MODE
+              value: queue
+            - name: AGENTFLOW_WORKER_CONCURRENCY
+              value: {{ .Values.worker.concurrency | quote }}
+            - name: AGENTFLOW_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentflow.secretName" . }}
+                  key: sqlalchemy-url
+            - name: AGENTFLOW_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentflow.secretName" . }}
+                  key: redis-url
+            - name: AGENTFLOW_JOBS_IMPL
+              value: {{ .Values.jobs.impl | quote }}
+            - name: AGENTFLOW_OTEL_ENABLED
+              value: {{ .Values.otel.enabled | quote }}
+            - name: AGENTFLOW_OTEL_SERVICE_NAME
+              value: agentflow-worker
+            - name: AGENTFLOW_OTEL_EXPORTER_ENDPOINT
+              value: {{ .Values.otel.exporterEndpoint | quote }}
+            {{- range $k, $v := .Values.worker.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- with .Values.worker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

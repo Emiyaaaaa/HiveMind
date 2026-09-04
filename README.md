@@ -89,7 +89,7 @@ See:
 
 - [docs/api-contract.md](docs/api-contract.md) — frozen `/v1` HTTP contract
   and the API↔worker Redis protocol.
-- [docs/deployment.md](docs/deployment.md) — production runbook.
+- [docs/deployment.md](docs/deployment.md) — production runbook (Compose, Helm, Terraform).
 - [docs/architecture.md](docs/architecture.md) and
   [docs/data-model.md](docs/data-model.md) — runtime topology and database
   model.

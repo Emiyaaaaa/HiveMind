@@ -756,8 +756,14 @@ class LangGraphAdapter(OrchestratorAdapter):
 
             stream_tokens = run_state.config.get("stream_tokens", True)
             started = time.monotonic()
+            history = [
+                m
+                for m in (state.get("messages") or [])
+                if isinstance(m, dict) and m.get("role") != "system"
+            ]
             messages = [
                 {"role": "system", "content": system_prompt},
+                *history,
                 {"role": "user", "content": user_input},
             ]
             response = await self._invoke_model(
@@ -1098,11 +1104,24 @@ def _seed_agent_messages(
 ) -> list[dict[str, Any]]:
     existing = state.get("messages")
     if isinstance(existing, list) and existing:
-        return list(existing)
-    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        messages = list(existing)
+    else:
+        messages = []
+
+    if not any(
+        isinstance(m, dict) and m.get("role") == "system" for m in messages
+    ):
+        messages = [{"role": "system", "content": system_prompt}, *messages]
+
     user_input = str(state.get("input", ""))
     if user_input:
-        messages.append({"role": "user", "content": user_input})
+        last = messages[-1] if messages else None
+        if not (
+            isinstance(last, dict)
+            and last.get("role") == "user"
+            and last.get("content") == user_input
+        ):
+            messages.append({"role": "user", "content": user_input})
     return messages
 
 
@@ -1174,12 +1193,19 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
         "human_input": None,
         "route": None,
     }
+    # Prior thread turns (other runs) + this run's transcript on resume.
+    # run_messages alone used to drop L1 context across HITL / retry.
+    seed: list[dict[str, Any]] = list(ctx.thread_messages or [])
+    if ctx.run_messages is not None:
+        seed = [*seed, *ctx.run_messages]
+    if seed:
+        default["messages"] = seed
     if ctx.resume and ctx.resume.checkpoint_state:
         saved = ctx.resume.checkpoint_state.get("graph_state")
         if isinstance(saved, dict):
             merged = {**default, **saved}
-            if ctx.run_messages is not None:
-                merged["messages"] = list(ctx.run_messages)
+            if ctx.run_messages is not None or ctx.thread_messages:
+                merged["messages"] = list(default["messages"])
             elif isinstance(saved.get("messages"), list):
                 # Legacy checkpoints that still inlined messages.
                 merged["messages"] = list(saved["messages"])

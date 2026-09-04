@@ -28,6 +28,9 @@ export default function RootLayout({
                 <Link href="/runs" className="hover:text-text">
                   Runs
                 </Link>
+                <Link href="/threads" className="hover:text-text">
+                  Threads
+                </Link>
                 <a
                   href="http://localhost:8000/docs"
                   target="_blank"

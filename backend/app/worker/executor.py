@@ -135,6 +135,17 @@ class RunExecutor:
             if resume_ctx is not None:
                 run_messages = await service.load_run_messages(run.id)
 
+            thread_messages: list[dict[str, Any]] = []
+            if run.thread_id:
+                from app.services.thread_service import ThreadService
+
+                thread_service = ThreadService(session)
+                thread_messages = await thread_service.load_thread_window(
+                    run.thread_id,
+                    exclude_run_id=run.id,
+                    agent_config=agent_config,
+                )
+
             run.status = RunStatus.RUNNING
             await session.commit()
             await service._broadcast("run.started", run.id, {})
@@ -155,6 +166,8 @@ class RunExecutor:
                 metadata=run.metadata_,
                 resume=resume_ctx,
                 run_messages=run_messages,
+                thread_id=run.thread_id,
+                thread_messages=thread_messages,
                 step_index_base=step_index_base,
                 emit=_emit,
             )

@@ -464,3 +464,37 @@ def test_checkpoint_payload_omits_messages():
     assert graph["reply"] == "done"
     assert graph["pending_human"] == "approve"
     assert "messages" not in graph
+
+
+def test_initial_graph_state_keeps_thread_messages_on_resume():
+    from app.adapters.langgraph_adapter import _initial_graph_state
+
+    ctx = _RecordingContext(
+        thread_messages=[
+            {"role": "user", "content": "prior turn"},
+            {"role": "assistant", "content": "prior reply"},
+        ],
+        run_messages=[{"role": "user", "content": "this run"}],
+        resume=RunResumeContext(
+            mode="resume",
+            checkpoint_index=0,
+            checkpoint_state={"graph_state": {"completed_nodes": ["draft"]}},
+        ),
+    )
+    state = _initial_graph_state(ctx)
+    assert state["messages"] == [
+        {"role": "user", "content": "prior turn"},
+        {"role": "assistant", "content": "prior reply"},
+        {"role": "user", "content": "this run"},
+    ]
+    assert state["completed_nodes"] == ["draft"]
+
+
+def test_initial_graph_state_seeds_thread_only_without_resume():
+    from app.adapters.langgraph_adapter import _initial_graph_state
+
+    ctx = _RecordingContext(
+        thread_messages=[{"role": "user", "content": "hello"}],
+    )
+    state = _initial_graph_state(ctx)
+    assert state["messages"] == [{"role": "user", "content": "hello"}]

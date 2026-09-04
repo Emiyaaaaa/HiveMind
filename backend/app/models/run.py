@@ -55,6 +55,9 @@ class Run(Base):
     agent_id: Mapped[str] = mapped_column(
         ForeignKey("agents.id", ondelete="CASCADE"), index=True
     )
+    thread_id: Mapped[str | None] = mapped_column(
+        ForeignKey("threads.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     adapter: Mapped[str] = mapped_column(String(64))
     status: Mapped[RunStatus] = mapped_column(
         String(32), default=RunStatus.PENDING, index=True
@@ -67,6 +70,7 @@ class Run(Base):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
     agent: Mapped[Agent] = relationship(back_populates="runs")  # noqa: F821
+    thread: Mapped["Thread | None"] = relationship(back_populates="runs")
     steps: Mapped[list[Step]] = relationship(
         back_populates="run",
         order_by="Step.index",

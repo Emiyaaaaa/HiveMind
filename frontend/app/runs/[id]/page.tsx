@@ -48,8 +48,20 @@ export default function RunDetailPage({ params }: PageProps) {
             <StatusBadge status={r.status} />
           </div>
           <div className="text-xs text-muted">
-            agent <span className="font-mono">{r.agent_id}</span> · created{" "}
-            {new Date(r.created_at).toLocaleString()}
+            agent <span className="font-mono">{r.agent_id}</span>
+            {r.thread_id ? (
+              <>
+                {" "}
+                · thread{" "}
+                <Link
+                  href={`/threads/${r.thread_id}`}
+                  className="font-mono hover:text-accent"
+                >
+                  {r.thread_id}
+                </Link>
+              </>
+            ) : null}{" "}
+            · created {new Date(r.created_at).toLocaleString()}
           </div>
         </div>
         <div className="flex gap-2">

@@ -17,6 +17,7 @@ import io.agentflow.api.repository.CheckpointRepository;
 import io.agentflow.api.repository.MessageRepository;
 import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
+import io.agentflow.api.repository.ThreadRepository;
 import io.agentflow.api.repository.ToolCallRepository;
 import java.util.List;
 import java.util.Map;
@@ -78,6 +79,7 @@ class RunServiceTest {
                 mock(ToolCallRepository.class),
                 mock(CheckpointRepository.class),
                 agents,
+                mock(ThreadRepository.class),
                 mock(JobProducer.class),
                 mock(CancelSignal.class));
     }

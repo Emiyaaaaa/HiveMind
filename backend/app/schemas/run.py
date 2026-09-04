@@ -15,6 +15,10 @@ class RunCreate(BaseModel):
         default=None,
         description="Override the agent's default adapter for this run.",
     )
+    thread_id: str | None = Field(
+        default=None,
+        description="Optional conversation thread; prior turns are seeded into the adapter.",
+    )
 
 
 class RunRetry(BaseModel):
@@ -102,6 +106,7 @@ class RunRead(BaseModel):
     tenant_id: str
     project_id: str | None
     agent_id: str
+    thread_id: str | None = None
     adapter: str
     status: RunStatus
     input: dict[str, Any]
