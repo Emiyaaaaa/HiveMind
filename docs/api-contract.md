@@ -202,8 +202,6 @@ Request:
 `input.attachments` may be a list of ids or `{ "id": "…" }` objects referencing
 previously uploaded attachments. Missing / cross-tenant ids → 404.
 
-```
-
 `metadata`, `adapter`, and `thread_id` are optional. When `adapter` is omitted
 the agent's default adapter is used. When `thread_id` is set, the run is linked
 to that thread and the worker seeds prior thread turns into
