@@ -60,6 +60,7 @@ public class RunService {
     private final ThreadRepository threads;
     private final JobProducer jobProducer;
     private final CancelSignal cancelSignal;
+    private final AttachmentService attachmentService;
 
     public RunService(
             RunRepository runs,
@@ -70,7 +71,8 @@ public class RunService {
             AgentService agentService,
             ThreadRepository threads,
             JobProducer jobProducer,
-            CancelSignal cancelSignal) {
+            CancelSignal cancelSignal,
+            AttachmentService attachmentService) {
         this.runs = runs;
         this.steps = steps;
         this.messages = messages;
@@ -80,6 +82,7 @@ public class RunService {
         this.threads = threads;
         this.jobProducer = jobProducer;
         this.cancelSignal = cancelSignal;
+        this.attachmentService = attachmentService;
     }
 
     @Transactional
@@ -115,6 +118,8 @@ public class RunService {
                 Map.of(AGENT_VERSION_METADATA_KEY, agent.getVersion()));
         run.setMetadata(metadata);
         RunEntity saved = runs.save(run);
+        attachmentService.bindInputAttachments(
+                saved.getId(), agent.getTenantId(), saved.getInput());
         enqueueJobAfterCommit(saved.getId(), agent.getId(), adapter);
 
         return toResponse(saved);

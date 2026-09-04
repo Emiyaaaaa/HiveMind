@@ -40,6 +40,15 @@ def register_memory_erasure_hook(hook: MemoryErasureHook) -> None:
     _memory_erasure_hooks.append(hook)
 
 
+def _register_builtin_hooks() -> None:
+    from app.services.attachment_service import AttachmentErasureHook
+
+    register_memory_erasure_hook(AttachmentErasureHook())
+
+
+_register_builtin_hooks()
+
+
 class RetentionService:
     def __init__(
         self,
@@ -79,7 +88,15 @@ class RetentionService:
             tenant_id=run.tenant_id,
             **counts,
         )
-        return {"messages_deleted": counts["messages"], "checkpoints_deleted": counts["checkpoints"]}
+        return {
+            "messages_deleted": counts["messages"],
+            "checkpoints_deleted": counts["checkpoints"],
+            **{
+                key: value
+                for key, value in counts.items()
+                if key not in ("messages", "checkpoints")
+            },
+        }
 
     async def erase_tenant_data(self, tenant_id: str) -> dict[str, int]:
         stmt = select(Run.id).where(Run.tenant_id == tenant_id)

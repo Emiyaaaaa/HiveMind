@@ -3,6 +3,8 @@ package io.agentflow.api.controller;
 import io.agentflow.api.service.AgentNameConflictException;
 import io.agentflow.api.service.AgentNotFoundException;
 import io.agentflow.api.service.AgentVersionNotFoundException;
+import io.agentflow.api.service.AttachmentNotFoundException;
+import io.agentflow.api.service.AttachmentTooLargeException;
 import io.agentflow.api.service.RegressionExecutionException;
 import io.agentflow.api.service.RunComparisonValidationException;
 import io.agentflow.api.service.RunConflictException;
@@ -37,6 +39,22 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ThreadNotFoundException.class)
     public ResponseEntity<Map<String, String>> handleThreadNotFound(ThreadNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AttachmentNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleAttachmentNotFound(
+            AttachmentNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("detail", "Attachment not found: " + ex.getMessage()));
+    }
+
+    @ExceptionHandler(AttachmentTooLargeException.class)
+    public ResponseEntity<Map<String, String>> handleAttachmentTooLarge(
+            AttachmentTooLargeException ex) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(Map.of(
+                        "detail",
+                        "Attachment too large: " + ex.getSize() + " > " + ex.getLimit() + " bytes"));
     }
 
     @ExceptionHandler(RunNotFoundException.class)

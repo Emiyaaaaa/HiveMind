@@ -324,6 +324,20 @@ class Settings(BaseSettings):
         description="Maximum runs purged per sweeper cycle per tenant.",
     )
 
+    attachment_storage_dir: str = Field(
+        default="./data/attachments",
+        description=(
+            "Local object-store root for multimodal attachments "
+            "(shared later with memory document chunks)."
+        ),
+    )
+    attachment_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        le=100 * 1024 * 1024,
+        description="Maximum upload size per attachment (default 10 MiB).",
+    )
+
 
 def effective_jobs_impl(settings: Settings | None = None) -> JobsImpl:
     """Resolve the job protocol Java and Python must agree on."""

@@ -181,7 +181,10 @@ function appendMessage(messages: Message[], data: Record<string, unknown>, at: s
   return [...messages, message].sort((a, b) => a.index - b.index);
 }
 
-function streamingDraftId(stepIndex: number, part: "text" | "reasoning"): string {
+function streamingDraftId(
+  stepIndex: number,
+  part: "text" | "reasoning" | "attachment",
+): string {
   return `sse-stream-${stepIndex}-${part}`;
 }
 
@@ -192,10 +195,84 @@ function appendTokenDelta(
 ): Message[] {
   const stepIndex = data.step_index;
   if (typeof stepIndex !== "number") return messages;
+
+  const part =
+    data.part === "reasoning"
+      ? "reasoning"
+      : data.part === "attachment"
+        ? "attachment"
+        : "text";
+
+  if (part === "attachment") {
+    const attachment = asRecord(data.attachment);
+    if (!attachment.id && typeof data.delta !== "string") return messages;
+    const draftId = streamingDraftId(stepIndex, "attachment");
+    const existing = messages.find((message) => message.id === draftId);
+    const nextAttachment = {
+      id: typeof attachment.id === "string" ? attachment.id : String(data.delta ?? ""),
+      media_type:
+        typeof attachment.media_type === "string" ? attachment.media_type : "",
+      filename:
+        typeof attachment.filename === "string"
+          ? attachment.filename
+          : typeof data.delta === "string"
+            ? data.delta
+            : "attachment",
+      size_bytes:
+        typeof attachment.size_bytes === "number" ? attachment.size_bytes : 0,
+      url: typeof attachment.url === "string" ? attachment.url : undefined,
+      caption:
+        typeof attachment.caption === "string" ? attachment.caption : null,
+    };
+    if (existing) {
+      const prev = Array.isArray(existing.extra.attachments)
+        ? [...(existing.extra.attachments as Record<string, unknown>[])]
+        : [];
+      if (!prev.some((item) => item.id === nextAttachment.id)) {
+        prev.push(nextAttachment);
+      }
+      return messages.map((message) =>
+        message.id === draftId
+          ? {
+              ...message,
+              content: prev
+                .map((item) => String(item.filename || item.id || ""))
+                .join("; "),
+              extra: {
+                ...message.extra,
+                kind: "streaming_attachment",
+                attachments: prev,
+              },
+              created_at: at,
+            }
+          : message,
+      );
+    }
+    const index =
+      messages.length > 0
+        ? Math.max(...messages.map((message) => message.index)) + 1
+        : 0;
+    const draft: Message = {
+      id: draftId,
+      index,
+      step_id: null,
+      role: "user",
+      name: null,
+      content: String(nextAttachment.filename),
+      tool_call_id: null,
+      extra: {
+        kind: "streaming_attachment",
+        step_index: stepIndex,
+        attachments: [nextAttachment],
+      },
+      created_at: at,
+    };
+    return [...messages, draft].sort((a, b) => a.index - b.index);
+  }
+
   const delta = typeof data.delta === "string" ? data.delta : "";
   if (!delta) return messages;
 
-  const part = data.part === "reasoning" ? "reasoning" : "text";
   const draftId = streamingDraftId(stepIndex, part);
   const existing = messages.find((message) => message.id === draftId);
   if (existing) {
@@ -234,9 +311,15 @@ function dropStreamingDrafts(
 ): Message[] {
   const stepIndex =
     typeof data.step_index === "number" ? data.step_index : null;
+  const kind = asRecord(data.extra).kind;
+  // Attachment messages may omit step_index; always drop attachment drafts.
+  if (kind === "attachment") {
+    return messages.filter(
+      (message) => !message.id.startsWith("sse-stream-") || !message.id.endsWith("-attachment"),
+    );
+  }
   if (stepIndex == null) return messages;
 
-  const kind = asRecord(data.extra).kind;
   const dropIds = new Set<string>();
   if (kind === "reasoning") {
     dropIds.add(streamingDraftId(stepIndex, "reasoning"));

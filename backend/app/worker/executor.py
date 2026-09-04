@@ -146,6 +146,10 @@ class RunExecutor:
                     agent_config=agent_config,
                 )
 
+            from app.services.attachment_service import AttachmentService
+
+            attachments = await AttachmentService(session).list_for_run(run.id)
+
             run.status = RunStatus.RUNNING
             await session.commit()
             await service._broadcast("run.started", run.id, {})
@@ -168,6 +172,7 @@ class RunExecutor:
                 run_messages=run_messages,
                 thread_id=run.thread_id,
                 thread_messages=thread_messages,
+                attachments=attachments,
                 step_index_base=step_index_base,
                 emit=_emit,
             )

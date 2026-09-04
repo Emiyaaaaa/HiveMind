@@ -16,8 +16,10 @@ erDiagram
     Run ||--o{ Step : has
     Run ||--o{ Message : has
     Run ||--o{ Checkpoint : has
+    Run ||--o{ Attachment : has
     Step ||--o{ ToolCall : has
     Step }o--|| Message : "optional step_id"
+    Message ||--o{ Attachment : "optional message_id"
 
     Project {
         string id PK
@@ -104,6 +106,18 @@ erDiagram
         string label
         json state
     }
+    Attachment {
+        string id PK
+        string tenant_id
+        string run_id FK
+        string message_id FK
+        string media_type
+        string filename
+        string storage_key
+        int size_bytes
+        string sha256
+        text caption
+    }
 ```
 
 ## Status state machine
@@ -146,6 +160,10 @@ stateDiagram-v2
 - **`Message.extra.kind = "reasoning"`** persists a finished thinking block
   (content = full reasoning text). Live chunks use SSE `token.delta` with
   `part: "reasoning"` and are not written to Redis replay or Postgres.
+- **`Message.extra.kind = "attachment"`** persists multimodal attachment refs
+  (`extra.attachments`). Bytes live in object storage keyed by
+  `attachments.storage_key`; `Message.content` stays plain text (caption).
+  Live announcements use SSE `token.delta` with `part: "attachment"`.
 - **`Thread` groups Runs for L1 short memory.** `Run.thread_id` is optional;
   when set, the worker seeds `AdapterContext.thread_messages` from prior runs
   in the same thread (window-trimmed). Messages remain Run-scoped rows.
@@ -176,5 +194,8 @@ stateDiagram-v2
 | `ix_messages_run_index` | stream messages in order |
 | `ix_tool_calls_step` | render tool calls inside a step |
 | `ix_checkpoints_run_index` | replay from the latest checkpoint |
+| `ix_attachments_tenant_id` | tenant-scoped attachment lookup |
+| `ix_attachments_run_id` | list attachments for a run / erase |
+| `ix_attachments_storage_key` | unique object-store key |
 | `ix_agent_versions_agent_id` | list version history for an agent |
 | `uq_agent_versions_agent_version` | one snapshot per (agent, version) |
