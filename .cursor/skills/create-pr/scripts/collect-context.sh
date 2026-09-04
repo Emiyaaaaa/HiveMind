@@ -43,6 +43,13 @@ if command -v gh >/dev/null 2>&1; then
   existing_pr="$(gh pr view --json url,state --jq '"\(.state) \(.url)"' 2>/dev/null || true)"
 fi
 
+range_has_cursor="false"
+if git merge-base --is-ancestor "${base_ref}" HEAD 2>/dev/null; then
+  if git log "${base_ref}..HEAD" --format=%B | awk 'tolower($0) ~ /cursor/ { found=1 } END { exit found ? 0 : 1 }'; then
+    range_has_cursor="true"
+  fi
+fi
+
 echo "=== meta ==="
 echo "branch: ${branch}"
 echo "default_base: ${default_base}"
@@ -55,6 +62,7 @@ if [[ -n "${ahead_behind}" ]]; then
   echo "behind: ${behind}"
 fi
 echo "existing_pr: ${existing_pr:-none}"
+echo "range_has_cursor: ${range_has_cursor}"
 echo
 
 echo "=== status ==="
@@ -63,6 +71,9 @@ echo
 
 echo "=== HEAD (latest git record) ==="
 git log -1 --format=fuller
+echo
+echo "=== HEAD message (%B, includes trailers) ==="
+git log -1 --format=%B
 echo
 git show --stat --format= HEAD
 echo
