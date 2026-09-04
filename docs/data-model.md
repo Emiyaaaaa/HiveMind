@@ -143,6 +143,9 @@ stateDiagram-v2
 - **`Message.step_id` is optional** so an adapter can attach a message to a
   specific node tick when it makes sense, while keeping the run-level
   ordering authoritative.
+- **`Message.extra.kind = "reasoning"`** persists a finished thinking block
+  (content = full reasoning text). Live chunks use SSE `token.delta` with
+  `part: "reasoning"` and are not written to Redis replay or Postgres.
 - **`Thread` groups Runs for L1 short memory.** `Run.thread_id` is optional;
   when set, the worker seeds `AdapterContext.thread_messages` from prior runs
   in the same thread (window-trimmed). Messages remain Run-scoped rows.

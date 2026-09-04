@@ -226,6 +226,28 @@ When `feedback` is enabled and recoverable observations exhaust
 `max_tool_rounds` without a final model reply, the run fails with
 `tool_recovery_exhausted: reached max_tool_rounds=N`.
 
+## Fine-grained streaming (reasoning blocks)
+
+`token.delta` carries an optional `part` field:
+
+| `part` | Meaning |
+| --- | --- |
+| `text` (default) | Visible assistant reply chunk |
+| `reasoning` | Model thinking / chain-of-thought chunk |
+
+Deltas stay SSE-only (no Redis replay log, no DB row). When the model finishes,
+LangGraph persists a `message.created` with `extra.kind = "reasoning"` (full
+text) before the visible assistant message. OpenAI-compatible providers that
+emit `reasoning_content` / `reasoning` / `thinking` on deltas are mapped
+automatically; mock mode uses `stream_reasoning: true` in agent config.
+
+The console folds reasoning in Messages and applies live `token.delta` drafts
+so operators see thinking as it streams. Thread L1 seeding skips reasoning
+rows (same as `prompt_echo`) so chain-of-thought is not replayed into the next
+prompt.
+
+Multimodal attachment persistence is still outstanding.
+
 ## Unit tests
 
 The Python test suite in `backend/tests/` exercises adapter and queue logic

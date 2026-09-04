@@ -217,9 +217,11 @@ class ThreadService:
     ) -> list[dict[str, Any]]:
         """Return OpenAI-style chat dicts for prior thread turns, window-trimmed.
 
-        Seeds only complete user/assistant turns (no system / prompt_echo / tool).
-        Cross-run tool chains are incomplete and break model APIs, so they are
-        omitted from L1. Used by the worker when constructing ``AdapterContext``.
+        Seeds only complete user/assistant turns (no system / prompt_echo /
+        reasoning / tool). Cross-run tool chains are incomplete and break model
+        APIs, so they are omitted from L1. Reasoning blocks stay in the Run
+        transcript for the console but are not replayed into the next prompt.
+        Used by the worker when constructing ``AdapterContext``.
         """
         max_messages = get_settings().thread_messages_max
         # Over-fetch slightly so role filtering still fills the cap.
@@ -246,7 +248,7 @@ class ThreadService:
         messages: list[dict[str, Any]] = []
         for msg, _run in result.all():
             extra = msg.extra or {}
-            if extra.get("kind") == "prompt_echo":
+            if extra.get("kind") in ("prompt_echo", "reasoning"):
                 continue
             payload = message_row_to_dict(msg)
             # Drop incomplete tool-call metadata from prior runs.
