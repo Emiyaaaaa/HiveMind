@@ -111,6 +111,62 @@ async def test_langgraph_default_single_node():
 
 
 @pytest.mark.asyncio
+async def test_langgraph_model_routing_fallback(monkeypatch: pytest.MonkeyPatch):
+    from app.adapters.langgraph_adapter import LangGraphAdapter, ModelResponse
+
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/primary",
+        "fallback_models": ["openai/backup"],
+    }
+
+    calls: list[str] = []
+
+    async def _scripted(
+        self: LangGraphAdapter,
+        _ctx: AdapterContext,
+        _step_index: int,
+        model: str,
+        _messages: list[dict[str, Any]],
+        **_kwargs: Any,
+    ) -> ModelResponse:
+        calls.append(model)
+        if model == "openai/primary":
+            import httpx
+
+            request = httpx.Request("POST", "https://example.com")
+            response = httpx.Response(503, request=request)
+            raise httpx.HTTPStatusError(
+                "unavailable", request=request, response=response
+            )
+        return ModelResponse(
+            content=f"from:{model}",
+            tokens_in=1,
+            tokens_out=1,
+            model=model,
+        )
+
+    monkeypatch.setattr(LangGraphAdapter, "_invoke_model_once", _scripted)
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+    assert result.output == {"reply": "from:openai/backup"}
+    assert calls == ["openai/primary", "openai/backup"]
+
+    completed = [
+        data
+        for event, data in ctx.events
+        if event == "step.completed"
+    ]
+    assert completed
+    assert completed[0].get("model") == "openai/backup"
+    assert completed[0].get("model_routing", {}).get("fell_back") is True
+
+    logs = [data for event, data in ctx.events if event == "log"]
+    assert any(d.get("message") == "model_routing_fallback" for d in logs)
+
+
+@pytest.mark.asyncio
 async def test_langgraph_multi_node_with_tool():
     adapter = LangGraphAdapter()
     ctx = _RecordingContext()
