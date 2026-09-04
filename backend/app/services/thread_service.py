@@ -248,7 +248,7 @@ class ThreadService:
         messages: list[dict[str, Any]] = []
         for msg, _run in result.all():
             extra = msg.extra or {}
-            if extra.get("kind") in ("prompt_echo", "reasoning"):
+            if extra.get("kind") in ("prompt_echo", "reasoning", "attachment"):
                 continue
             payload = message_row_to_dict(msg)
             # Drop incomplete tool-call metadata from prior runs.

@@ -2,7 +2,7 @@
 
 架构与数据模型见 [architecture.md](architecture.md) 与 [data-model.md](data-model.md)。
 
-**最后核对：** 2026-09-03
+**最后核对：** 2026-09-04
 
 ## 优化方向
 
@@ -79,7 +79,7 @@
 - [ ] Agent 记忆服务（M1 Thread ✅；M2/M3 情景摘要 + 语义事实 + 文档 RAG 待做）
 - [x] 模型路由 / fallback 策略
 - [ ] 定时与批量 Run
-- [x] 细粒度流式：推理块（`token.delta.part` + `Message.extra.kind=reasoning`）；多模态附件（DB 持久化）待做
+- [x] 细粒度流式：推理块（`token.delta.part` + `Message.extra.kind=reasoning`）；多模态附件（`token.delta.part=attachment` + `attachments` 表 / 对象存储 + `Message.extra.kind=attachment`）
 
 ## Agent Memory 专项
 
@@ -165,7 +165,7 @@ L0 属于执行与审计；L1–L3 才是「Agent Memory」。L0 不能删，但
 - 事实冲突：同一 `key`（如 `user.preferred_language`）新写入覆盖旧值并留 `superseded_by`。
 - 记忆评测：回归套件增加「是否错误召回过期事实 / 是否漏召回」用例，挂到现有 `regression-executions`。
 - Procedural：把成功的 tool 序列收成 `kind=procedure`，仅对同 agent + 相似 input 检索；默认关闭。
-- 多模态附件：与 Phase 5 流式附件共用对象存储，记忆层只存引用与 caption embedding。
+- 多模态附件：与 Phase 5 流式附件共用对象存储（`attachments` 表 + local FS；记忆层日后只存引用与 caption embedding）✅
 
 ---
 

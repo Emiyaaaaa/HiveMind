@@ -61,6 +61,21 @@ export interface MessagePage {
   has_more: boolean;
 }
 
+export interface Attachment {
+  id: string;
+  tenant_id: string;
+  run_id: string | null;
+  message_id: string | null;
+  media_type: string;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  caption: string | null;
+  url: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Checkpoint {
   id: string;
   index: number;

@@ -48,6 +48,8 @@ class AdapterContext:
     # Prior turns from the same thread (window-trimmed); empty when no thread.
     thread_id: str | None = None
     thread_messages: list[dict[str, Any]] = field(default_factory=list)
+    # Multimodal attachments bound to this run (metadata + storage_key); empty when none.
+    attachments: list[Any] = field(default_factory=list)
     step_index_base: int = 0
     emit: EmitCallback = field(
         default=None  # type: ignore[assignment]
@@ -105,9 +107,10 @@ class AdapterContext:
         """Stream an incremental token chunk to SSE subscribers (no DB write).
 
         ``part`` discriminates fine-grained streams: ``text`` (default) for the
-        visible reply, ``reasoning`` for model thinking / chain-of-thought.
-        Reasoning deltas are still ephemeral; persist the finished block with
-        ``emit_message(..., kind="reasoning")``.
+        visible reply, ``reasoning`` for model thinking / chain-of-thought, and
+        ``attachment`` for multimodal attachment announcements (payload may
+        include an ``attachment`` object). Reasoning / attachment deltas stay
+        ephemeral; persist finished blocks with ``emit_message``.
         """
         await self.emit(
             "token.delta",

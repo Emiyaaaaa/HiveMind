@@ -246,7 +246,21 @@ so operators see thinking as it streams. Thread L1 seeding skips reasoning
 rows (same as `prompt_echo`) so chain-of-thought is not replayed into the next
 prompt.
 
-Multimodal attachment persistence is still outstanding.
+## Fine-grained streaming (multimodal attachments)
+
+Attachments are uploaded first (`POST /v1/attachments`), then referenced from
+`POST /v1/runs` via `input.attachments: [{ "id": "…" }]`. Bytes live in a local
+object store (`AGENTFLOW_ATTACHMENT_STORAGE_DIR`); Postgres only stores metadata
+(`attachments` table). The same store is reserved for future memory document
+chunks — Message.content stays plain text.
+
+When a run starts, LangGraph (and adapters that call
+`emit_input_attachments`) streams `token.delta` with `part: "attachment"` for
+each file, then persists a `message.created` with
+`extra.kind = "attachment"` and `extra.attachments` refs. Image bytes are loaded
+into OpenAI-compatible multimodal `image_url` parts for the model call.
+Retention erase deletes attachment rows and blobs with L0 memory. Thread L1
+skips attachment rows (captions stay on the Run transcript for the console).
 
 ## Unit tests
 

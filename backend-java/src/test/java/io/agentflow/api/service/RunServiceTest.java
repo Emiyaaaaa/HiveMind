@@ -81,6 +81,7 @@ class RunServiceTest {
                 agents,
                 mock(ThreadRepository.class),
                 mock(JobProducer.class),
-                mock(CancelSignal.class));
+                mock(CancelSignal.class),
+                mock(AttachmentService.class));
     }
 }

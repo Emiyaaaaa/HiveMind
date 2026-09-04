@@ -26,7 +26,12 @@ function formatEventData(type: string, data: Record<string, unknown>): string {
     return parts.join(" · ");
   }
   if (type === "token.delta") {
-    const part = data.part === "reasoning" ? "reasoning" : "text";
+    const part =
+      data.part === "reasoning"
+        ? "reasoning"
+        : data.part === "attachment"
+          ? "attachment"
+          : "text";
     const delta = typeof data.delta === "string" ? data.delta : "";
     const preview = delta.length > 40 ? `${delta.slice(0, 40)}…` : delta;
     return `part=${part} · ${JSON.stringify(preview)}`;

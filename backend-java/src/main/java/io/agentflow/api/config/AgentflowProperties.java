@@ -15,6 +15,7 @@ public class AgentflowProperties {
     private Auth auth = new Auth();
     private Temporal temporal = new Temporal();
     private Retention retention = new Retention();
+    private Attachments attachments = new Attachments();
 
     public String getVersion() {
         return version;
@@ -86,6 +87,14 @@ public class AgentflowProperties {
 
     public void setRetention(Retention retention) {
         this.retention = retention;
+    }
+
+    public Attachments getAttachments() {
+        return attachments;
+    }
+
+    public void setAttachments(Attachments attachments) {
+        this.attachments = attachments;
     }
 
     public static class Auth {
@@ -451,6 +460,27 @@ public class AgentflowProperties {
 
         public void setPurgeBatchSize(int purgeBatchSize) {
             this.purgeBatchSize = purgeBatchSize;
+        }
+    }
+
+    public static class Attachments {
+        private String storageDir = "./data/attachments";
+        private long maxBytes = 10L * 1024 * 1024;
+
+        public String getStorageDir() {
+            return storageDir;
+        }
+
+        public void setStorageDir(String storageDir) {
+            this.storageDir = storageDir;
+        }
+
+        public long getMaxBytes() {
+            return maxBytes;
+        }
+
+        public void setMaxBytes(long maxBytes) {
+            this.maxBytes = maxBytes;
         }
     }
 }

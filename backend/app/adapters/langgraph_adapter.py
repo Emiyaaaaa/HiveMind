@@ -303,6 +303,8 @@ class _RunState:
     step_index: int = 0
     node_indices: dict[str, int] = field(default_factory=dict)
     emitted_system_prompts: set[str] = field(default_factory=set)
+    input_attachments: list[Any] = field(default_factory=list)
+    attachments_emitted: bool = False
 
     def next_step_index(self, node_id: str) -> int:
         if node_id not in self.node_indices:
@@ -359,6 +361,17 @@ class LangGraphAdapter(OrchestratorAdapter):
                 ctx.run_messages
             ),
         )
+        run_state.input_attachments = list(ctx.attachments or [])
+        # Skip re-emitting on retry/resume when transcript already has attachment rows.
+        if _messages_have_attachments(ctx.run_messages):
+            run_state.attachments_emitted = True
+        elif run_state.input_attachments:
+            from app.runtime.attachments import emit_input_attachments
+
+            await emit_input_attachments(
+                ctx, run_state.input_attachments, step_index=None, role="user"
+            )
+            run_state.attachments_emitted = True
 
         graph = StateGraph(dict)
         for node_spec in graph_spec.nodes:
@@ -589,6 +602,11 @@ class LangGraphAdapter(OrchestratorAdapter):
             ctx = run_state.ctx
             stream_tokens = run_state.config.get("stream_tokens", True)
             messages = _seed_agent_messages(state, system_prompt)
+            if run_state.input_attachments:
+                user_content = await _multimodal_user_content(
+                    str(state.get("input", "")), run_state.input_attachments
+                )
+                messages = _apply_multimodal_to_seed(messages, user_content)
             tool_results = dict(state.get("tool_results") or {})
             started = time.monotonic()
             total_in = 0
@@ -714,7 +732,13 @@ class LangGraphAdapter(OrchestratorAdapter):
                     messages.append({"role": "assistant", "content": final_reply})
 
                 latency_ms = int((time.monotonic() - started) * 1000)
-                cost_usd = estimate_cost_usd(model, total_in, total_out)
+                used_model = (
+                    (last_response.model if last_response else None) or model
+                )
+                routing_meta = (
+                    last_response.routing if last_response is not None else None
+                )
+                cost_usd = estimate_cost_usd(used_model, total_in, total_out)
                 await _emit_assistant_messages(
                     ctx,
                     step_index=step_idx,
@@ -799,10 +823,13 @@ class LangGraphAdapter(OrchestratorAdapter):
                 for m in (state.get("messages") or [])
                 if isinstance(m, dict) and m.get("role") != "system"
             ]
+            user_content = await _multimodal_user_content(
+                user_input, run_state.input_attachments
+            )
             messages = [
                 {"role": "system", "content": system_prompt},
                 *history,
-                {"role": "user", "content": user_input},
+                {"role": "user", "content": user_content},
             ]
             response = await self._invoke_model(
                 ctx,
@@ -1401,3 +1428,40 @@ async def _emit_assistant_messages(
             kind="reasoning",
         )
     await ctx.emit_message(role="assistant", content=content, step_index=step_index)
+
+
+def _messages_have_attachments(messages: list[dict[str, Any]] | None) -> bool:
+    if not messages:
+        return False
+    for message in messages:
+        extra = message.get("extra") or {}
+        if extra.get("kind") == "attachment" or extra.get("attachments"):
+            return True
+        if message.get("attachments"):
+            return True
+    return False
+
+
+async def _multimodal_user_content(
+    text: str, attachments: list[Any]
+) -> str | list[dict[str, Any]]:
+    if not attachments:
+        return text
+    from app.runtime.attachments import openai_user_content
+
+    return await openai_user_content(text, attachments)
+
+
+def _apply_multimodal_to_seed(
+    messages: list[dict[str, Any]],
+    user_content: str | list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Replace the trailing user turn with multimodal content when needed."""
+    if not messages or isinstance(user_content, str):
+        return messages
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if isinstance(out[i], dict) and out[i].get("role") == "user":
+            out[i] = {**out[i], "content": user_content}
+            break
+    return out

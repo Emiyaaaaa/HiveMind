@@ -21,9 +21,27 @@ function isReasoning(message: Message): boolean {
   return kind === "reasoning" || kind === "streaming_reasoning";
 }
 
+function isAttachment(message: Message): boolean {
+  const kind = message.extra?.kind;
+  if (kind === "attachment" || kind === "streaming_attachment") return true;
+  const attachments = message.extra?.attachments;
+  return Array.isArray(attachments) && attachments.length > 0;
+}
+
 function isStreaming(message: Message): boolean {
   const kind = message.extra?.kind;
-  return kind === "streaming" || kind === "streaming_reasoning";
+  return (
+    kind === "streaming" ||
+    kind === "streaming_reasoning" ||
+    kind === "streaming_attachment"
+  );
+}
+
+function attachmentList(message: Message): Array<Record<string, unknown>> {
+  const raw = message.extra?.attachments;
+  return Array.isArray(raw)
+    ? raw.filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    : [];
 }
 
 function mergeMessages(...groups: Message[][]): Message[] {
@@ -118,6 +136,10 @@ export function MessagesPanel({
     () => displayed.filter(isReasoning).length,
     [displayed],
   );
+  const attachmentCount = useMemo(
+    () => displayed.filter(isAttachment).length,
+    [displayed],
+  );
 
   async function loadOlder() {
     if (loading || !hasMore) return;
@@ -159,6 +181,9 @@ export function MessagesPanel({
               : ""}
             {reasoningCount > 0
               ? ` · ${reasoningCount} reasoning block${reasoningCount === 1 ? "" : "s"}`
+              : ""}
+            {attachmentCount > 0
+              ? ` · ${attachmentCount} attachment message${attachmentCount === 1 ? "" : "s"}`
               : ""}
             {hasMore ? " · older available" : ""}
           </span>
@@ -212,6 +237,68 @@ export function MessagesPanel({
                 expanded={expanded.has(key) || isStreaming(message)}
                 onToggle={() => toggle(key)}
               />
+            );
+          }
+          if (isAttachment(message)) {
+            const items = attachmentList(message);
+            return (
+              <li
+                key={key}
+                className="rounded border border-border bg-surface p-3 text-sm"
+              >
+                <div className="mb-2 text-xs uppercase tracking-wide text-muted">
+                  {message.role} · attachment
+                  {isStreaming(message) ? " · streaming…" : ""}
+                  <span className="ml-2 font-mono normal-case">
+                    #{message.index}
+                  </span>
+                </div>
+                {message.content ? (
+                  <div className="mb-2 whitespace-pre-wrap">{message.content}</div>
+                ) : null}
+                <ul className="space-y-2">
+                  {items.map((item, idx) => {
+                    const id = typeof item.id === "string" ? item.id : `att-${idx}`;
+                    const filename =
+                      typeof item.filename === "string" ? item.filename : id;
+                    const mediaType =
+                      typeof item.media_type === "string" ? item.media_type : "";
+                    const url =
+                      typeof item.url === "string"
+                        ? `/api${item.url}/content`
+                        : null;
+                    const isImage = mediaType.startsWith("image/");
+                    return (
+                      <li
+                        key={id}
+                        className="rounded border border-dashed border-border p-2"
+                      >
+                        <div className="text-xs text-muted">
+                          {filename}
+                          {mediaType ? ` · ${mediaType}` : ""}
+                        </div>
+                        {url && isImage ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={url}
+                            alt={filename}
+                            className="mt-2 max-h-48 max-w-full rounded object-contain"
+                          />
+                        ) : url ? (
+                          <a
+                            className="mt-1 inline-block text-xs underline"
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Download
+                          </a>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
             );
           }
           return (

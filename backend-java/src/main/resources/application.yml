@@ -18,6 +18,10 @@ spring:
   mvc:
     async:
       request-timeout: -1
+  servlet:
+    multipart:
+      max-file-size: ${AGENTFLOW_ATTACHMENT_MAX_BYTES:10485760}
+      max-request-size: ${AGENTFLOW_ATTACHMENT_MAX_BYTES:10485760}
 
 server:
   port: ${AGENTFLOW_SERVER_PORT:8000}
@@ -68,10 +72,13 @@ agentflow:
       tenant-claim: ${AGENTFLOW_OIDC_TENANT_CLAIM:tenant_id}
       role-claim: ${AGENTFLOW_OIDC_ROLE_CLAIM:roles}
       default-role: ${AGENTFLOW_OIDC_DEFAULT_ROLE:viewer}
-  retention:
-    tenant-ttl-days: ${AGENTFLOW_DATA_RETENTION_TENANT_TTL_DAYS:0}
-    purge-interval-seconds: ${AGENTFLOW_DATA_RETENTION_PURGE_INTERVAL_SECONDS:3600}
-    purge-batch-size: ${AGENTFLOW_DATA_RETENTION_PURGE_BATCH_SIZE:100}
+    retention:
+      tenant-ttl-days: ${AGENTFLOW_DATA_RETENTION_TENANT_TTL_DAYS:0}
+      purge-interval-seconds: ${AGENTFLOW_DATA_RETENTION_PURGE_INTERVAL_SECONDS:3600}
+      purge-batch-size: ${AGENTFLOW_DATA_RETENTION_PURGE_BATCH_SIZE:100}
+  attachments:
+    storage-dir: ${AGENTFLOW_ATTACHMENT_STORAGE_DIR:./data/attachments}
+    max-bytes: ${AGENTFLOW_ATTACHMENT_MAX_BYTES:10485760}
 
 management:
   tracing:

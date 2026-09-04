@@ -2,6 +2,7 @@ import type {
   Agent,
   AgentVersion,
   AgentVersionDiff,
+  Attachment,
   MessagePage,
   Run,
   Thread,
@@ -117,6 +118,25 @@ export const api = {
     const runs = await request<Run[]>(`/v1/threads/${id}/runs`);
     return runs.map(normalizeRun);
   },
+  uploadAttachment: async (file: File, caption?: string) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (caption) body.append("caption", caption);
+    const response = await fetch("/api/v1/attachments", {
+      method: "POST",
+      headers: { ...authHeaders() },
+      body,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`${response.status} ${response.statusText}: ${detail}`);
+    }
+    return response.json() as Promise<Attachment>;
+  },
+  getAttachment: (id: string) =>
+    request<Attachment>(`/v1/attachments/${id}`),
+  attachmentContentUrl: (id: string) => `/api/v1/attachments/${id}/content`,
   listAgents: () => request<Agent[]>("/v1/agents"),
   createAgent: (body: {
     name: string;

@@ -29,6 +29,7 @@ public class RetentionService {
     private final RunRepository runs;
     private final MessageRepository messages;
     private final CheckpointRepository checkpoints;
+    private final AttachmentService attachments;
     private final StringRedisTemplate redis;
     private final AgentflowProperties props;
 
@@ -36,11 +37,13 @@ public class RetentionService {
             RunRepository runs,
             MessageRepository messages,
             CheckpointRepository checkpoints,
+            AttachmentService attachments,
             StringRedisTemplate redis,
             AgentflowProperties props) {
         this.runs = runs;
         this.messages = messages;
         this.checkpoints = checkpoints;
+        this.attachments = attachments;
         this.redis = redis;
         this.props = props;
     }
@@ -59,6 +62,7 @@ public class RetentionService {
 
         long msgDeleted = messages.deleteByRunId(runId);
         long cpDeleted = checkpoints.deleteByRunId(runId);
+        attachments.eraseRun(runId);
         clearTranscriptFields(run);
         runs.save(run);
         deleteEventLog(runId);
@@ -77,9 +81,11 @@ public class RetentionService {
         for (RunEntity run : tenantRuns) {
             totalMessages += messages.deleteByRunId(run.getId());
             totalCheckpoints += checkpoints.deleteByRunId(run.getId());
+            attachments.eraseRun(run.getId());
             clearTranscriptFields(run);
             deleteEventLog(run.getId());
         }
+        attachments.eraseTenant(tenantId);
         runs.saveAll(tenantRuns);
 
         return new EraseTenantDataResponse(
@@ -114,6 +120,7 @@ public class RetentionService {
             for (RunEntity run : candidates) {
                 totalMessages += messages.deleteByRunId(run.getId());
                 totalCheckpoints += checkpoints.deleteByRunId(run.getId());
+                attachments.eraseRun(run.getId());
                 clearTranscriptFields(run);
                 deleteEventLog(run.getId());
             }

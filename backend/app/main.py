@@ -20,7 +20,6 @@ from app.events import get_event_bus
 setup_logging()
 logger = get_logger("app")
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_adapter_plugins()

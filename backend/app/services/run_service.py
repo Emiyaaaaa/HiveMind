@@ -68,6 +68,14 @@ class AgentNotFound(Exception):
     pass
 
 
+class AttachmentRefNotFound(Exception):
+    """Raised when ``input.attachments`` references a missing / cross-tenant id."""
+
+    def __init__(self, attachment_id: str) -> None:
+        self.attachment_id = attachment_id
+        super().__init__(attachment_id)
+
+
 class ThreadNotFound(Exception):
     pass
 
@@ -140,6 +148,22 @@ class RunService:
             ):
                 raise ThreadNotFound(thread_id)
 
+        from app.services.attachment_service import (
+            AttachmentNotFound,
+            AttachmentService,
+        )
+
+        # Validate attachment refs before inserting the run row.
+        attachment_service = AttachmentService(self.session)
+        try:
+            await attachment_service.resolve_input_attachments(
+                dict(payload.input or {}),
+                tenant_id=agent.tenant_id,
+                run_id=None,
+            )
+        except AttachmentNotFound as exc:
+            raise AttachmentRefNotFound(exc.attachment_id) from exc
+
         run = Run(
             tenant_id=agent.tenant_id,
             project_id=agent.project_id,
@@ -153,6 +177,12 @@ class RunService:
         self.session.add(run)
         await self.session.commit()
         await self.session.refresh(run)
+
+        await attachment_service.resolve_input_attachments(
+            dict(payload.input or {}),
+            tenant_id=agent.tenant_id,
+            run_id=run.id,
+        )
 
         await self._broadcast("run.created", run.id, {"agent_id": agent.id})
         return run
@@ -557,6 +587,7 @@ class RunService:
                 step = await self._find_step(run_id, raw_step_index)
                 if step is not None:
                     step_id = step.id
+            extra = dict(data.get("extra") or {})
             message = Message(
                 run_id=run_id,
                 index=index,
@@ -565,14 +596,31 @@ class RunService:
                 name=data.get("name"),
                 content=data.get("content", ""),
                 tool_call_id=data.get("tool_call_id"),
-                extra=data.get("extra", {}),
+                extra=extra,
             )
             self.session.add(message)
             await self.session.commit()
+            await self.session.refresh(message)
+            attachment_ids = [
+                str(item.get("id"))
+                for item in (extra.get("attachments") or [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+            if attachment_ids:
+                from app.services.attachment_service import AttachmentService
+
+                run = await self._get_run(run_id)
+                await AttachmentService(self.session).bind_message(
+                    attachment_ids=attachment_ids,
+                    message_id=message.id,
+                    tenant_id=run.tenant_id,
+                )
             data = {
                 **data,
+                "id": message.id,
                 "index": index,
                 "step_id": step_id,
+                "extra": extra,
             }
         elif event_type == "tool_call.started":
             step = await self._find_step(run_id, data["step_index"])

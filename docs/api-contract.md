@@ -156,6 +156,32 @@ The first response is the newest page; `next_cursor` is an opaque
 Response: `Run[]` belonging to the thread, oldest first. 404 if the thread is
 not visible.
 
+### `POST /v1/attachments` → 201
+
+Multipart upload (`file` required, optional `caption`). Operator role.
+Persists bytes in the object store and returns metadata:
+
+```json
+{
+  "id": "01HZ...",
+  "tenant_id": "default",
+  "run_id": null,
+  "message_id": null,
+  "media_type": "image/png",
+  "filename": "chart.png",
+  "size_bytes": 1234,
+  "sha256": "…",
+  "caption": null,
+  "url": "/v1/attachments/01HZ...",
+  "created_at": "…",
+  "updated_at": "…"
+}
+```
+
+`GET /v1/attachments/{id}` returns the same metadata. `GET /v1/attachments/{id}/content`
+streams the binary. Cross-tenant ids return 404. Max size:
+`AGENTFLOW_ATTACHMENT_MAX_BYTES` (default 10 MiB).
+
 ### `POST /v1/runs` → 202
 
 Request:
@@ -163,11 +189,19 @@ Request:
 ```json
 {
   "agent_id": "01HZ...",
-  "input": { "prompt": "hi" },
+  "input": {
+    "prompt": "hi",
+    "attachments": [{ "id": "01HZ..." }]
+  },
   "metadata": {},
   "adapter": "echo",
   "thread_id": "01HZ..."
 }
+```
+
+`input.attachments` may be a list of ids or `{ "id": "…" }` objects referencing
+previously uploaded attachments. Missing / cross-tenant ids → 404.
+
 ```
 
 `metadata`, `adapter`, and `thread_id` are optional. When `adapter` is omitted
@@ -384,11 +418,12 @@ The supported `type` values are:
 { "step_index": 0, "delta": "Hel", "role": "assistant", "part": "text" }
 ```
 
-`part` discriminates fine-grained streams: `"text"` (default, visible reply)
-or `"reasoning"` (model thinking / chain-of-thought). Finished reasoning is
-persisted as a `message.created` with `extra.kind = "reasoning"` so the
-console can show a collapsible block after reconnect; live deltas remain
-ephemeral.
+`part` discriminates fine-grained streams: `"text"` (default, visible reply),
+`"reasoning"` (model thinking / chain-of-thought), or `"attachment"` (multimodal
+file announcement; payload may include an `attachment` object). Finished
+reasoning is persisted as a `message.created` with `extra.kind = "reasoning"`;
+finished attachments as `extra.kind = "attachment"` plus
+`extra.attachments` refs. Live deltas remain ephemeral.
 
 `step.updated` flushes deferred metrics on a running step (tokens, latency)
 before `step.completed`:
@@ -606,6 +641,11 @@ ops dashboards.
 `extra.kind = "reasoning"` marks a persisted reasoning / thinking block
 (content is the full chain-of-thought). These rows stay on the Run transcript
 for the console but are excluded from Thread L1 window seeding.
+
+`extra.kind = "attachment"` marks a multimodal attachment message. Content is
+a caption / filename summary; `extra.attachments` holds compact refs
+(`id`, `media_type`, `filename`, `url`, `size_bytes`). Binary bytes stay in
+object storage — `Message.content` is never multimodal JSON.
 
 ### `MessagePage`
 

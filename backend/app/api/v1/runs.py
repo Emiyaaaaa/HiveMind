@@ -14,6 +14,7 @@ from app.schemas.run import (
 )
 from app.services.run_service import (
     AgentNotFound,
+    AttachmentRefNotFound,
     RunConflict,
     RunNotFound,
     RunService,
@@ -68,6 +69,10 @@ async def create_run(
         raise HTTPException(status_code=404, detail=f"Agent not found: {exc}") from exc
     except ThreadNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Thread not found: {exc}") from exc
+    except AttachmentRefNotFound as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Attachment not found: {exc}"
+        ) from exc
 
     await service.start_run(run.id)
     try:
