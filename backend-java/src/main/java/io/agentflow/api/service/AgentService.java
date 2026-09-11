@@ -1,6 +1,7 @@
 package io.agentflow.api.service;
 
 import io.agentflow.api.dto.AgentCreateRequest;
+import io.agentflow.api.dto.AgentQuotaStatusResponse;
 import io.agentflow.api.dto.AgentResponse;
 import io.agentflow.api.dto.AgentUpdateRequest;
 import io.agentflow.api.dto.AgentVersionDiffResponse;
@@ -26,10 +27,15 @@ public class AgentService {
 
     private final AgentRepository repository;
     private final AgentVersionRepository versionRepository;
+    private final AgentQuotaService quotaService;
 
-    public AgentService(AgentRepository repository, AgentVersionRepository versionRepository) {
+    public AgentService(
+            AgentRepository repository,
+            AgentVersionRepository versionRepository,
+            AgentQuotaService quotaService) {
         this.repository = repository;
         this.versionRepository = versionRepository;
+        this.quotaService = quotaService;
     }
 
     @Transactional
@@ -65,6 +71,11 @@ public class AgentService {
     @Transactional(readOnly = true)
     public AgentResponse get(String id) {
         return AgentResponse.fromEntity(getEntity(id));
+    }
+
+    @Transactional(readOnly = true)
+    public AgentQuotaStatusResponse quota(String id) {
+        return quotaService.status(getEntity(id));
     }
 
     @Transactional(readOnly = true)

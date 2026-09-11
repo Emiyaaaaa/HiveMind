@@ -82,6 +82,7 @@ class RunServiceTest {
                 mock(ThreadRepository.class),
                 mock(JobProducer.class),
                 mock(CancelSignal.class),
-                mock(AttachmentService.class));
+                mock(AttachmentService.class),
+                mock(AgentQuotaService.class));
     }
 }

@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentQuotaStatus,
   AgentVersion,
   AgentVersionDiff,
   Attachment,
@@ -138,6 +139,8 @@ export const api = {
     request<Attachment>(`/v1/attachments/${id}`),
   attachmentContentUrl: (id: string) => `/api/v1/attachments/${id}/content`,
   listAgents: () => request<Agent[]>("/v1/agents"),
+  getAgentQuota: (id: string) =>
+    request<AgentQuotaStatus>(`/v1/agents/${id}/quota`),
   createAgent: (body: {
     name: string;
     adapter?: string;

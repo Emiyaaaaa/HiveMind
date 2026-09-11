@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -39,6 +39,28 @@ class AgentRead(BaseModel):
     version: int
     created_at: datetime
     updated_at: datetime
+
+
+class AgentQuotaStatus(BaseModel):
+    """Current period usage against the agent's configured token/cost quota."""
+
+    agent_id: str
+    active: bool
+    enforce: bool = False
+    period: Literal["day", "week", "month"] | None = None
+    period_key: str | None = None
+    period_start: datetime | None = None
+    period_end: datetime | None = None
+    max_tokens: int | None = None
+    max_cost_usd: float | None = None
+    used_tokens: int = 0
+    used_tokens_in: int = 0
+    used_tokens_out: int = 0
+    used_cost_usd: float = 0.0
+    run_count: int = 0
+    remaining_tokens: int | None = None
+    remaining_cost_usd: float | None = None
+    exceeded: bool = False
 
 
 class AgentVersionRead(BaseModel):

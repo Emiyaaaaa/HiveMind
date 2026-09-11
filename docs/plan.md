@@ -67,7 +67,7 @@
 - [ ] 人工审批 UI（`waiting_human` + 通知）
 - [x] Temporal（或 Restate）集成超长 Run
 - [x] Helm + Terraform；按队列延迟自动扩缩 worker
-- [ ] Agent 级 token/成本配额
+- [x] Agent 级 token/成本配额
 
 **验收：** 双租户演示；审批门控生效；24h+ 工作流在 worker 重启后仍可恢复。
 

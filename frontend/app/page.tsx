@@ -1,16 +1,40 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { api } from "@/lib/api";
+import type { AgentQuotaStatus } from "@/lib/types";
+import { formatCostUsd, formatTokenCount } from "@/lib/usage";
+
+function quotaLabel(q: AgentQuotaStatus | undefined): string | null {
+  if (!q?.active) return null;
+  const tokens =
+    q.max_tokens != null
+      ? `${formatTokenCount(q.used_tokens)}/${formatTokenCount(q.max_tokens)} tok`
+      : `${formatTokenCount(q.used_tokens)} tok`;
+  const cost =
+    q.max_cost_usd != null
+      ? `${formatCostUsd(q.used_cost_usd)}/${formatCostUsd(q.max_cost_usd)}`
+      : formatCostUsd(q.used_cost_usd);
+  const period = q.period_key ?? q.period ?? "period";
+  return `${tokens} · ${cost} · ${period}${q.exceeded ? " · exceeded" : ""}`;
+}
 
 export default function HomePage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const agents = useQuery({ queryKey: ["agents"], queryFn: api.listAgents });
+
+  const quotas = useQueries({
+    queries: (agents.data ?? []).map((a) => ({
+      queryKey: ["agent-quota", a.id],
+      queryFn: () => api.getAgentQuota(a.id),
+      enabled: !!agents.data,
+    })),
+  });
 
   const [agentName, setAgentName] = useState("echo-bot");
   const [prompt, setPrompt] = useState("hello, agentflow");
@@ -99,17 +123,28 @@ export default function HomePage() {
           <p className="text-muted">Loading…</p>
         ) : agents.data && agents.data.length > 0 ? (
           <ul className="divide-y divide-border rounded-lg border border-border bg-surface">
-            {agents.data.map((a) => (
-              <li key={a.id} className="px-4 py-3 flex items-center justify-between">
-                <div>
-                  <div className="font-medium">{a.name}</div>
-                  <div className="text-xs text-muted">
-                    adapter: <span className="font-mono">{a.adapter}</span>
+            {agents.data.map((a, i) => {
+              const label = quotaLabel(quotas[i]?.data);
+              return (
+                <li key={a.id} className="px-4 py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <div className="font-medium">{a.name}</div>
+                    <div className="text-xs text-muted">
+                      adapter: <span className="font-mono">{a.adapter}</span>
+                      {label ? (
+                        <>
+                          {" · "}
+                          <span className={quotas[i]?.data?.exceeded ? "text-bad" : undefined}>
+                            quota {label}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-                <span className="text-xs text-muted font-mono">{a.id}</span>
-              </li>
-            ))}
+                  <span className="text-xs text-muted font-mono shrink-0">{a.id}</span>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="text-muted">No agents yet. Create one above.</p>

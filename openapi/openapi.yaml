@@ -94,6 +94,21 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /v1/agents/{id}/quota:
+    get:
+      tags: [Agents]
+      summary: Get agent quota status
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: Current period token/cost quota usage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentQuotaStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /v1/agents/{id}/versions:
     get:
       tags: [Agents]
@@ -213,6 +228,8 @@ paths:
                 $ref: "#/components/schemas/Run"
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /v1/runs/{id}:
     get:
       tags: [Runs]
@@ -512,6 +529,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorDetail"
+    TooManyRequests:
+      description: Agent quota exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
     UnprocessableEntity:
       description: Validation error
       content:
@@ -574,6 +597,64 @@ components:
         updated_at:
           type: string
           format: date-time
+    AgentQuotaStatus:
+      type: object
+      required:
+        - agent_id
+        - active
+        - enforce
+        - used_tokens
+        - used_tokens_in
+        - used_tokens_out
+        - used_cost_usd
+        - run_count
+        - exceeded
+      properties:
+        agent_id:
+          type: string
+        active:
+          type: boolean
+        enforce:
+          type: boolean
+        period:
+          type: string
+          nullable: true
+          enum: [day, week, month]
+        period_key:
+          type: string
+          nullable: true
+        period_start:
+          type: string
+          format: date-time
+          nullable: true
+        period_end:
+          type: string
+          format: date-time
+          nullable: true
+        max_tokens:
+          type: integer
+          nullable: true
+        max_cost_usd:
+          type: number
+          nullable: true
+        used_tokens:
+          type: integer
+        used_tokens_in:
+          type: integer
+        used_tokens_out:
+          type: integer
+        used_cost_usd:
+          type: number
+        run_count:
+          type: integer
+        remaining_tokens:
+          type: integer
+          nullable: true
+        remaining_cost_usd:
+          type: number
+          nullable: true
+        exceeded:
+          type: boolean
     AgentCreateRequest:
       type: object
       required: [name, adapter]

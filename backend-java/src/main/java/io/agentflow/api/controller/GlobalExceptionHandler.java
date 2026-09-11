@@ -2,6 +2,7 @@ package io.agentflow.api.controller;
 
 import io.agentflow.api.service.AgentNameConflictException;
 import io.agentflow.api.service.AgentNotFoundException;
+import io.agentflow.api.service.AgentQuotaExceededException;
 import io.agentflow.api.service.AgentVersionNotFoundException;
 import io.agentflow.api.service.AttachmentNotFoundException;
 import io.agentflow.api.service.AttachmentTooLargeException;
@@ -65,6 +66,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AgentNameConflictException.class)
     public ResponseEntity<Map<String, String>> handleAgentNameConflict(AgentNameConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AgentQuotaExceededException.class)
+    public ResponseEntity<Map<String, String>> handleAgentQuotaExceeded(
+            AgentQuotaExceededException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(Map.of("detail", ex.getMessage()));
     }
 
     @ExceptionHandler(RunConflictException.class)

@@ -61,6 +61,7 @@ public class RunService {
     private final JobProducer jobProducer;
     private final CancelSignal cancelSignal;
     private final AttachmentService attachmentService;
+    private final AgentQuotaService quotaService;
 
     public RunService(
             RunRepository runs,
@@ -72,7 +73,8 @@ public class RunService {
             ThreadRepository threads,
             JobProducer jobProducer,
             CancelSignal cancelSignal,
-            AttachmentService attachmentService) {
+            AttachmentService attachmentService,
+            AgentQuotaService quotaService) {
         this.runs = runs;
         this.steps = steps;
         this.messages = messages;
@@ -83,12 +85,14 @@ public class RunService {
         this.jobProducer = jobProducer;
         this.cancelSignal = cancelSignal;
         this.attachmentService = attachmentService;
+        this.quotaService = quotaService;
     }
 
     @Transactional
     public RunResponse create(RunCreateRequest req) {
         AccessControl.require(Role.OPERATOR);
         AgentEntity agent = agentService.getEntity(req.getAgentId());
+        quotaService.assertCanCreateRun(agent);
         String adapter = (req.getAdapter() != null && !req.getAdapter().isBlank())
                 ? req.getAdapter()
                 : agent.getAdapter();
@@ -200,6 +204,9 @@ public class RunService {
             throw new RunConflictException(
                     "Cannot retry run " + id + " in status " + run.getStatus().wire());
         }
+
+        AgentEntity agent = agentService.getEntity(run.getAgentId());
+        quotaService.assertCanCreateRun(agent);
 
         List<CheckpointEntity> cps = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId());
         Integer checkpointIndex = null;

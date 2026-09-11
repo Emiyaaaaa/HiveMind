@@ -9,6 +9,7 @@ from app.models import Agent, Project
 from app.models.agent import AgentVersion
 from app.schemas.agent import (
     AgentCreate,
+    AgentQuotaStatus,
     AgentRead,
     AgentUpdate,
     AgentVersionDiff,
@@ -21,6 +22,7 @@ from app.services.agent_versions import (
     snapshot_agent,
     version_diff,
 )
+from app.services.quota_service import QuotaService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -94,6 +96,18 @@ async def get_agent(
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> Agent:
     return await _load_agent(session, agent_id, principal, Role.VIEWER)
+
+
+@router.get("/{agent_id}/quota", response_model=AgentQuotaStatus)
+async def get_agent_quota(
+    agent_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
+) -> AgentQuotaStatus:
+    agent = await _load_agent(session, agent_id, principal, Role.VIEWER)
+    return AgentQuotaStatus.model_validate(
+        await QuotaService(session).status_for_agent(agent)
+    )
 
 
 @router.patch("/{agent_id}", response_model=AgentRead)
