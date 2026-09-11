@@ -262,6 +262,9 @@ Response:
 Signals the worker to cancel the run. Idempotent; returns 204 whether or not
 the run is already in a terminal state. Returns 404 if the run does not exist.
 
+Each call appends a `RunAuditEvent` with `action=cancel` and the caller's
+`actor_subject` / `actor_role` (API key prefix or OIDC subject).
+
 ### `POST /v1/runs/{id}/retry` → 202
 
 Re-queues a **failed** run for another worker attempt. The latest checkpoint is
@@ -295,6 +298,30 @@ Request (optional body):
 
 Response: a full `Run` record with status `pending`. Returns **404** if missing,
 **409** if status is not `waiting_human`.
+
+Each successful resume appends a `RunAuditEvent` with `action=resume`. The
+`detail` object may include `checkpoint_index` and the human `input` payload.
+
+### `GET /v1/runs/{id}/audit` → 200
+
+Lists cancel/resume audit events for the run in ascending time order. Requires
+`viewer` or higher. Returns **404** if the run is missing or outside the
+caller's tenant / project / agent scope.
+
+```json
+[
+  {
+    "id": "01H…",
+    "tenant_id": "acme",
+    "run_id": "01H…",
+    "action": "cancel",
+    "actor_subject": "ops-user",
+    "actor_role": "operator",
+    "detail": {},
+    "created_at": "2026-09-11T06:00:00Z"
+  }
+]
+```
 
 ### `POST /v1/run-comparisons/preview` → 200
 
@@ -675,6 +702,25 @@ object storage — `Message.content` is never multimodal JSON.
   id: string;
   index: number;
   label: string | null;
+  created_at: string;
+}
+```
+
+### `RunAuditEvent`
+
+Append-only cancel/resume governance record. Written by
+`POST /v1/runs/{id}/cancel` and `POST /v1/runs/{id}/resume`; listed via
+`GET /v1/runs/{id}/audit`.
+
+```ts
+{
+  id: string;
+  tenant_id: string;
+  run_id: string;
+  action: "cancel" | "resume";
+  actor_subject: string;
+  actor_role: "viewer" | "operator" | "admin";
+  detail: Record<string, unknown>;  // e.g. checkpoint_index, input
   created_at: string;
 }
 ```

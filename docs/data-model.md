@@ -17,6 +17,7 @@ erDiagram
     Run ||--o{ Message : has
     Run ||--o{ Checkpoint : has
     Run ||--o{ Attachment : has
+    Run ||--o{ RunAuditEvent : audits
     Step ||--o{ ToolCall : has
     Step }o--|| Message : "optional step_id"
     Message ||--o{ Attachment : "optional message_id"
@@ -118,6 +119,15 @@ erDiagram
         string sha256
         text caption
     }
+    RunAuditEvent {
+        string id PK
+        string tenant_id
+        string run_id FK
+        string action
+        string actor_subject
+        string actor_role
+        json detail
+    }
 ```
 
 ## Status state machine
@@ -167,6 +177,10 @@ stateDiagram-v2
 - **`Thread` groups Runs for L1 short memory.** `Run.thread_id` is optional;
   when set, the worker seeds `AdapterContext.thread_messages` from prior runs
   in the same thread (window-trimmed). Messages remain Run-scoped rows.
+- **`RunAuditEvent` records cancel/resume actors.** Append-only rows store
+  `actor_subject` (API key prefix or OIDC subject), `actor_role`, and optional
+  `detail` (checkpoint index / human input). They survive message/checkpoint
+  erasure so governance questions remain answerable after a transcript wipe.
 - **`ToolCall.id` is the lifecycle association key.** SSE
   ``tool_call.started`` / ``tool_call.completed`` carry the same ``call_id``
   (equal to ``ToolCall.id``) so parallel or same-name tool invocations within
@@ -197,5 +211,8 @@ stateDiagram-v2
 | `ix_attachments_tenant_id` | tenant-scoped attachment lookup |
 | `ix_attachments_run_id` | list attachments for a run / erase |
 | `ix_attachments_storage_key` | unique object-store key |
+| `ix_run_audit_events_tenant_id` | tenant-scoped audit listing |
+| `ix_run_audit_events_run_id` | list audit events for a run |
+| `ix_run_audit_events_run_created` | order audit events for a run |
 | `ix_agent_versions_agent_id` | list version history for an agent |
 | `uq_agent_versions_agent_version` | one snapshot per (agent, version) |

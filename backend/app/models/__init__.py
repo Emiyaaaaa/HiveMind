@@ -1,5 +1,6 @@
 from app.models.agent import Agent, AgentVersion
 from app.models.attachment import Attachment
+from app.models.audit import RunAuditEvent
 from app.models.project import Project
 from app.models.run import Checkpoint, Message, Run, RunStatus, Step, ToolCall
 from app.models.thread import Thread
@@ -12,6 +13,7 @@ __all__ = [
     "Message",
     "Project",
     "Run",
+    "RunAuditEvent",
     "RunStatus",
     "Step",
     "Thread",

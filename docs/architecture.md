@@ -75,6 +75,9 @@ API↔worker Redis protocol.
 
 Cancel works symmetrically: `POST /v1/runs/{id}/cancel` sets a Redis key under
 `agentflow:cancel:{run_id}`; the worker polls that key and aborts the adapter.
+Cancel and resume also append tenant-scoped `run_audit_events` rows
+(`actor_subject`, `actor_role`, optional `detail`) queryable via
+`GET /v1/runs/{id}/audit`.
 
 ## Why per-task sessions?
 
