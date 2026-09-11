@@ -3,6 +3,7 @@ package io.agentflow.api.service;
 import io.agentflow.api.dto.CheckpointResponse;
 import io.agentflow.api.dto.MessagePageResponse;
 import io.agentflow.api.dto.MessageResponse;
+import io.agentflow.api.dto.RunAuditEventResponse;
 import io.agentflow.api.dto.RunCreateRequest;
 import io.agentflow.api.dto.RunResponse;
 import io.agentflow.api.dto.RunResumeRequest;
@@ -12,6 +13,7 @@ import io.agentflow.api.dto.StepResponse;
 import io.agentflow.api.dto.ToolCallResponse;
 import io.agentflow.api.entity.AgentEntity;
 import io.agentflow.api.entity.MessageEntity;
+import io.agentflow.api.entity.RunAuditEventEntity;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.entity.RunStatus;
 import io.agentflow.api.entity.StepEntity;
@@ -21,11 +23,13 @@ import io.agentflow.api.jobs.CancelSignal;
 import io.agentflow.api.jobs.JobProducer;
 import io.agentflow.api.repository.CheckpointRepository;
 import io.agentflow.api.repository.MessageRepository;
+import io.agentflow.api.repository.RunAuditEventRepository;
 import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
 import io.agentflow.api.repository.ThreadRepository;
 import io.agentflow.api.repository.ToolCallRepository;
 import io.agentflow.api.security.AccessControl;
+import io.agentflow.api.security.AuthPrincipal;
 import io.agentflow.api.security.Role;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -56,6 +60,7 @@ public class RunService {
     private final MessageRepository messages;
     private final ToolCallRepository toolCalls;
     private final CheckpointRepository checkpoints;
+    private final RunAuditEventRepository auditEvents;
     private final AgentService agentService;
     private final ThreadRepository threads;
     private final JobProducer jobProducer;
@@ -69,6 +74,7 @@ public class RunService {
             MessageRepository messages,
             ToolCallRepository toolCalls,
             CheckpointRepository checkpoints,
+            RunAuditEventRepository auditEvents,
             AgentService agentService,
             ThreadRepository threads,
             JobProducer jobProducer,
@@ -80,6 +86,7 @@ public class RunService {
         this.messages = messages;
         this.toolCalls = toolCalls;
         this.checkpoints = checkpoints;
+        this.auditEvents = auditEvents;
         this.agentService = agentService;
         this.threads = threads;
         this.jobProducer = jobProducer;
@@ -237,7 +244,9 @@ public class RunService {
 
     @Transactional
     public void cancel(String id) {
+        AuthPrincipal principal = AccessControl.require(Role.OPERATOR);
         RunEntity run = requireRun(id, Role.OPERATOR);
+        recordAudit(run, "cancel", principal, Map.of());
         cancelSignal.requestCancel(run.getId());
         // We do not flip the row to CANCELLED here: the worker owns the
         // transition so steps/messages can be flushed first.
@@ -282,6 +291,7 @@ public class RunService {
 
     @Transactional
     public RunResponse resume(String id, RunResumeRequest req) {
+        AuthPrincipal principal = AccessControl.require(Role.OPERATOR);
         RunEntity run = requireRun(id, Role.OPERATOR);
         if (run.getStatus() != RunStatus.WAITING_HUMAN) {
             throw new RunConflictException(
@@ -307,9 +317,41 @@ public class RunService {
                 meta, ResumeMetadata.resume(checkpointIndex, humanInput));
         run.setStatus(RunStatus.PENDING);
         run.setMetadata(meta);
+
+        Map<String, Object> detail = new HashMap<>();
+        if (checkpointIndex != null) {
+            detail.put("checkpoint_index", checkpointIndex);
+        }
+        if (!humanInput.isEmpty()) {
+            detail.put("input", humanInput);
+        }
+        recordAudit(run, "resume", principal, detail);
+
         RunEntity saved = runs.save(run);
         enqueueJobAfterCommit(saved.getId(), saved.getAgentId(), saved.getAdapter());
         return toResponse(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<RunAuditEventResponse> listAudit(String id) {
+        RunEntity run = requireRun(id, Role.VIEWER);
+        return auditEvents
+                .findAllByRunIdAndTenantIdOrderByCreatedAtAscIdAsc(run.getId(), run.getTenantId())
+                .stream()
+                .map(RunAuditEventResponse::fromEntity)
+                .toList();
+    }
+
+    private void recordAudit(
+            RunEntity run, String action, AuthPrincipal principal, Map<String, Object> detail) {
+        RunAuditEventEntity event = new RunAuditEventEntity();
+        event.setTenantId(run.getTenantId());
+        event.setRunId(run.getId());
+        event.setAction(action);
+        event.setActorSubject(principal.subject());
+        event.setActorRole(principal.role().name().toLowerCase());
+        event.setDetail(detail == null ? Map.of() : new HashMap<>(detail));
+        auditEvents.save(event);
     }
 
     private RunEntity requireRun(String id, Role minimum) {

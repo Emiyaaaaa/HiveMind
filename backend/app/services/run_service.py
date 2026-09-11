@@ -26,6 +26,7 @@ from app.models import (
     Checkpoint,
     Message,
     Run,
+    RunAuditEvent,
     RunStatus,
     Step,
     Thread,
@@ -304,6 +305,8 @@ class RunService:
         tenant_id: str | None = None,
         project_id: str | None = None,
         agent_id: str | None = None,
+        actor_subject: str | None = None,
+        actor_role: str | None = None,
     ) -> Run:
         """Continue a run paused for human approval."""
         run = await self._get_run(
@@ -333,6 +336,18 @@ class RunService:
         )
         run.status = RunStatus.PENDING
         run.metadata_ = meta
+        detail: dict[str, Any] = {}
+        if checkpoint_index is not None:
+            detail["checkpoint_index"] = checkpoint_index
+        if human_input:
+            detail["input"] = human_input
+        self._record_audit(
+            run,
+            action="resume",
+            actor_subject=actor_subject,
+            actor_role=actor_role,
+            detail=detail,
+        )
         await self.session.commit()
 
         await self.start_run(run_id)
@@ -348,11 +363,20 @@ class RunService:
         tenant_id: str | None = None,
         project_id: str | None = None,
         agent_id: str | None = None,
+        actor_subject: str | None = None,
+        actor_role: str | None = None,
     ) -> None:
         # Ensure the run exists so the API returns 404 for unknown ids
         # whether or not a worker is currently executing it.
-        await self._get_run(
+        run = await self._get_run(
             run_id, tenant_id=tenant_id, project_id=project_id, agent_id=agent_id
+        )
+        self._record_audit(
+            run,
+            action="cancel",
+            actor_subject=actor_subject,
+            actor_role=actor_role,
+            detail={},
         )
 
         if (
@@ -369,13 +393,73 @@ class RunService:
         # Inline-mode shortcut: cancel the in-process task directly.
         task = _running_tasks.get(run_id)
         if task is not None:
+            await self.session.commit()
             task.cancel()
             return
 
-        # No live task and no external worker would pick it up: finalize now.
+        # No live task: finalize pending/running/waiting runs. Terminal runs
+        # only need the audit row persisted (cancel stays idempotent).
+        terminal = {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }
         if get_settings().worker_mode == "inline":
-            await self._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
+            if run.status not in terminal:
+                await self._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
+            else:
+                await self.session.commit()
+            return
 
+        await self.session.commit()
+
+    async def list_audit_events(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[RunAuditEvent]:
+        await self._get_run(
+            run_id, tenant_id=tenant_id, project_id=project_id, agent_id=agent_id
+        )
+        stmt = (
+            select(RunAuditEvent)
+            .where(RunAuditEvent.run_id == run_id)
+            .order_by(RunAuditEvent.created_at.asc(), RunAuditEvent.id.asc())
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(RunAuditEvent.tenant_id == tenant_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    def _record_audit(
+        self,
+        run: Run,
+        *,
+        action: str,
+        actor_subject: str | None,
+        actor_role: str | None,
+        detail: dict[str, Any],
+    ) -> RunAuditEvent:
+        event = RunAuditEvent(
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            action=action,
+            actor_subject=actor_subject or "anonymous",
+            actor_role=(actor_role or "admin").lower(),
+            detail=dict(detail or {}),
+        )
+        self.session.add(event)
+        logger.info(
+            "run.audit",
+            run_id=run.id,
+            action=action,
+            actor_subject=event.actor_subject,
+            actor_role=event.actor_role,
+        )
+        return event
     async def get_run(
         self,
         run_id: str,

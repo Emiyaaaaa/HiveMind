@@ -16,6 +16,7 @@ from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_tel
 from app.db.base import Base
 from app.db.session import engine
 from app.events import get_event_bus
+import app.models  # noqa: F401 — register metadata for create_all
 
 setup_logging()
 logger = get_logger("app")

@@ -1,6 +1,7 @@
 package io.agentflow.api.controller;
 
 import io.agentflow.api.dto.MessagePageResponse;
+import io.agentflow.api.dto.RunAuditEventResponse;
 import io.agentflow.api.dto.RunCreateRequest;
 import io.agentflow.api.dto.RunResponse;
 import io.agentflow.api.dto.RunResumeRequest;
@@ -70,5 +71,10 @@ public class RunsController {
     public RunResponse resume(
             @PathVariable String id, @RequestBody(required = false) RunResumeRequest payload) {
         return service.resume(id, payload);
+    }
+
+    @GetMapping("/{id}/audit")
+    public List<RunAuditEventResponse> listAudit(@PathVariable String id) {
+        return service.listAudit(id);
     }
 }

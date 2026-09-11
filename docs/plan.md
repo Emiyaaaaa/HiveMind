@@ -63,7 +63,7 @@
 - [ ] OIDC 认证与服务账号 API Key
 - [x] 简易 API Key 多租户 + RBAC（`tenant_id`、viewer/operator/admin；OIDC 仍待做）
 - [x] RBAC：组织/项目/Agent 作用域
-- [ ] cancel/resume 审计
+- [x] cancel/resume 审计
 - [ ] 人工审批 UI（`waiting_human` + 通知）
 - [x] Temporal（或 Restate）集成超长 Run
 - [x] Helm + Terraform；按队列延迟自动扩缩 worker

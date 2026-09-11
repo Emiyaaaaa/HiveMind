@@ -1,5 +1,6 @@
 from app.models.agent import Agent, AgentVersion
 from app.models.attachment import Attachment
+from app.models.audit import RunAuditEvent
 from app.models.batch import RunBatch
 from app.models.project import Project
 from app.models.quota import AgentQuotaUsage
@@ -16,6 +17,7 @@ __all__ = [
     "Message",
     "Project",
     "Run",
+    "RunAuditEvent",
     "RunBatch",
     "RunSchedule",
     "RunStatus",

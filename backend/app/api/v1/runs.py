@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthPrincipal, Role, require_role
 from app.db.session import get_session
 from app.events import EventBus, get_event_bus
+from app.schemas.audit import RunAuditEventRead
 from app.schemas.run import (
     MessagePage,
     RunCreate,
@@ -143,8 +144,12 @@ async def cancel_run(
 ) -> None:
     try:
         await service.cancel_run(
-            run_id, tenant_id=principal.tenant_id,
-            project_id=principal.project_id, agent_id=principal.agent_id,
+            run_id,
+            tenant_id=principal.tenant_id,
+            project_id=principal.project_id,
+            agent_id=principal.agent_id,
+            actor_subject=principal.subject,
+            actor_role=principal.role.name,
         )
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
@@ -183,11 +188,34 @@ async def resume_run(
 ) -> RunRead:
     try:
         await service.resume_run(
-            run_id, payload, tenant_id=principal.tenant_id,
-            project_id=principal.project_id, agent_id=principal.agent_id,
+            run_id,
+            payload,
+            tenant_id=principal.tenant_id,
+            project_id=principal.project_id,
+            agent_id=principal.agent_id,
+            actor_subject=principal.subject,
+            actor_role=principal.role.name,
         )
     except RunNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
     except RunConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await _run_read(service, run_id, principal)
+
+
+@router.get("/{run_id}/audit", response_model=list[RunAuditEventRead])
+async def list_run_audit(
+    run_id: str,
+    service: RunService = Depends(get_run_service),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
+) -> list[RunAuditEventRead]:
+    try:
+        events = await service.list_audit_events(
+            run_id,
+            tenant_id=principal.tenant_id,
+            project_id=principal.project_id,
+            agent_id=principal.agent_id,
+        )
+    except RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
+    return [RunAuditEventRead.model_validate(event) for event in events]
