@@ -14,6 +14,10 @@ erDiagram
     Agent ||--o{ Thread : has
     Agent ||--o{ AgentQuotaUsage : tracks
     Thread ||--o{ Run : contains
+    Agent ||--o{ RunSchedule : schedules
+    Agent ||--o{ RunBatch : batches
+    RunBatch ||--o{ Run : contains
+    RunSchedule ||--o{ Run : fires
     Run ||--o{ Step : has
     Run ||--o{ Message : has
     Run ||--o{ Checkpoint : has
@@ -130,6 +134,30 @@ erDiagram
         string sha256
         text caption
     }
+    RunSchedule {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        string name
+        string cron
+        int interval_seconds
+        string timezone
+        json input
+        json metadata
+        string adapter
+        bool enabled
+        datetime next_run_at
+        datetime last_run_at
+        string last_run_id
+    }
+    RunBatch {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        json run_ids
+    }
 ```
 
 ## Status state machine
@@ -182,6 +210,13 @@ stateDiagram-v2
 - **`Thread` groups Runs for L1 short memory.** `Run.thread_id` is optional;
   when set, the worker seeds `AdapterContext.thread_messages` from prior runs
   in the same thread (window-trimmed). Messages remain Run-scoped rows.
+- **`RunSchedule` fires Runs on a cron or fixed interval.** Exactly one of
+  `cron` (5-field UTC minute cron) or `interval_seconds` (≥ 60) is set. The
+  worker sweeper claims due rows (`next_run_at ≤ now`, `enabled`) and creates
+  a normal Run, tagging `_agentflow.schedule_id` in metadata.
+- **`RunBatch` fans out many inputs into independent Runs.** `run_ids` is the
+  ordered list of created Run ids; progress is derived from those Run rows.
+  Each candidate is tagged with `_agentflow.batch_id`.
 - **`ToolCall.id` is the lifecycle association key.** SSE
   ``tool_call.started`` / ``tool_call.completed`` carry the same ``call_id``
   (equal to ``ToolCall.id``) so parallel or same-name tool invocations within
@@ -217,3 +252,6 @@ stateDiagram-v2
 | `ix_attachments_storage_key` | unique object-store key |
 | `ix_agent_versions_agent_id` | list version history for an agent |
 | `uq_agent_versions_agent_version` | one snapshot per (agent, version) |
+| `ix_run_schedules_tenant_id` | list schedules for a tenant |
+| `ix_run_schedules_due` | worker sweeper: enabled + next_run_at |
+| `ix_run_batches_tenant_id` | list batches for a tenant |

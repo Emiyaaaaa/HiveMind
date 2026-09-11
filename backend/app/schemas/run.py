@@ -127,6 +127,29 @@ class RunRead(BaseModel):
         return self
 
 
+def run_header_from_orm(run: Run) -> RunRead:
+    """Serialize a Run without touching lazy-loaded relationships."""
+    stored = usage_from_metadata(run.metadata_)
+    return RunRead(
+        id=run.id,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        agent_id=run.agent_id,
+        thread_id=run.thread_id,
+        adapter=run.adapter,
+        status=run.status,
+        input=dict(run.input or {}),
+        output=run.output,
+        error=run.error,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        steps=[],
+        messages=[],
+        checkpoints=[],
+        usage=stored or RunUsage(),
+    )
+
+
 def run_read_from_orm(
     run: Run,
     *,

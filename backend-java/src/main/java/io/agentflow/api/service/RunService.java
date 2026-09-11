@@ -154,6 +154,52 @@ public class RunService {
         return List.copyOf(runs.saveAll(candidates));
     }
 
+    /**
+     * Create a pending Run with caller-owned {@code _agentflow} metadata (batch /
+     * schedule pins) and enqueue after commit.
+     */
+    @Transactional
+    public RunEntity createTaggedRun(
+            AgentEntity agent,
+            String adapter,
+            Map<String, Object> input,
+            Map<String, Object> metadata) {
+        AccessControl.require(Role.OPERATOR);
+        String resolvedAdapter =
+                (adapter != null && !adapter.isBlank()) ? adapter : agent.getAdapter();
+        RunEntity run = new RunEntity();
+        run.setTenantId(agent.getTenantId());
+        run.setAgentId(agent.getId());
+        run.setAdapter(resolvedAdapter);
+        run.setStatus(RunStatus.PENDING);
+        run.setInput(new HashMap<>(input == null ? Map.of() : input));
+        run.setMetadata(new HashMap<>(metadata == null ? Map.of() : metadata));
+        RunEntity saved = runs.save(run);
+        enqueueJobAfterCommit(saved.getId(), saved.getAgentId(), saved.getAdapter());
+        return saved;
+    }
+
+    /** Header-only responses for an ordered list of Run ids (missing ids skipped). */
+    @Transactional(readOnly = true)
+    public List<RunResponse> listByIds(List<String> runIds) {
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
+        if (runIds == null || runIds.isEmpty()) {
+            return List.of();
+        }
+        Map<String, RunEntity> byId = new HashMap<>();
+        for (String id : runIds) {
+            runs.findByIdAndTenantId(id, tenantId).ifPresent(run -> byId.put(id, run));
+        }
+        List<RunResponse> out = new ArrayList<>();
+        for (String id : runIds) {
+            RunEntity run = byId.get(id);
+            if (run != null) {
+                out.add(RunResponse.fromEntity(run));
+            }
+        }
+        return out;
+    }
+
     /** Dispatch already-committed candidate Runs after their Redis manifest exists. */
     public void enqueueCandidates(List<RunEntity> candidates) {
         candidates.forEach(run ->

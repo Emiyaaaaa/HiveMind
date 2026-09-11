@@ -23,6 +23,8 @@ and persist state to Postgres.
 │ API (Java / Spring Boot)                                     │
 │   controller/AgentsController   CRUD agents                   │
 │   controller/RunsController       create / get / cancel runs  │
+│   controller/BatchesController    fan-out multi-input Runs    │
+│   controller/SchedulesController  cron / interval Run templates│
 │   controller/EventsController     SSE per-run event stream      │
 │   jobs/JobProducer                XADD run jobs to Redis      │
 │   jobs/CancelSignal               SET cancel keys               │
@@ -33,6 +35,7 @@ and persist state to Postgres.
 │ Worker (Python asyncio)                                      │
 │   worker/runner.py            consume jobs, invoke executor   │
 │   worker/queue.py             XREADGROUP / XACK / DLQ         │
+│   worker/schedules.py         claim due RunSchedule rows      │
 └───────────────────┬──────────────────────────────────────────┘
                     │
                     ▼
@@ -49,6 +52,8 @@ and persist state to Postgres.
 │ Persistence (Postgres 16, Alembic-owned schema)              │
 │   models/agent.py       Agent                                 │
 │   models/run.py         Run, Step, Message, ToolCall, Checkpoint│
+│   models/schedule.py    RunSchedule                           │
+│   models/batch.py       RunBatch                              │
 └──────────────────────────────────────────────────────────────┘
 ```
 

@@ -78,7 +78,7 @@
 - [ ] Run 对比与回归套件
 - [ ] Agent 记忆服务（M1 Thread ✅；M2/M3 情景摘要 + 语义事实 + 文档 RAG 待做）
 - [x] 模型路由 / fallback 策略
-- [ ] 定时与批量 Run
+- [x] 定时与批量 Run
 - [x] 细粒度流式：推理块（`token.delta.part` + `Message.extra.kind=reasoning`）；多模态附件（`token.delta.part=attachment` + `attachments` 表 / 对象存储 + `Message.extra.kind=attachment`）
 
 ## Agent Memory 专项

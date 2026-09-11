@@ -309,6 +309,123 @@ Request (optional body):
 Response: a full `Run` record with status `pending`. Returns **404** if missing,
 **409** if status is not `waiting_human`.
 
+### `POST /v1/batches` → 202
+
+Creates 1–100 Runs for one Agent from distinct inputs and dispatches them
+through the normal worker queue. Shared optional `adapter` / `metadata` apply
+to every item; per-item `input` is required.
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "items": [
+    {"input": {"prompt": "a"}},
+    {"input": {"prompt": "b"}, "metadata": {"label": "b"}}
+  ],
+  "adapter": "echo",
+  "metadata": {"source": "nightly"}
+}
+```
+
+Response:
+
+```json
+{
+  "id": "01HZ...",
+  "agent_id": "01HZ...",
+  "status": "pending",
+  "total": 2,
+  "completed": 0,
+  "run_ids": ["01HZ...A", "01HZ...B"],
+  "created_at": "2026-09-11T06:00:00+00:00"
+}
+```
+
+`status` is `pending` while every Run is still `pending`, `completed` when
+every Run is terminal (`succeeded` / `failed` / `cancelled`), otherwise
+`running`. Duplicate empty `items` → **422**. Missing Agent → **404**. Cap is
+100 items to avoid flooding the queue.
+
+Each created Run pins `_agentflow.agent_version` and `_agentflow.batch_id`.
+
+### `GET /v1/batches?limit=50` → 200
+
+Response: `Batch[]` ordered by `created_at` descending.
+
+### `GET /v1/batches/{id}` → 200
+
+Current batch progress (recomputes `status` / `completed` from Run rows).
+404 if missing.
+
+### `GET /v1/batches/{id}/runs` → 200
+
+Response: `Run[]` for the batch, in creation order. Header rows only (no
+steps / messages / checkpoints). 404 if the batch is missing.
+
+### `POST /v1/schedules` → 201
+
+Creates a recurring Run schedule for an Agent. Provide **exactly one** of
+`cron` (5-field minute cron in `timezone`, default `UTC`) or
+`interval_seconds` (≥ 60).
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "name": "hourly-digest",
+  "cron": "0 * * * *",
+  "timezone": "UTC",
+  "input": {"prompt": "summarize"},
+  "metadata": {},
+  "adapter": null,
+  "enabled": true
+}
+```
+
+Response: a full `Schedule` including `next_run_at`. Invalid cron / missing
+timing field / both timing fields → **422**. Missing Agent → **404**.
+
+### `GET /v1/schedules?limit=50` → 200
+
+Response: `Schedule[]` ordered by `created_at` descending.
+
+### `GET /v1/schedules/{id}` → 200
+
+404 if missing.
+
+### `PATCH /v1/schedules/{id}` → 200
+
+Partial update of `name`, `cron`, `interval_seconds`, `timezone`, `input`,
+`metadata`, `adapter`, or `enabled`. Recomputes `next_run_at` when timing
+fields change. Clearing the only timing field or setting both → **422**.
+
+### `DELETE /v1/schedules/{id}` → 204
+
+Deletes the schedule. Idempotent for missing ids within the tenant? No —
+missing → **404**. In-flight Runs are not cancelled.
+
+### `POST /v1/schedules/{id}/trigger` → 202
+
+Fires one Run immediately from the schedule template without advancing the
+cron/interval cursor when `advance` is false (default). Pass
+`{"advance": true}` to also bump `next_run_at` / `last_run_at` as if the
+sweeper had claimed it.
+
+Response: the created `Run` (`pending`). Disabled schedules still accept an
+explicit trigger. 404 if missing.
+
+### `GET /v1/schedules/{id}/runs?limit=50` → 200
+
+Runs tagged with `_agentflow.schedule_id = {id}`, newest first. 404 if the
+schedule is missing.
+
+The Python worker periodically claims due schedules (`enabled` and
+`next_run_at ≤ now`), creates a Run, enqueues it, and advances `next_run_at`.
+Fired Runs pin `_agentflow.schedule_id` and `_agentflow.agent_version`.
+
 ### `POST /v1/run-comparisons/preview` → 200
 
 Returns a read-only summary comparison of two terminal runs. It does not
