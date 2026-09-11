@@ -81,6 +81,14 @@ Response: `Agent[]` ordered by `created_at` descending.
 
 Response: `Agent`. 404 if missing.
 
+### `GET /v1/agents/{id}/quota` → 200
+
+Current period usage against the agent's configured token/cost quota
+(`Agent.config.quota`). When no quota is configured, `active` is `false` and
+limits are null.
+
+Response: `AgentQuotaStatus`. 404 if the agent is missing.
+
 ### `PATCH /v1/agents/{id}` → 200
 
 Partial update. When `adapter`, `config`, or `description` change, `version`
@@ -219,6 +227,10 @@ The Python worker resolves a pinned run through
 is missing. Only legacy runs without a version pin fall back to the agent's
 current config.
 
+When the agent's `config.quota` is active and `enforce` is true, returns **429**
+if the current UTC period already meets or exceeds `max_tokens` /
+`max_cost_usd`.
+
 Response: a full `Run` record. The run is created with status `pending` and
 a background job is dispatched to a worker; the response returns before the
 adapter has finished. Clients should poll `/v1/runs/{id}` or subscribe to
@@ -277,7 +289,8 @@ Request (optional body):
 
 Response: a full `Run` record with status `pending` (worker will transition to
 `running`). Returns **404** if the run does not exist, **409** if status is not
-`failed` or the checkpoint index is missing.
+`failed` or the checkpoint index is missing, **429** if the agent's enforced
+quota is already exhausted.
 
 ### `POST /v1/runs/{id}/resume` → 202
 
@@ -522,6 +535,49 @@ Optional body: ``{ "tenant_id": "default", "dry_run": false }``.
 
 `tenant_id` is assigned from the caller's API key (or `"default"` when auth
 is disabled). Agent `name` is unique **per tenant**.
+
+Optional `config.quota` enables Agent-level token / cost budgets:
+
+```json
+{
+  "quota": {
+    "period": "month",
+    "max_tokens": 1000000,
+    "max_cost_usd": 25.0,
+    "enforce": true
+  }
+}
+```
+
+`period` is `day` | `week` | `month` (UTC calendar buckets). Either limit may
+be omitted for unlimited. With `enforce: true` (default), `POST /v1/runs`
+and `POST /v1/runs/{id}/retry` return **429** once the current period is at
+or over a limit. The Python worker accumulates usage into `agent_quota_usage`
+on terminal run states (delta-safe across retries).
+
+### `AgentQuotaStatus`
+
+```ts
+{
+  agent_id: string;
+  active: boolean;
+  enforce: boolean;
+  period: "day" | "week" | "month" | null;
+  period_key: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  max_tokens: number | null;
+  max_cost_usd: number | null;
+  used_tokens: number;
+  used_tokens_in: number;
+  used_tokens_out: number;
+  used_cost_usd: number;
+  run_count: number;
+  remaining_tokens: number | null;
+  remaining_cost_usd: number | null;
+  exceeded: boolean;
+}
+```
 
 ### `AgentVersion`
 

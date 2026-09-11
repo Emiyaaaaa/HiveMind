@@ -12,6 +12,7 @@ erDiagram
     Agent ||--o{ Run : has
     Agent ||--o{ AgentVersion : versions
     Agent ||--o{ Thread : has
+    Agent ||--o{ AgentQuotaUsage : tracks
     Thread ||--o{ Run : contains
     Run ||--o{ Step : has
     Run ||--o{ Message : has
@@ -35,6 +36,17 @@ erDiagram
         string adapter
         json config
         int version
+    }
+    AgentQuotaUsage {
+        string id PK
+        string tenant_id
+        string agent_id FK
+        string period
+        string period_key
+        int tokens_in
+        int tokens_out
+        float cost_usd
+        int run_count
     }
     AgentVersion {
         string id PK
@@ -146,6 +158,9 @@ stateDiagram-v2
 - **`Agent.version`** is a monotonic integer. Each bump also writes an
   immutable ``agent_versions`` snapshot (adapter + config + description).
   Restore creates a new version rather than rewriting history.
+- **`Agent.config.quota`** optionally caps token and/or USD cost per UTC
+  `day` / `week` / `month`. Usage accumulates in ``agent_quota_usage``;
+  enforced creates return HTTP 429. See [api-contract.md](api-contract.md).
 - **`metadata` is a JSON column** named `metadata_` in Python because
   `metadata` is reserved on `DeclarativeBase`. The column on disk is still
   `metadata`.
@@ -179,6 +194,9 @@ stateDiagram-v2
 | `uq_agents_tenant_name` | unique agent name per tenant |
 | `ix_agents_tenant_id` | list agents for a tenant |
 | `ix_agents_project_id` | apply project-scoped access to agents |
+| `uq_agent_quota_usage_period` | one usage row per agent + period bucket |
+| `ix_agent_quota_usage_agent_id` | look up quota counters by agent |
+| `ix_agent_quota_usage_tenant_id` | filter quota rows by tenant |
 | `uq_projects_tenant_name` | unique project name per organization |
 | `ix_projects_tenant_id` | list projects for an organization |
 | `ix_runs_tenant_id` | filter runs by tenant |
