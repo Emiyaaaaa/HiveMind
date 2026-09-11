@@ -323,6 +323,17 @@ class Settings(BaseSettings):
         le=1000,
         description="Maximum runs purged per sweeper cycle per tenant.",
     )
+    schedule_sweeper_interval_seconds: int = Field(
+        default=15,
+        ge=5,
+        description="How often the worker claims due RunSchedule rows.",
+    )
+    schedule_sweeper_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum schedules fired per sweeper cycle.",
+    )
 
     attachment_storage_dir: str = Field(
         default="./data/attachments",
