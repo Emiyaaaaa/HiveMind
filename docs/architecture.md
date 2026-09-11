@@ -226,6 +226,19 @@ When `feedback` is enabled and recoverable observations exhaust
 `max_tool_rounds` without a final model reply, the run fails with
 `tool_recovery_exhausted: reached max_tool_rounds=N`.
 
+### Bounded tool observations
+
+Agent tool results have two consumers with different requirements. The full
+result is emitted in `tool_call.completed` for persistence and audit, while
+the model receives the result through a bounded observation. Set
+`tool_observation.max_tokens` to a positive value to enable deterministic,
+structure-aware previewing of large JSON mappings, lists, and strings. The
+preview keeps operational mapping fields such as `status`, `error`, `id`, and
+`message` ahead of ordinary fields, and includes `_observation` metadata with
+the original token estimate and omitted item count. A zero value preserves the
+legacy behavior. This is a size guard, not a semantic summary: the runtime does
+not claim that omitted content is unimportant.
+
 ## Fine-grained streaming (reasoning blocks)
 
 `token.delta` carries an optional `part` field:
