@@ -1,7 +1,7 @@
 """Add run_audit_events for cancel/resume governance trail.
 
-Revision ID: 0008_run_audit
-Revises: 0007_attachments
+Revision ID: 0009_run_audit
+Revises: 0008_agent_quota, 0008_schedules_batches
 Create Date: 2026-09-11
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0008_run_audit"
-down_revision = "0007_attachments"
+revision = "0009_run_audit"
+down_revision = ("0008_agent_quota", "0008_schedules_batches")
 branch_labels = None
 depends_on = None
 

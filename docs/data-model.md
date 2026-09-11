@@ -12,7 +12,12 @@ erDiagram
     Agent ||--o{ Run : has
     Agent ||--o{ AgentVersion : versions
     Agent ||--o{ Thread : has
+    Agent ||--o{ AgentQuotaUsage : tracks
     Thread ||--o{ Run : contains
+    Agent ||--o{ RunSchedule : schedules
+    Agent ||--o{ RunBatch : batches
+    RunBatch ||--o{ Run : contains
+    RunSchedule ||--o{ Run : fires
     Run ||--o{ Step : has
     Run ||--o{ Message : has
     Run ||--o{ Checkpoint : has
@@ -36,6 +41,17 @@ erDiagram
         string adapter
         json config
         int version
+    }
+    AgentQuotaUsage {
+        string id PK
+        string tenant_id
+        string agent_id FK
+        string period
+        string period_key
+        int tokens_in
+        int tokens_out
+        float cost_usd
+        int run_count
     }
     AgentVersion {
         string id PK
@@ -128,6 +144,30 @@ erDiagram
         string actor_role
         json detail
     }
+    RunSchedule {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        string name
+        string cron
+        int interval_seconds
+        string timezone
+        json input
+        json metadata
+        string adapter
+        bool enabled
+        datetime next_run_at
+        datetime last_run_at
+        string last_run_id
+    }
+    RunBatch {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        json run_ids
+    }
 ```
 
 ## Status state machine
@@ -156,6 +196,9 @@ stateDiagram-v2
 - **`Agent.version`** is a monotonic integer. Each bump also writes an
   immutable ``agent_versions`` snapshot (adapter + config + description).
   Restore creates a new version rather than rewriting history.
+- **`Agent.config.quota`** optionally caps token and/or USD cost per UTC
+  `day` / `week` / `month`. Usage accumulates in ``agent_quota_usage``;
+  enforced creates return HTTP 429. See [api-contract.md](api-contract.md).
 - **`metadata` is a JSON column** named `metadata_` in Python because
   `metadata` is reserved on `DeclarativeBase`. The column on disk is still
   `metadata`.
@@ -181,6 +224,13 @@ stateDiagram-v2
   `actor_subject` (API key prefix or OIDC subject), `actor_role`, and optional
   `detail` (checkpoint index / human input). They survive message/checkpoint
   erasure so governance questions remain answerable after a transcript wipe.
+- **`RunSchedule` fires Runs on a cron or fixed interval.** Exactly one of
+  `cron` (5-field UTC minute cron) or `interval_seconds` (≥ 60) is set. The
+  worker sweeper claims due rows (`next_run_at ≤ now`, `enabled`) and creates
+  a normal Run, tagging `_agentflow.schedule_id` in metadata.
+- **`RunBatch` fans out many inputs into independent Runs.** `run_ids` is the
+  ordered list of created Run ids; progress is derived from those Run rows.
+  Each candidate is tagged with `_agentflow.batch_id`.
 - **`ToolCall.id` is the lifecycle association key.** SSE
   ``tool_call.started`` / ``tool_call.completed`` carry the same ``call_id``
   (equal to ``ToolCall.id``) so parallel or same-name tool invocations within
@@ -193,6 +243,9 @@ stateDiagram-v2
 | `uq_agents_tenant_name` | unique agent name per tenant |
 | `ix_agents_tenant_id` | list agents for a tenant |
 | `ix_agents_project_id` | apply project-scoped access to agents |
+| `uq_agent_quota_usage_period` | one usage row per agent + period bucket |
+| `ix_agent_quota_usage_agent_id` | look up quota counters by agent |
+| `ix_agent_quota_usage_tenant_id` | filter quota rows by tenant |
 | `uq_projects_tenant_name` | unique project name per organization |
 | `ix_projects_tenant_id` | list projects for an organization |
 | `ix_runs_tenant_id` | filter runs by tenant |
@@ -216,3 +269,6 @@ stateDiagram-v2
 | `ix_run_audit_events_run_created` | order audit events for a run |
 | `ix_agent_versions_agent_id` | list version history for an agent |
 | `uq_agent_versions_agent_version` | one snapshot per (agent, version) |
+| `ix_run_schedules_tenant_id` | list schedules for a tenant |
+| `ix_run_schedules_due` | worker sweeper: enabled + next_run_at |
+| `ix_run_batches_tenant_id` | list batches for a tenant |

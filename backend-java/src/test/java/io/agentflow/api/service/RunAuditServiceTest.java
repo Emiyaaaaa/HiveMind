@@ -153,6 +153,7 @@ class RunAuditServiceTest {
                 mock(ThreadRepository.class),
                 mock(JobProducer.class),
                 cancelSignal,
-                mock(AttachmentService.class));
+                mock(AttachmentService.class),
+                mock(AgentQuotaService.class));
     }
 }

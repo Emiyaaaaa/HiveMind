@@ -2,13 +2,16 @@ package io.agentflow.api.controller;
 
 import io.agentflow.api.service.AgentNameConflictException;
 import io.agentflow.api.service.AgentNotFoundException;
+import io.agentflow.api.service.AgentQuotaExceededException;
 import io.agentflow.api.service.AgentVersionNotFoundException;
 import io.agentflow.api.service.AttachmentNotFoundException;
 import io.agentflow.api.service.AttachmentTooLargeException;
+import io.agentflow.api.service.BatchException;
 import io.agentflow.api.service.RegressionExecutionException;
 import io.agentflow.api.service.RunComparisonValidationException;
 import io.agentflow.api.service.RunConflictException;
 import io.agentflow.api.service.RunNotFoundException;
+import io.agentflow.api.service.ScheduleException;
 import io.agentflow.api.service.ThreadNotFoundException;
 import io.agentflow.api.security.ForbiddenException;
 import io.agentflow.api.security.UnauthorizedException;
@@ -67,6 +70,13 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("detail", ex.getMessage()));
     }
 
+    @ExceptionHandler(AgentQuotaExceededException.class)
+    public ResponseEntity<Map<String, String>> handleAgentQuotaExceeded(
+            AgentQuotaExceededException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(Map.of("detail", ex.getMessage()));
+    }
+
     @ExceptionHandler(RunConflictException.class)
     public ResponseEntity<Map<String, String>> handleRunConflict(RunConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("detail", ex.getMessage()));
@@ -82,6 +92,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(RegressionExecutionException.class)
     public ResponseEntity<Map<String, String>> handleRegressionExecution(
             RegressionExecutionException ex) {
+        return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(BatchException.class)
+    public ResponseEntity<Map<String, String>> handleBatch(BatchException ex) {
+        return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(ScheduleException.class)
+    public ResponseEntity<Map<String, String>> handleSchedule(ScheduleException ex) {
         return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
     }
 

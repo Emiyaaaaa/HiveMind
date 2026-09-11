@@ -81,6 +81,14 @@ Response: `Agent[]` ordered by `created_at` descending.
 
 Response: `Agent`. 404 if missing.
 
+### `GET /v1/agents/{id}/quota` → 200
+
+Current period usage against the agent's configured token/cost quota
+(`Agent.config.quota`). When no quota is configured, `active` is `false` and
+limits are null.
+
+Response: `AgentQuotaStatus`. 404 if the agent is missing.
+
 ### `PATCH /v1/agents/{id}` → 200
 
 Partial update. When `adapter`, `config`, or `description` change, `version`
@@ -219,6 +227,10 @@ The Python worker resolves a pinned run through
 is missing. Only legacy runs without a version pin fall back to the agent's
 current config.
 
+When the agent's `config.quota` is active and `enforce` is true, returns **429**
+if the current UTC period already meets or exceeds `max_tokens` /
+`max_cost_usd`.
+
 Response: a full `Run` record. The run is created with status `pending` and
 a background job is dispatched to a worker; the response returns before the
 adapter has finished. Clients should poll `/v1/runs/{id}` or subscribe to
@@ -280,7 +292,8 @@ Request (optional body):
 
 Response: a full `Run` record with status `pending` (worker will transition to
 `running`). Returns **404** if the run does not exist, **409** if status is not
-`failed` or the checkpoint index is missing.
+`failed` or the checkpoint index is missing, **429** if the agent's enforced
+quota is already exhausted.
 
 ### `POST /v1/runs/{id}/resume` → 202
 
@@ -322,6 +335,123 @@ caller's tenant / project / agent scope.
   }
 ]
 ```
+
+### `POST /v1/batches` → 202
+
+Creates 1–100 Runs for one Agent from distinct inputs and dispatches them
+through the normal worker queue. Shared optional `adapter` / `metadata` apply
+to every item; per-item `input` is required.
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "items": [
+    {"input": {"prompt": "a"}},
+    {"input": {"prompt": "b"}, "metadata": {"label": "b"}}
+  ],
+  "adapter": "echo",
+  "metadata": {"source": "nightly"}
+}
+```
+
+Response:
+
+```json
+{
+  "id": "01HZ...",
+  "agent_id": "01HZ...",
+  "status": "pending",
+  "total": 2,
+  "completed": 0,
+  "run_ids": ["01HZ...A", "01HZ...B"],
+  "created_at": "2026-09-11T06:00:00+00:00"
+}
+```
+
+`status` is `pending` while every Run is still `pending`, `completed` when
+every Run is terminal (`succeeded` / `failed` / `cancelled`), otherwise
+`running`. Duplicate empty `items` → **422**. Missing Agent → **404**. Cap is
+100 items to avoid flooding the queue.
+
+Each created Run pins `_agentflow.agent_version` and `_agentflow.batch_id`.
+
+### `GET /v1/batches?limit=50` → 200
+
+Response: `Batch[]` ordered by `created_at` descending.
+
+### `GET /v1/batches/{id}` → 200
+
+Current batch progress (recomputes `status` / `completed` from Run rows).
+404 if missing.
+
+### `GET /v1/batches/{id}/runs` → 200
+
+Response: `Run[]` for the batch, in creation order. Header rows only (no
+steps / messages / checkpoints). 404 if the batch is missing.
+
+### `POST /v1/schedules` → 201
+
+Creates a recurring Run schedule for an Agent. Provide **exactly one** of
+`cron` (5-field minute cron in `timezone`, default `UTC`) or
+`interval_seconds` (≥ 60).
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "name": "hourly-digest",
+  "cron": "0 * * * *",
+  "timezone": "UTC",
+  "input": {"prompt": "summarize"},
+  "metadata": {},
+  "adapter": null,
+  "enabled": true
+}
+```
+
+Response: a full `Schedule` including `next_run_at`. Invalid cron / missing
+timing field / both timing fields → **422**. Missing Agent → **404**.
+
+### `GET /v1/schedules?limit=50` → 200
+
+Response: `Schedule[]` ordered by `created_at` descending.
+
+### `GET /v1/schedules/{id}` → 200
+
+404 if missing.
+
+### `PATCH /v1/schedules/{id}` → 200
+
+Partial update of `name`, `cron`, `interval_seconds`, `timezone`, `input`,
+`metadata`, `adapter`, or `enabled`. Recomputes `next_run_at` when timing
+fields change. Clearing the only timing field or setting both → **422**.
+
+### `DELETE /v1/schedules/{id}` → 204
+
+Deletes the schedule. Idempotent for missing ids within the tenant? No —
+missing → **404**. In-flight Runs are not cancelled.
+
+### `POST /v1/schedules/{id}/trigger` → 202
+
+Fires one Run immediately from the schedule template without advancing the
+cron/interval cursor when `advance` is false (default). Pass
+`{"advance": true}` to also bump `next_run_at` / `last_run_at` as if the
+sweeper had claimed it.
+
+Response: the created `Run` (`pending`). Disabled schedules still accept an
+explicit trigger. 404 if missing.
+
+### `GET /v1/schedules/{id}/runs?limit=50` → 200
+
+Runs tagged with `_agentflow.schedule_id = {id}`, newest first. 404 if the
+schedule is missing.
+
+The Python worker periodically claims due schedules (`enabled` and
+`next_run_at ≤ now`), creates a Run, enqueues it, and advances `next_run_at`.
+Fired Runs pin `_agentflow.schedule_id` and `_agentflow.agent_version`.
 
 ### `POST /v1/run-comparisons/preview` → 200
 
@@ -549,6 +679,49 @@ Optional body: ``{ "tenant_id": "default", "dry_run": false }``.
 
 `tenant_id` is assigned from the caller's API key (or `"default"` when auth
 is disabled). Agent `name` is unique **per tenant**.
+
+Optional `config.quota` enables Agent-level token / cost budgets:
+
+```json
+{
+  "quota": {
+    "period": "month",
+    "max_tokens": 1000000,
+    "max_cost_usd": 25.0,
+    "enforce": true
+  }
+}
+```
+
+`period` is `day` | `week` | `month` (UTC calendar buckets). Either limit may
+be omitted for unlimited. With `enforce: true` (default), `POST /v1/runs`
+and `POST /v1/runs/{id}/retry` return **429** once the current period is at
+or over a limit. The Python worker accumulates usage into `agent_quota_usage`
+on terminal run states (delta-safe across retries).
+
+### `AgentQuotaStatus`
+
+```ts
+{
+  agent_id: string;
+  active: boolean;
+  enforce: boolean;
+  period: "day" | "week" | "month" | null;
+  period_key: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  max_tokens: number | null;
+  max_cost_usd: number | null;
+  used_tokens: number;
+  used_tokens_in: number;
+  used_tokens_out: number;
+  used_cost_usd: number;
+  run_count: number;
+  remaining_tokens: number | null;
+  remaining_cost_usd: number | null;
+  exceeded: boolean;
+}
+```
 
 ### `AgentVersion`
 

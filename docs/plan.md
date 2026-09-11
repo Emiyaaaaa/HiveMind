@@ -67,7 +67,7 @@
 - [ ] 人工审批 UI（`waiting_human` + 通知）
 - [x] Temporal（或 Restate）集成超长 Run
 - [x] Helm + Terraform；按队列延迟自动扩缩 worker
-- [ ] Agent 级 token/成本配额
+- [x] Agent 级 token/成本配额
 
 **验收：** 双租户演示；审批门控生效；24h+ 工作流在 worker 重启后仍可恢复。
 
@@ -78,7 +78,7 @@
 - [ ] Run 对比与回归套件
 - [ ] Agent 记忆服务（M1 Thread ✅；M2/M3 情景摘要 + 语义事实 + 文档 RAG 待做）
 - [x] 模型路由 / fallback 策略
-- [ ] 定时与批量 Run
+- [x] 定时与批量 Run
 - [x] 细粒度流式：推理块（`token.delta.part` + `Message.extra.kind=reasoning`）；多模态附件（`token.delta.part=attachment` + `attachments` 表 / 对象存储 + `Message.extra.kind=attachment`）
 
 ## Agent Memory 专项

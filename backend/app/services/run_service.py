@@ -48,6 +48,7 @@ from app.runtime.memory_metrics import (
 )
 from app.runtime.messages import messages_from_rows
 from app.runtime.usage import aggregate_run_usage
+from app.runtime.quota import QuotaExceeded
 from app.schemas.run import EventType, MessagePage, MessageRead, RunCreate, RunEvent, RunResume, RunRetry
 from app.runtime.resume_context import (
     RunResumeContext,
@@ -55,6 +56,7 @@ from app.runtime.resume_context import (
     resume_metadata,
     without_resume_metadata,
 )
+from app.services.quota_service import QuotaService
 from app.worker.cancel import CancelRegistry, get_cancel_registry
 from app.worker.queue import JobQueue, RunJob, get_job_queue
 
@@ -165,6 +167,8 @@ class RunService:
         except AttachmentNotFound as exc:
             raise AttachmentRefNotFound(exc.attachment_id) from exc
 
+        await QuotaService(self.session).assert_can_create_run(agent)
+
         run = Run(
             tenant_id=agent.tenant_id,
             project_id=agent.project_id,
@@ -254,6 +258,10 @@ class RunService:
         )
         if run.status != RunStatus.FAILED:
             raise RunConflict(run_id, run.status, "retry")
+
+        agent = await self.session.get(Agent, run.agent_id)
+        if agent is not None:
+            await QuotaService(self.session).assert_can_create_run(agent)
 
         checkpoint_index: int | None = None
         if run.checkpoints:
@@ -531,6 +539,7 @@ class RunService:
         if error is not None:
             run.error = error
         usage = aggregate_run_usage(run.steps)
+        meta = dict(run.metadata_ or {})
         if (
             usage.tokens_in
             or usage.tokens_out
@@ -538,9 +547,22 @@ class RunService:
             or usage.step_count
             or usage.tool_call_count
         ):
-            meta = dict(run.metadata_ or {})
             meta["usage"] = usage.model_dump()
-            run.metadata_ = meta
+
+        if status in (
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        ):
+            agent = await self.session.get(Agent, run.agent_id)
+            if agent is not None:
+                meta = await QuotaService(self.session).apply_run_usage(
+                    agent=agent,
+                    run_metadata=meta,
+                    usage=usage,
+                )
+
+        run.metadata_ = meta
         await self.session.commit()
 
         if status in (

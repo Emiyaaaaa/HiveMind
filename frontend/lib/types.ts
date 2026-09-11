@@ -135,6 +135,26 @@ export interface Agent {
   updated_at: string;
 }
 
+export interface AgentQuotaStatus {
+  agent_id: string;
+  active: boolean;
+  enforce: boolean;
+  period: "day" | "week" | "month" | null;
+  period_key: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  max_tokens: number | null;
+  max_cost_usd: number | null;
+  used_tokens: number;
+  used_tokens_in: number;
+  used_tokens_out: number;
+  used_cost_usd: number;
+  run_count: number;
+  remaining_tokens: number | null;
+  remaining_cost_usd: number | null;
+  exceeded: boolean;
+}
+
 export interface AgentVersion {
   id: string;
   agent_id: string;

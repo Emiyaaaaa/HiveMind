@@ -13,6 +13,7 @@ from app.schemas.run import (
     RunRetry,
     run_read_from_orm,
 )
+from app.runtime.quota import QuotaExceeded
 from app.services.run_service import (
     AgentNotFound,
     AttachmentRefNotFound,
@@ -73,6 +74,11 @@ async def create_run(
     except AttachmentRefNotFound as exc:
         raise HTTPException(
             status_code=404, detail=f"Attachment not found: {exc}"
+        ) from exc
+    except QuotaExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
         ) from exc
 
     await service.start_run(run.id)
@@ -165,6 +171,11 @@ async def retry_run(
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}") from exc
     except RunConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except QuotaExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+        ) from exc
     return await _run_read(service, run_id, principal)
 
 
