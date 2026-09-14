@@ -5,7 +5,10 @@ import type {
   AgentVersionDiff,
   Attachment,
   MessagePage,
+  RegressionExecution,
+  RegressionExecutionResults,
   Run,
+  RunComparison,
   Thread,
   ThreadMessagePage,
 } from "./types";
@@ -177,6 +180,25 @@ export const api = {
     request<Agent>(`/v1/agents/${id}/versions/${version}/restore`, {
       method: "POST",
     }),
+  previewRunComparison: (body: {
+    baseline_run_id: string;
+    candidate_run_id: string;
+  }) =>
+    request<RunComparison>("/v1/run-comparisons/preview", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  createRegressionExecution: (body: { baseline_run_ids: string[] }) =>
+    request<RegressionExecution>("/v1/regression-executions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getRegressionExecution: (executionId: string) =>
+    request<RegressionExecution>(`/v1/regression-executions/${executionId}`),
+  getRegressionResults: (executionId: string) =>
+    request<RegressionExecutionResults>(
+      `/v1/regression-executions/${executionId}/results`,
+    ),
 };
 
 export function eventStreamUrl(runId: string): string {

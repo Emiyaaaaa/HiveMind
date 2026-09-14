@@ -29,11 +29,16 @@ export default function RunsPage() {
     <div className="max-w-5xl mx-auto space-y-4">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Runs</h1>
-        <span className="text-xs text-muted">
-          {liveRunIds.length > 0
-            ? `live via SSE (${liveRunIds.length} active)`
-            : "updates on refresh"}
-        </span>
+        <div className="flex items-center gap-3 text-xs text-muted">
+          <Link href="/regression" className="hover:text-accent">
+            Regression suite
+          </Link>
+          <span>
+            {liveRunIds.length > 0
+              ? `live via SSE (${liveRunIds.length} active)`
+              : "updates on refresh"}
+          </span>
+        </div>
       </header>
 
       {runs.isLoading ? (

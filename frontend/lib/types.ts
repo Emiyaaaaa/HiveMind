@@ -184,3 +184,56 @@ export interface RunEvent {
   at: string;
   data: Record<string, unknown>;
 }
+
+export interface RunComparisonSide {
+  run_id: string;
+  agent_id: string;
+  agent_version: number | null;
+  status: string;
+  error: string | null;
+}
+
+export interface RunComparison {
+  baseline: RunComparisonSide;
+  candidate: RunComparisonSide;
+  agent_version_changed: boolean;
+  status_changed: boolean;
+  error_changed: boolean;
+  input_changed: boolean;
+  output_changed: boolean;
+}
+
+export interface RegressionRunPair {
+  baseline_run_id: string;
+  candidate_run_id: string;
+}
+
+export interface RegressionExecution {
+  execution_id: string;
+  candidate_agent_version: number;
+  status: "pending" | "running" | "completed";
+  total_cases: number;
+  completed_cases: number;
+  cases: RegressionRunPair[];
+}
+
+export interface RegressionFailure {
+  code: string;
+  message: string;
+}
+
+export interface RegressionCaseResult {
+  baseline_run_id: string;
+  candidate_run_id: string;
+  passed: boolean;
+  failures: RegressionFailure[];
+}
+
+export interface RegressionExecutionResults {
+  execution_id: string;
+  passed: boolean;
+  total_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  cases: RegressionCaseResult[];
+}
