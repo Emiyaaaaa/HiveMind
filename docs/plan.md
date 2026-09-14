@@ -75,7 +75,7 @@
 
 **目标：** 在 runtime 之上提供 eval、记忆与路由，而非塞进 adapter。
 
-- [ ] Run 对比与回归套件
+- [x] Run 对比与回归套件
 - [ ] Agent 记忆服务（M1 Thread ✅；M2/M3 情景摘要 + 语义事实 + 文档 RAG 待做）
 - [x] 模型路由 / fallback 策略
 - [x] 定时与批量 Run
@@ -252,3 +252,4 @@ Adapters **不得** import SQLAlchemy 查 `messages` / `memory_items`（与现�
 | 可观测性 | `backend/app/core/telemetry.py`、Java `RedMetricsFilter` |
 | Working memory 瘦身 | `backend/app/adapters/langgraph_adapter.py`（checkpoint 内容）、`backend/app/runtime/resume_context.py`、Python/Java `retry_run` |
 | Thread / 长期记忆 | 先改 [data-model.md](data-model.md) + [api-contract.md](api-contract.md)；`AdapterContext` 增 `memory`；Java `RunsController` 接受 `thread_id`；控制台 `frontend/app/runs/[id]/page.tsx` |
+| Run 对比 / 回归 | Java `RunComparisonsController` / `RegressionExecutionsController`；控制台 `frontend/app/regression/` |
