@@ -31,6 +31,9 @@ Expected agent.config shape (all optional except when using custom graphs):
   "mcp_auto_register": false,  // register every tool from mcp_servers
   "max_tool_rounds": 4,        // agent-node ReAct iterations (default 4)
   "tool_error_policy": "feedback", // fail_fast (default) | feedback
+  "tool_observation": {
+    "max_tokens": 2000        // 0 = disabled; bound model-visible tool results
+  },
   "memory": {
     "window_tokens": 8000,       // 0 = disabled; trim prompt before LLM calls
     "summarize": true            // summarize dropped turns instead of deleting
@@ -107,6 +110,11 @@ from app.runtime.model_router import (
 )
 from app.runtime.pricing import estimate_cost_usd
 from app.runtime.tokens import estimate_tokens
+from app.runtime.tool_observation import (
+    ToolObservationConfig,
+    parse_tool_observation_config,
+    serialize_tool_observation,
+)
 
 logger = get_logger("adapter.langgraph")
 
@@ -300,6 +308,7 @@ class _RunState:
     default_system_prompt: str
     max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS
     tool_error_policy: ToolErrorPolicy = DEFAULT_TOOL_ERROR_POLICY
+    tool_observation: ToolObservationConfig = field(default_factory=ToolObservationConfig)
     step_index: int = 0
     node_indices: dict[str, int] = field(default_factory=dict)
     emitted_system_prompts: set[str] = field(default_factory=set)
@@ -345,6 +354,12 @@ class LangGraphAdapter(OrchestratorAdapter):
             await tool_surface.close()
             return AdapterResult(status=RunStatus.FAILED, error=str(exc))
 
+        try:
+            tool_observation = parse_tool_observation_config(config)
+        except ValueError as exc:
+            await tool_surface.close()
+            return AdapterResult(status=RunStatus.FAILED, error=str(exc))
+
         max_rounds = int(config.get("max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS))
         run_state = _RunState(
             ctx=ctx,
@@ -357,6 +372,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             ),
             max_tool_rounds=max(1, max_rounds),
             tool_error_policy=tool_error_policy,
+            tool_observation=tool_observation,
             emitted_system_prompts=_emitted_system_prompts_from_messages(
                 ctx.run_messages
             ),
@@ -508,11 +524,20 @@ class LangGraphAdapter(OrchestratorAdapter):
                     node=spec.id,
                     output={"tool": tool_def.name, "result": result},
                 )
+                observation = serialize_tool_observation(
+                    result,
+                    max_tokens=run_state.tool_observation.max_tokens,
+                )
                 tool_results = dict(state.get("tool_results") or {})
-                tool_results[tool_def.name] = result
+                tool_results[tool_def.name] = json.loads(observation)
+                reply = (
+                    observation
+                    if run_state.tool_observation.enabled
+                    else str(result)
+                )
                 next_state = {
                     "tool_results": tool_results,
-                    "reply": str(result),
+                    "reply": reply,
                     "completed_nodes": _with_completed(state, spec.id),
                 }
                 await ctx.emit_checkpoint(
@@ -695,14 +720,19 @@ class LangGraphAdapter(OrchestratorAdapter):
                             tc = outcome.call
                             name = str(tc.get("name") or "")
                             if outcome.result is not None:
-                                tool_results[name] = outcome.result
-                                content = json.dumps(outcome.result, default=str)
+                                content = serialize_tool_observation(
+                                    outcome.result,
+                                    max_tokens=run_state.tool_observation.max_tokens,
+                                )
+                                tool_results[name] = json.loads(content)
                             else:
                                 assert outcome.error_observation is not None
                                 had_recoverable_feedback = True
-                                content = json.dumps(
-                                    outcome.error_observation, default=str
+                                content = serialize_tool_observation(
+                                    outcome.error_observation,
+                                    max_tokens=run_state.tool_observation.max_tokens,
                                 )
+                                tool_results[name] = json.loads(content)
                             messages.append(
                                 {
                                     "role": "tool",
