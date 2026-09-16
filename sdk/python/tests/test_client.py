@@ -202,6 +202,7 @@ def test_audit_events_are_typed(server: _Server, client: AgentFlowClient):
     assert events == [
         RunAuditEvent(
             id="01A",
+            tenant_id="default",
             run_id="01RUN",
             action="resume",
             actor_subject="ops",

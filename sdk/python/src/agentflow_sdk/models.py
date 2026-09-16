@@ -139,6 +139,7 @@ class RunAuditEvent:
     """Cancel/resume governance record from ``GET /v1/runs/{id}/audit``."""
 
     id: str
+    tenant_id: str
     run_id: str
     action: str
     actor_subject: str
@@ -150,6 +151,7 @@ class RunAuditEvent:
     def from_dict(cls, data: Mapping[str, Any]) -> RunAuditEvent:
         return cls(
             id=str(data["id"]),
+            tenant_id=str(data.get("tenant_id") or ""),
             run_id=str(data["run_id"]),
             action=str(data["action"]),
             actor_subject=str(data.get("actor_subject") or ""),
