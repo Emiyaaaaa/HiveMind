@@ -76,7 +76,7 @@ const transcript = await client.listThreadMessages(thread.id);     // cross-run,
 | `waitForRun(runId, { timeoutMs, pollIntervalMs, until })` | polls `GET /v1/runs/{id}`; rejects with `RunTimeoutError` (carries the last `Run`) |
 | `listRunMessages(runId, { cursor, limit })` | `GET /v1/runs/{id}/messages` |
 | `getRunAudit(runId)` | `GET /v1/runs/{id}/audit` |
-| `createThread` / `getThread` / `listThreadRuns` / `listThreadMessages` | `/v1/threads…` |
+| `createThread` / `listThreads` / `getThread` / `listThreadRuns` / `listThreadMessages` | `/v1/threads…` |
 
 ## Tests
 
