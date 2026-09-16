@@ -51,7 +51,7 @@
 - [x] 官方 adapter：AutoGen、CrewAI、PydanticAI（按需求选 2 个；已完成 AutoGen + PydanticAI）
 - [x] MCP tool adapter
 - [x] OpenAPI 规范 + Python/TypeScript SDK 自动生成
-- [ ] Webhook 出站事件（`run.completed` 等）
+- [x] Webhook 出站事件（`run.completed` / `run.failed` / `run.cancelled` / `run.waiting_human`；`AGENTFLOW_WEBHOOK_URLS` + HMAC 签名 + 退避重试，见 `backend/app/runtime/webhooks.py`）
 - [x] Agent 版本管理与配置 diff
 
 **验收：** 新 adapter 以包形式发布；SDK 覆盖 create-run + subscribe-events；MCP 调用写入 ToolCall。
@@ -64,7 +64,7 @@
 - [x] 简易 API Key 多租户 + RBAC（`tenant_id`、viewer/operator/admin；OIDC 仍待做）
 - [x] RBAC：组织/项目/Agent 作用域
 - [x] cancel/resume 审计
-- [ ] 人工审批 UI（`waiting_human` + 通知）
+- [ ] 人工审批 UI（`waiting_human` + 通知）—— 通知已由 webhook `run.waiting_human` 覆盖；控制台 `CheckpointPanel` 已有 resume 表单，缺专门的审批视图
 - [x] Temporal（或 Restate）集成超长 Run
 - [x] Helm + Terraform；按队列延迟自动扩缩 worker
 - [x] Agent 级 token/成本配额
@@ -237,7 +237,7 @@ Adapters **不得** import SQLAlchemy 查 `messages` / `memory_items`（与现�
 1. ~~**SSE `Last-Event-ID` 重放**~~ — 已完成：`backend/app/events/bus.py`、`backend/app/api/v1/events.py`、Java `EventStreamService`
 2. **队列 OTel 指标** — `backend/app/worker/monitor.py`、`backend/app/core/telemetry.py`
 3. **Step 时间线 + ToolCall 面板** — `frontend/app/runs/`、`frontend/components/`
-4. **人工审批 UI** — 基于 `waiting_human` + resume API，Phase 4 前可先做雏形
+4. **人工审批 UI** — 基于 `waiting_human` + resume API，Phase 4 前可先做雏形（通知侧已完成：webhook `run.waiting_human`）
 5. **Agent Memory L0 瘦身** — checkpoint 不再拷贝 messages；`_resume` 只带 index。见上方专项。
 
 ## 从哪里入手

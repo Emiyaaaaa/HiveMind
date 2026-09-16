@@ -42,6 +42,8 @@ Python worker 执行 adapter，SQLAlchemy + Alembic 负责持久化，Redis 负�
 是一等数据库实体，为不同编排引擎提供统一的可观测数据面。
 - **Server-Sent Events。** run 生命周期中的状态变化会被发布为 SSE 事件，
 客户端无需轮询即可跟踪执行过程。
+- **出站 Webhook。** run 结局（`run.completed`、`run.failed`、`run.cancelled`、
+`run.waiting_human`）会带 HMAC 签名推送到配置的 URL 并自动重试，供无法长连 SSE 的集成方使用。
 - **轻量管理控制台。** Next.js 控制台支持 run 列表、run 详情、step 和 message
 展示，以及实时事件流订阅。
 - **面向贡献者的技术栈。** Java 21、Spring Boot 3、Python 3.12、
