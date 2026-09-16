@@ -154,9 +154,12 @@ class AgentFlowClient:
             run = self.get_run(run_id)
             if run.status in until:
                 return run
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 raise RunTimeoutError(run, timeout)
-            time.sleep(poll_interval)
+            # Never sleep past the deadline: timeout=0.1 with poll_interval=10
+            # must fail after ~0.1s, not 10s.
+            time.sleep(min(poll_interval, remaining))
 
     def list_run_messages(
         self, run_id: str, *, cursor: int | None = None, limit: int | None = None
@@ -207,6 +210,12 @@ class AgentFlowClient:
         response = self._client.post("/v1/threads", json=payload)
         response.raise_for_status()
         return Thread.from_dict(response.json())
+
+    def list_threads(self, *, limit: int | None = None) -> list[Thread]:
+        """GET /v1/threads — threads visible to the caller, newest first."""
+        response = self._client.get("/v1/threads", params=_page_params(None, limit))
+        response.raise_for_status()
+        return [Thread.from_dict(item) for item in response.json()]
 
     def get_thread(self, thread_id: str) -> Thread:
         response = self._client.get(f"/v1/threads/{thread_id}")

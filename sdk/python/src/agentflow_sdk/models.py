@@ -49,6 +49,7 @@ class Run:
     checkpoints: list[dict[str, Any]] = field(default_factory=list)
     usage: RunUsage = field(default_factory=RunUsage)
     project_id: str | None = None
+    thread_id: str | None = None
     output: dict[str, Any] | None = None
     error: str | None = None
     messages_truncated: bool = False
@@ -59,6 +60,7 @@ class Run:
             id=str(data["id"]),
             tenant_id=str(data["tenant_id"]),
             project_id=data.get("project_id"),
+            thread_id=data.get("thread_id"),
             agent_id=str(data["agent_id"]),
             adapter=str(data["adapter"]),
             status=str(data["status"]),

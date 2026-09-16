@@ -76,6 +76,7 @@ def test_create_run_forwards_thread_id(server: _Server, client: AgentFlowClient)
     server.on("POST", "/v1/runs", (202, _run(thread_id="01THREAD")))
     run = client.create_run("01AGENT", input={"prompt": "hi"}, thread_id="01THREAD")
     assert isinstance(run, Run)
+    assert run.thread_id == "01THREAD"
     assert _body(server.requests[0]) == {
         "agent_id": "01AGENT",
         "input": {"prompt": "hi"},
@@ -135,6 +136,27 @@ def test_wait_for_run_times_out_with_last_run(
         client.wait_for_run("01RUN", timeout=5)
     assert exc.value.run.status == "running"
     assert "01RUN" in str(exc.value)
+
+
+def test_wait_for_run_never_sleeps_past_the_deadline(
+    server: _Server, client: AgentFlowClient, monkeypatch: pytest.MonkeyPatch
+):
+    clock = {"now": 0.0}
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr("agentflow_sdk.client.time.monotonic", lambda: clock["now"])
+    monkeypatch.setattr("agentflow_sdk.client.time.sleep", fake_sleep)
+    server.on("GET", "/v1/runs/01RUN", (200, _run(status="running")))
+
+    with pytest.raises(RunTimeoutError):
+        client.wait_for_run("01RUN", timeout=0.1, poll_interval=10)
+    # One poll, one sleep clipped to the remaining budget, then the timeout.
+    assert sleeps == [0.1]
+    assert clock["now"] == pytest.approx(0.1)
 
 
 def test_message_pagination_follows_cursor(server: _Server, client: AgentFlowClient):
@@ -202,6 +224,7 @@ def test_threads_round_trip(server: _Server, client: AgentFlowClient):
         "updated_at": "2026-09-15T00:00:00Z",
     }
     server.on("POST", "/v1/threads", (201, thread))
+    server.on("GET", "/v1/threads", (200, [thread]))
     server.on("GET", "/v1/threads/01THREAD", (200, thread))
     server.on("GET", "/v1/threads/01THREAD/runs", (200, [_run("01R1"), _run("01R2")]))
     server.on(
@@ -216,9 +239,11 @@ def test_threads_round_trip(server: _Server, client: AgentFlowClient):
     created = client.create_thread("01AGENT", title="Support", user_id="u1")
     assert isinstance(created, Thread) and created.title == "Support"
     assert _body(server.requests[0]) == {"agent_id": "01AGENT", "title": "Support", "user_id": "u1"}
+    assert [t.id for t in client.list_threads(limit=5)] == ["01THREAD"]
+    assert dict(server.requests[1].url.params) == {"limit": "5"}
     assert client.get_thread("01THREAD").id == "01THREAD"
     assert [r.id for r in client.list_thread_runs("01THREAD", limit=10)] == ["01R1", "01R2"]
-    assert dict(server.requests[2].url.params) == {"limit": "10"}
+    assert dict(server.requests[3].url.params) == {"limit": "10"}
     page = client.list_thread_messages("01THREAD", cursor="k|1|y", limit=1)
     assert page.next_cursor == "k|0|x" and page.items[0]["run_id"] == "01R2"
-    assert dict(server.requests[3].url.params) == {"cursor": "k|1|y", "limit": "1"}
+    assert dict(server.requests[4].url.params) == {"cursor": "k|1|y", "limit": "1"}

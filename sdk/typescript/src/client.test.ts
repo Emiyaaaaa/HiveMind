@@ -65,7 +65,7 @@ function fakeFetch(responses: Array<[number, unknown]>) {
 const BASE = "http://api.test";
 
 test("createRun forwards thread_id and the API key", async () => {
-  const { impl, calls } = fakeFetch([[202, run("pending", { thread_id: "01THREAD" } as Partial<Run>)]]);
+  const { impl, calls } = fakeFetch([[202, run("pending", { thread_id: "01THREAD" })]]);
   const client = new AgentFlowClient({ baseUrl: BASE, apiKey: "k", fetch: impl });
 
   const created = await client.createRun({
@@ -75,6 +75,7 @@ test("createRun forwards thread_id and the API key", async () => {
   });
 
   assert.equal(created.status, "pending");
+  assert.equal(created.thread_id, "01THREAD");
   assert.equal(calls[0]!.url, `${BASE}/v1/runs`);
   assert.deepEqual(calls[0]!.body, {
     agent_id: "01AGENT",
@@ -119,6 +120,19 @@ test("waitForRun stops on waiting_human, then on the terminal status", async () 
   assert.equal(calls.length, 3);
 });
 
+test("waitForRun never sleeps past the deadline", async () => {
+  const { impl, calls } = fakeFetch([[200, run("running")]]);
+  const client = new AgentFlowClient({ baseUrl: BASE, fetch: impl });
+
+  const started = Date.now();
+  await assert.rejects(
+    client.waitForRun("01RUN", { timeoutMs: 50, pollIntervalMs: 10_000 }),
+    RunTimeoutError,
+  );
+  assert.ok(Date.now() - started < 1_000, "sleep must be clipped to the remaining budget");
+  assert.equal(calls.length, 2);
+});
+
 test("waitForRun rejects with RunTimeoutError carrying the last run", async () => {
   const { impl } = fakeFetch([[200, run("running")]]);
   const client = new AgentFlowClient({ baseUrl: BASE, fetch: impl });
@@ -156,6 +170,7 @@ test("threads: create, get, runs and cross-run messages", async () => {
   };
   const { impl, calls } = fakeFetch([
     [201, thread],
+    [200, [thread]],
     [200, thread],
     [200, [run("succeeded"), run("pending")]],
     [200, { items: [{ run_id: "01RUN", index: 0 }], next_cursor: "k|0|x", has_more: true }],
@@ -165,10 +180,12 @@ test("threads: create, get, runs and cross-run messages", async () => {
   const created = await client.createThread({ agent_id: "01AGENT", title: "Support" });
   assert.equal(created.id, "01THREAD");
   assert.deepEqual(calls[0]!.body, { agent_id: "01AGENT", title: "Support" });
+  assert.equal((await client.listThreads({ limit: 5 })).length, 1);
+  assert.equal(calls[1]!.url, `${BASE}/v1/threads?limit=5`);
   assert.equal((await client.getThread("01THREAD")).title, "Support");
   assert.equal((await client.listThreadRuns("01THREAD", { limit: 10 })).length, 2);
-  assert.equal(calls[2]!.url, `${BASE}/v1/threads/01THREAD/runs?limit=10`);
+  assert.equal(calls[3]!.url, `${BASE}/v1/threads/01THREAD/runs?limit=10`);
   const page = await client.listThreadMessages("01THREAD", { cursor: "k|1|y" });
   assert.equal(page.next_cursor, "k|0|x");
-  assert.equal(calls[3]!.url, `${BASE}/v1/threads/01THREAD/messages?cursor=k%7C1%7Cy`);
+  assert.equal(calls[4]!.url, `${BASE}/v1/threads/01THREAD/messages?cursor=k%7C1%7Cy`);
 });

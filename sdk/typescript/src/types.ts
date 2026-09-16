@@ -21,6 +21,8 @@ export interface Run {
   id: string;
   tenant_id: string;
   project_id?: string | null;
+  /** Set when the run was created with `thread_id`. */
+  thread_id?: string | null;
   agent_id: string;
   adapter: string;
   status: RunStatus;

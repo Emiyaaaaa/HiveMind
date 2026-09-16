@@ -125,8 +125,11 @@ export class AgentFlowClient {
     for (;;) {
       const run = await this.getRun(runId);
       if (until.has(run.status)) return run;
-      if (Date.now() >= deadline) throw new RunTimeoutError(run, timeoutMs);
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new RunTimeoutError(run, timeoutMs);
+      // Never sleep past the deadline: timeoutMs=100 with pollIntervalMs=10000
+      // must reject after ~100ms, not 10s.
+      await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remaining)));
     }
   }
 
@@ -148,6 +151,11 @@ export class AgentFlowClient {
   /** `POST /v1/threads` — open a conversation for `createRun({ thread_id })`. */
   async createThread(request: ThreadCreateRequest): Promise<Thread> {
     return readJson<Thread>(await this.post("/v1/threads", request));
+  }
+
+  /** `GET /v1/threads` — threads visible to the caller, newest first. */
+  async listThreads(params: { limit?: number } = {}): Promise<Thread[]> {
+    return readJson(await this.get(withQuery("/v1/threads", params)));
   }
 
   async getThread(threadId: string): Promise<Thread> {

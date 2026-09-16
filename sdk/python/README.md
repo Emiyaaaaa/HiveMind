@@ -68,7 +68,7 @@ page = client.list_thread_messages(thread.id, limit=20)          # cross-run tra
 | `wait_for_run(run_id, timeout=, poll_interval=, until=)` | polls `GET /v1/runs/{id}`; raises `RunTimeoutError` (carries the last `Run`) |
 | `list_run_messages` / `iter_run_messages` | `GET /v1/runs/{id}/messages?cursor=&limit=` |
 | `get_run_audit` | `GET /v1/runs/{id}/audit` |
-| `create_thread` / `get_thread` / `list_thread_runs` / `list_thread_messages` | `/v1/threads…` |
+| `create_thread` / `list_threads` / `get_thread` / `list_thread_runs` / `list_thread_messages` | `/v1/threads…` |
 
 Server errors surface as `httpx.HTTPStatusError` (for example 409 when
 retrying a run that is not `failed`).
