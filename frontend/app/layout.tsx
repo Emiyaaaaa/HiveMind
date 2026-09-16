@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { ApprovalsNavLink } from "@/components/ApprovalsNavLink";
 import { Providers } from "@/components/Providers";
 
 export const metadata: Metadata = {
@@ -28,6 +29,7 @@ export default function RootLayout({
                 <Link href="/runs" className="hover:text-text">
                   Runs
                 </Link>
+                <ApprovalsNavLink />
                 <Link href="/threads" className="hover:text-text">
                   Threads
                 </Link>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 
 import { StatusBadge } from "@/components/StatusBadge";
+import { waitingHumanRuns } from "@/lib/approval";
 import { api } from "@/lib/api";
 import {
   liveRunIdsFromRuns,
@@ -25,11 +26,19 @@ export default function RunsPage() {
 
   useRunsListLiveSync(liveRunIds);
 
+  const pendingApprovals = waitingHumanRuns(runs.data);
+
   return (
     <div className="max-w-5xl mx-auto space-y-4">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Runs</h1>
         <div className="flex items-center gap-3 text-xs text-muted">
+          <Link href="/approvals" className="hover:text-accent">
+            Approvals
+            {pendingApprovals.length > 0
+              ? ` (${pendingApprovals.length})`
+              : ""}
+          </Link>
           <Link href="/regression" className="hover:text-accent">
             Regression suite
           </Link>
@@ -40,6 +49,20 @@ export default function RunsPage() {
           </span>
         </div>
       </header>
+
+      {pendingApprovals.length > 0 ? (
+        <Link
+          href="/approvals"
+          className="block rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-sm hover:bg-warn/10"
+        >
+          <span className="text-warn font-medium">
+            {pendingApprovals.length === 1
+              ? "1 run is waiting for approval"
+              : `${pendingApprovals.length} runs are waiting for approval`}
+          </span>
+          <span className="text-muted"> · open the inbox</span>
+        </Link>
+      ) : null}
 
       {runs.isLoading ? (
         <p className="text-muted">Loading…</p>
@@ -56,7 +79,14 @@ export default function RunsPage() {
           </thead>
           <tbody className="divide-y divide-border">
             {runs.data.map((r) => (
-              <tr key={r.id} className="hover:bg-bg/50">
+              <tr
+                key={r.id}
+                className={
+                  r.status === "waiting_human"
+                    ? "hover:bg-warn/10 bg-warn/5"
+                    : "hover:bg-bg/50"
+                }
+              >
                 <td className="px-4 py-2 font-mono">
                   <Link className="hover:text-accent" href={`/runs/${r.id}`}>
                     {r.id}

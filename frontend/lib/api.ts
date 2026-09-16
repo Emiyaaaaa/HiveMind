@@ -8,6 +8,7 @@ import type {
   RegressionExecution,
   RegressionExecutionResults,
   Run,
+  RunAuditEvent,
   RunComparison,
   Thread,
   ThreadMessagePage,
@@ -80,6 +81,8 @@ export const api = {
         body: JSON.stringify(body ?? {}),
       }),
     ),
+  getRunAudit: (id: string) =>
+    request<RunAuditEvent[]>(`/v1/runs/${id}/audit`),
   createRun: async (body: {
     agent_id: string;
     input: Record<string, unknown>;

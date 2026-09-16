@@ -83,6 +83,17 @@ export interface Checkpoint {
   created_at: string;
 }
 
+export interface RunAuditEvent {
+  id: string;
+  tenant_id: string;
+  run_id: string;
+  action: "cancel" | "resume";
+  actor_subject: string;
+  actor_role: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface Run {
   id: string;
   tenant_id: string;
