@@ -16,6 +16,7 @@ from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_tel
 from app.db.base import Base
 from app.db.session import engine
 from app.events import get_event_bus
+from app.runtime.webhooks import get_webhook_dispatcher
 import app.models  # noqa: F401 — register metadata for create_all
 
 setup_logging()
@@ -35,6 +36,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Inline mode finalises runs in this process, so flush webhook
+        # deliveries here too (bounded, see SHUTDOWN_GRACE_SECONDS).
+        await get_webhook_dispatcher().aclose()
         await bus.aclose()
         await engine.dispose()
         shutdown_telemetry()

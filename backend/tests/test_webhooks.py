@@ -14,6 +14,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import get_settings
+from app.runtime import webhooks
 from app.runtime.webhooks import (
     DELIVERY_HEADER,
     EVENT_HEADER,
@@ -21,6 +22,7 @@ from app.runtime.webhooks import (
     WebhookDispatcher,
     get_webhook_dispatcher,
     parse_webhook_urls,
+    redact_url,
     sign_body,
 )
 from app.schemas.run import RunEvent
@@ -124,14 +126,14 @@ async def test_retries_non_2xx_and_transport_errors_with_backoff():
     dispatcher, sleeps = _dispatcher(receiver, max_attempts=3)
     event = _event("run.failed")
 
-    delivered = await dispatcher._deliver_one(
-        "http://hook.test/a", b"{}", {EVENT_HEADER: event.type}, event
-    )
+    headers = {EVENT_HEADER: event.type, DELIVERY_HEADER: "01DELIVERYID00000000000000"}
+    delivered = await dispatcher._deliver_one("http://hook.test/a", b"{}", headers, event)
 
     assert delivered is True
     assert len(receiver.requests) == 3
     assert sleeps == [0.5, 1.0]
     # Retries resend the exact same delivery id so receivers can de-duplicate.
+    assert {r.headers[DELIVERY_HEADER] for r in receiver.requests} == {"01DELIVERYID00000000000000"}
     assert {r.headers[EVENT_HEADER] for r in receiver.requests} == {"run.failed"}
 
 
@@ -238,3 +240,165 @@ async def test_run_finalize_pushes_terminal_and_waiting_human_events(
         receiver.requests[0].headers[DELIVERY_HEADER]
         != receiver.requests[1].headers[DELIVERY_HEADER]
     )
+
+
+def test_redact_url_strips_userinfo_query_and_fragment():
+    assert (
+        redact_url("https://user:tok@hooks.example.com:8443/in/abc?token=s3cr3t#frag")
+        == "https://hooks.example.com:8443/in/abc"
+    )
+    assert redact_url("http://hook.test/a") == "http://hook.test/a"
+
+
+@pytest.mark.asyncio
+async def test_logs_never_contain_the_raw_url(monkeypatch: pytest.MonkeyPatch):
+    records: list[dict] = []
+
+    class _Logger:
+        def __getattr__(self, _name: str):
+            def _log(_event: str, **kw: object) -> None:
+                records.append(dict(kw))
+
+            return _log
+
+    monkeypatch.setattr(webhooks, "logger", _Logger())
+    receiver = _Receiver([500, 200])
+    dispatcher, _ = _dispatcher(receiver, urls=["http://hook.test/in?token=s3cr3t"])
+
+    await dispatcher.deliver(_event())
+
+    assert records, "expected retry + delivered log records"
+    assert all("s3cr3t" not in str(r.get("url")) for r in records)
+    assert {r["url"] for r in records} == {"http://hook.test/in"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_sheds_load_beyond_max_pending(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(webhooks, "MAX_PENDING", 2)
+    gate = asyncio.Event()
+
+    async def blocked(_request: httpx.Request) -> httpx.Response:
+        await gate.wait()
+        return httpx.Response(200)
+
+    dispatcher = WebhookDispatcher(
+        urls=["http://hook.test/a"],
+        client=httpx.AsyncClient(transport=httpx.MockTransport(blocked)),
+    )
+    first = dispatcher.dispatch(_event())
+    second = dispatcher.dispatch(_event("run.failed"))
+    overflow = dispatcher.dispatch(_event("run.cancelled"))
+    assert first is not None and second is not None
+    assert overflow is None  # dropped, not queued
+    gate.set()
+    assert await dispatcher.drain() == 0
+
+
+@pytest.mark.asyncio
+async def test_in_flight_requests_are_capped(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(webhooks, "MAX_IN_FLIGHT", 2)
+    active = 0
+    peak = 0
+
+    async def slow(_request: httpx.Request) -> httpx.Response:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return httpx.Response(200)
+
+    dispatcher = WebhookDispatcher(
+        urls=[f"http://hook.test/{i}" for i in range(6)],
+        client=httpx.AsyncClient(transport=httpx.MockTransport(slow)),
+    )
+    await dispatcher.deliver(_event())
+    assert peak == 2
+
+
+@pytest.mark.asyncio
+async def test_aclose_gives_up_after_grace_period():
+    async def never(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(3600)
+        return httpx.Response(200)
+
+    dispatcher = WebhookDispatcher(
+        urls=["http://hook.test/a"],
+        client=httpx.AsyncClient(transport=httpx.MockTransport(never)),
+    )
+    task = dispatcher.dispatch(_event())
+    assert task is not None
+
+    await asyncio.wait_for(dispatcher.aclose(grace_seconds=0.05), timeout=2)
+
+    assert task.cancelled() or task.done()
+    assert dispatcher._tasks == set()
+
+
+async def _run_to(ac: AsyncClient, run_id: str, statuses: set[str]) -> dict:
+    body: dict = {}
+    for _ in range(80):
+        body = (await ac.get(f"/v1/runs/{run_id}")).json()
+        if body["status"] in statuses:
+            return body
+        await asyncio.sleep(0.05)
+    return body
+
+
+@pytest.mark.asyncio
+async def test_run_finalize_pushes_failed_and_cancelled_events(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AGENTFLOW_WEBHOOK_URLS", "http://hook.test/runs")
+    get_settings.cache_clear()
+    get_webhook_dispatcher.cache_clear()
+    receiver = _Receiver([])
+    dispatcher = get_webhook_dispatcher()
+    dispatcher._client = httpx.AsyncClient(transport=httpx.MockTransport(receiver.handler))
+
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            async with app.router.lifespan_context(app):
+                failing = await ac.post(
+                    "/v1/agents",
+                    json={
+                        "name": "fail-bot",
+                        "adapter": "echo",
+                        "config": {"delay": 0, "fail_at_node": "tool"},
+                    },
+                )
+                failed_run = await ac.post(
+                    "/v1/runs", json={"agent_id": failing.json()["id"], "input": {"prompt": "x"}}
+                )
+                failed_id = failed_run.json()["id"]
+                body = await _run_to(ac, failed_id, {"succeeded", "failed", "cancelled"})
+                assert body["status"] == "failed", body
+
+                slow = await ac.post(
+                    "/v1/agents",
+                    json={"name": "slow-bot", "adapter": "echo", "config": {"delay": 0.3}},
+                )
+                slow_run = await ac.post(
+                    "/v1/runs", json={"agent_id": slow.json()["id"], "input": {"prompt": "y"}}
+                )
+                slow_id = slow_run.json()["id"]
+                cancel = await ac.post(f"/v1/runs/{slow_id}/cancel")
+                assert cancel.status_code == 204, cancel.text
+                body = await _run_to(ac, slow_id, {"succeeded", "failed", "cancelled"})
+                assert body["status"] == "cancelled", body
+                await dispatcher.drain()
+    finally:
+        get_settings.cache_clear()
+        get_webhook_dispatcher.cache_clear()
+        os.environ.pop("AGENTFLOW_WEBHOOK_URLS", None)
+
+    by_run = {json.loads(r.content)["run_id"]: r for r in receiver.requests}
+    assert set(by_run) == {failed_id, slow_id}
+    failed_payload = json.loads(by_run[failed_id].content)
+    assert by_run[failed_id].headers[EVENT_HEADER] == "run.failed"
+    assert failed_payload["type"] == "run.failed"
+    assert failed_payload["data"]["error"]
+    cancelled_payload = json.loads(by_run[slow_id].content)
+    assert by_run[slow_id].headers[EVENT_HEADER] == "run.cancelled"
+    assert cancelled_payload["data"] == {"error": "cancelled"}

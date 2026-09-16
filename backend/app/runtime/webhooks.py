@@ -18,8 +18,15 @@ Delivery contract (mirrored in docs/api-contract.md, "Outbound webhooks"):
 
 Delivery is fire-and-forget from the run's point of view: a slow receiver
 must never delay or fail the run, so ``dispatch`` schedules a task and
-returns. ``drain`` exists so the worker can flush in-flight deliveries on
-shutdown and tests can await them deterministically.
+returns. Resource bounds: at most ``MAX_IN_FLIGHT`` HTTP requests run at
+once (the rest queue on a semaphore) and at most ``MAX_PENDING`` deliveries
+are tracked; beyond that new events are dropped with ``webhook.overflow`` so
+a dead receiver cannot exhaust the process. ``aclose`` flushes in-flight
+deliveries on shutdown but gives up after ``SHUTDOWN_GRACE_SECONDS`` so a
+container's termination grace period is respected.
+
+Log lines carry a redacted URL (scheme, host, path only): webhook URLs often
+embed tokens in the query or userinfo, and those must not reach central logs.
 
 ponytail: subscribers are process-wide env config (``AGENTFLOW_WEBHOOK_URLS``),
 not a per-tenant table. Upgrade to a ``webhook_subscriptions`` table plus a
@@ -34,6 +41,7 @@ import hashlib
 import hmac
 from collections.abc import Awaitable, Callable
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from ulid import ULID
@@ -55,6 +63,20 @@ EVENT_HEADER = "X-AgentFlow-Event"
 DELIVERY_HEADER = "X-AgentFlow-Delivery"
 
 _BACKOFF_BASE_SECONDS = 0.5
+# ponytail: fixed bounds sized for "a few receivers, hundreds of runs/minute".
+# Make them settings if a deployment needs more parallelism or a bigger queue.
+MAX_IN_FLIGHT = 16
+MAX_PENDING = 1000
+SHUTDOWN_GRACE_SECONDS = 10.0
+
+
+def redact_url(url: str) -> str:
+    """Drop userinfo, query and fragment so tokens never reach the logs."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return urlunsplit((parts.scheme, host, parts.path, "", ""))
 
 
 def parse_webhook_urls(raw: str) -> list[str]:
@@ -93,6 +115,7 @@ class WebhookDispatcher:
         # asyncio only keeps weak refs to tasks; hold them so a delivery is not
         # garbage-collected mid-flight.
         self._tasks: set[asyncio.Task[None]] = set()
+        self._in_flight = asyncio.Semaphore(MAX_IN_FLIGHT)
 
     @property
     def enabled(self) -> bool:
@@ -102,18 +125,40 @@ class WebhookDispatcher:
         """Schedule delivery in the background; returns the task (or None)."""
         if not self.enabled or event.type not in WEBHOOK_EVENT_TYPES:
             return None
+        if len(self._tasks) >= MAX_PENDING:
+            # Receivers are down or far too slow; shedding load beats growing
+            # without bound. The run itself is already persisted.
+            logger.error(
+                "webhook.overflow",
+                event_type=event.type,
+                run_id=event.run_id,
+                pending=len(self._tasks),
+            )
+            return None
         task = asyncio.create_task(self.deliver(event))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
 
-    async def drain(self) -> None:
-        """Wait for every in-flight delivery (worker shutdown, tests)."""
-        if self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+    async def drain(self, grace_seconds: float | None = None) -> int:
+        """Wait for in-flight deliveries; returns how many were still pending.
 
-    async def aclose(self) -> None:
-        await self.drain()
+        With ``grace_seconds`` the remaining tasks are cancelled and counted, so a
+        shutdown never blocks on a receiver's full retry budget.
+        """
+        if not self._tasks:
+            return 0
+        _, pending = await asyncio.wait(list(self._tasks), timeout=grace_seconds)
+        for task in pending:
+            task.cancel()
+        if pending:
+            # Let the cancellation land so the client can be closed cleanly.
+            await asyncio.gather(*pending, return_exceptions=True)
+            logger.error("webhook.shutdown_dropped", pending=len(pending))
+        return len(pending)
+
+    async def aclose(self, grace_seconds: float = SHUTDOWN_GRACE_SECONDS) -> None:
+        await self.drain(grace_seconds)
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -135,16 +180,18 @@ class WebhookDispatcher:
     ) -> bool:
         client = self._get_client()
         failure = "unknown"
+        safe_url = redact_url(url)
         for attempt in range(1, self.max_attempts + 1):
             try:
-                response = await client.post(url, content=body, headers=headers)
+                async with self._in_flight:
+                    response = await client.post(url, content=body, headers=headers)
             except httpx.HTTPError as exc:
                 failure = f"{type(exc).__name__}: {exc}"
             else:
                 if 200 <= response.status_code < 300:
                     logger.info(
                         "webhook.delivered",
-                        url=url,
+                        url=safe_url,
                         event_type=event.type,
                         run_id=event.run_id,
                         attempt=attempt,
@@ -155,7 +202,7 @@ class WebhookDispatcher:
                 delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
                 logger.warning(
                     "webhook.retry",
-                    url=url,
+                    url=safe_url,
                     event_type=event.type,
                     run_id=event.run_id,
                     attempt=attempt,
@@ -165,7 +212,7 @@ class WebhookDispatcher:
                 await self._sleep(delay)
         logger.error(
             "webhook.dropped",
-            url=url,
+            url=safe_url,
             event_type=event.type,
             run_id=event.run_id,
             attempts=self.max_attempts,
