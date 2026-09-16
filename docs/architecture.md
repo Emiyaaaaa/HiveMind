@@ -286,5 +286,6 @@ skips attachment rows (captions stay on the Run transcript for the console).
 ## Unit tests
 
 The Python test suite in `backend/tests/` exercises adapter and queue logic
-with an in-process ASGI client and in-memory or fake Redis. That harness is
-not part of the production topology.
+with an in-process ASGI client, a throwaway file-backed SQLite database and
+in-memory or fake Redis. That harness is not part of the production topology.
+CI runs it, plus the SDK suites, in `.github/workflows/tests.yml`.
