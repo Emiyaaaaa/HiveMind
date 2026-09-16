@@ -48,6 +48,7 @@ from app.runtime.memory_metrics import (
 )
 from app.runtime.messages import messages_from_rows
 from app.runtime.usage import aggregate_run_usage
+from app.runtime.webhooks import get_webhook_dispatcher
 from app.runtime.quota import QuotaExceeded
 from app.schemas.run import EventType, MessagePage, MessageRead, RunCreate, RunEvent, RunResume, RunRetry
 from app.runtime.resume_context import (
@@ -589,22 +590,20 @@ class RunService:
             clear_memory_alerts(run_id)
 
         usage_payload = usage.model_dump()
+        outcome: tuple[EventType, dict[str, Any]] | None = None
         if status == RunStatus.SUCCEEDED:
-            await self._broadcast(
-                "run.completed",
-                run_id,
-                {"output": output, "usage": usage_payload},
-            )
+            outcome = ("run.completed", {"output": output, "usage": usage_payload})
         elif status == RunStatus.FAILED:
-            await self._broadcast("run.failed", run_id, {"error": error})
+            outcome = ("run.failed", {"error": error})
         elif status == RunStatus.CANCELLED:
-            await self._broadcast("run.cancelled", run_id, {"error": error})
+            outcome = ("run.cancelled", {"error": error})
         elif status == RunStatus.WAITING_HUMAN:
-            await self._broadcast(
-                "run.waiting_human",
-                run_id,
-                {"output": output},
-            )
+            outcome = ("run.waiting_human", {"output": output})
+        if outcome is not None:
+            event = await self._broadcast(outcome[0], run_id, outcome[1])
+            # Same frame the SSE client sees, pushed to configured URLs.
+            # Fire-and-forget: a slow receiver must not hold the run's session.
+            get_webhook_dispatcher().dispatch(event)
 
     async def _broadcast(
         self,
@@ -613,7 +612,7 @@ class RunService:
         data: dict[str, Any],
         *,
         persist: bool = True,
-    ) -> None:
+    ) -> RunEvent:
         event = RunEvent(
             type=event_type,
             run_id=run_id,
@@ -621,6 +620,7 @@ class RunService:
             data=data,
         )
         await self.bus.publish(event, persist=persist)
+        return event
 
     async def _handle_event(
         self, run_id: str, event_type: EventType, data: dict[str, Any]

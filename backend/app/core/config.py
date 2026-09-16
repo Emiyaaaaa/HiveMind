@@ -349,6 +349,32 @@ class Settings(BaseSettings):
         description="Maximum upload size per attachment (default 10 MiB).",
     )
 
+    # Outbound webhooks: pushed by whichever process finalises runs (the
+    # worker in queue mode, the API in inline mode). See app/runtime/webhooks.py.
+    webhook_urls: str = Field(
+        default="",
+        description=(
+            "Comma-separated URLs that receive run.completed / run.failed / "
+            "run.cancelled / run.waiting_human as JSON POSTs. Empty disables webhooks."
+        ),
+    )
+    webhook_secret: str | None = Field(
+        default=None,
+        description="HMAC-SHA256 key for the X-AgentFlow-Signature header (unset = unsigned).",
+    )
+    webhook_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=120,
+        description="Per-request timeout for a webhook POST.",
+    )
+    webhook_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Delivery attempts per URL before the event is dropped (exponential backoff).",
+    )
+
 
 def effective_jobs_impl(settings: Settings | None = None) -> JobsImpl:
     """Resolve the job protocol Java and Python must agree on."""
