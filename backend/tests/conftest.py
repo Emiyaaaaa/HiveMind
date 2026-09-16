@@ -45,11 +45,15 @@ get_settings.cache_clear()
 async def _fresh_database() -> AsyncIterator[None]:
     """Drop the SQLite file after every test so state cannot leak between tests."""
     yield
-    if not os.environ["AGENTFLOW_DATABASE_URL"].startswith("sqlite+aiosqlite:///" + str(_db_dir)):
-        return  # caller pointed the suite at their own database; leave it alone
     from app.db.session import engine
 
-    await engine.dispose()  # release pooled connections before unlinking
+    # Dispose unconditionally: pytest-asyncio gives every test its own event
+    # loop, and a pooled connection created on a closed loop fails the next
+    # test with loop-affinity errors (asyncpg is the strict one). Only the
+    # unlink is specific to our scratch file.
+    await engine.dispose()
+    if not os.environ["AGENTFLOW_DATABASE_URL"].startswith("sqlite+aiosqlite:///" + str(_db_dir)):
+        return  # caller pointed the suite at their own database; leave it alone
     for suffix in ("", "-journal", "-wal", "-shm"):
         (_db_dir / f"agentflow.db{suffix}").unlink(missing_ok=True)
 
