@@ -31,6 +31,7 @@ from app.core.telemetry import (
 from app.db.base import Base
 from app.db.session import engine
 from app.events import get_event_bus
+from app.runtime.webhooks import get_webhook_dispatcher
 from app.worker.cancel import get_cancel_registry
 from app.worker.executor import RunExecutor
 from app.worker.monitor import run_queue_monitor
@@ -161,6 +162,7 @@ async def run_forever() -> None:
     await _ensure_schema()
 
     bus = get_event_bus()
+    get_webhook_dispatcher()  # validates AGENTFLOW_WEBHOOK_URLS at boot
     cancel_registry = get_cancel_registry()
     queue = get_job_queue()
     backend = jobs_backend()
@@ -216,6 +218,8 @@ async def run_forever() -> None:
         if schedule_task is not None:
             await schedule_task
         logger.info("worker.shutting_down")
+        # Flush in-flight webhook deliveries before tearing down the loop.
+        await get_webhook_dispatcher().aclose()
         await queue.aclose()
         await cancel_registry.aclose()
         await bus.aclose()

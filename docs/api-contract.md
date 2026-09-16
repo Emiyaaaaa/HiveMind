@@ -617,6 +617,45 @@ the persisted ``step_id`` (nullable when omitted). Broadcast payload:
 }
 ```
 
+### Outbound webhooks (push)
+
+When the runtime is configured with `AGENTFLOW_WEBHOOK_URLS`, the process that
+finalises a run (the Python worker in queue mode, the API in inline mode)
+POSTs the run's outcome to every listed URL. Only four event types are pushed:
+`run.completed`, `run.failed`, `run.cancelled` and `run.waiting_human` (the
+last one is the human-approval notification). Step/message/token events stay
+SSE-only.
+
+The request body is byte-for-byte the SSE frame JSON above (`type`, `run_id`,
+`at`, `data`), so a receiver can reuse its SSE payload parser. Headers:
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-AgentFlow-Event` | the event `type` |
+| `X-AgentFlow-Delivery` | ULID, identical across retries of the same event; de-duplicate on it |
+| `X-AgentFlow-Signature` | `sha256=<hex HMAC-SHA256(secret, raw body)>`; only when `AGENTFLOW_WEBHOOK_SECRET` is set |
+
+Delivery semantics: any 2xx response is treated as delivered. Other statuses
+and transport errors are retried with exponential backoff (0.5s, 1s, 2s, …)
+up to `AGENTFLOW_WEBHOOK_MAX_ATTEMPTS` per URL, then logged as
+`webhook.dropped` and discarded. Delivery is asynchronous and never delays or
+fails the run. Bounds: at most 16 POSTs in flight per process and 1000
+pending deliveries (further events are dropped with `webhook.overflow`); on
+shutdown the process waits up to 10 seconds for in-flight deliveries. Log
+lines show URLs without userinfo, query or fragment. Receivers should be idempotent and verify the signature with a
+constant-time compare:
+
+```python
+import hashlib, hmac
+expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+ok = hmac.compare_digest(expected, request.headers["X-AgentFlow-Signature"])
+```
+
+Subscriptions are process-wide configuration, not per-tenant resources; the
+payload carries `run_id` only, so tenant/agent filtering happens on the
+receiving side (fetch `GET /v1/runs/{id}` with a tenant-scoped key).
+
 ### `POST /v1/runs/{run_id}/erase` → 200
 
 Admin-only GDPR-style erasure of run working memory: deletes all ``Message`` and

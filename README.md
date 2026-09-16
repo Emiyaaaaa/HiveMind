@@ -47,6 +47,10 @@ the API or database schema.
 observability surface across different orchestration engines.
 - **Server-Sent Events.** Run lifecycle changes are emitted as SSE events, so
 clients can follow execution without polling.
+- **Outbound webhooks.** Run outcomes (`run.completed`, `run.failed`,
+`run.cancelled`, `run.waiting_human`) are pushed to configured URLs with
+retries, HMAC-signed when a secret is configured, for integrations that
+cannot hold an SSE stream.
 - **Lightweight admin console.** The Next.js console lists runs, opens run
 details, renders steps and messages, and subscribes to the live event stream.
 - **Contributor-oriented stack.** Java 21, Spring Boot 3, Python 3.12,

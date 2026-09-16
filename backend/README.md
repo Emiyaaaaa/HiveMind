@@ -13,8 +13,10 @@ app/
 ├── db/               SQLAlchemy session/base
 ├── events/           In-memory + Redis event bus
 ├── models/           ORM models
+├── runtime/          Adapter-agnostic runtime helpers (memory window, quotas, webhooks, ...)
 ├── schemas/          Pydantic schemas
-└── services/         Run lifecycle service
+├── services/         Run lifecycle service
+└── worker/           Queue consumer, cancel registry, sweepers
 ```
 
 ## Develop
