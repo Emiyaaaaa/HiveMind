@@ -79,7 +79,7 @@ API↔worker Redis protocol.
    and console observe the same rows and events.
 7. If `AGENTFLOW_WEBHOOK_URLS` is set, the finalising process also POSTs the
    `run.completed` / `run.failed` / `run.cancelled` / `run.waiting_human`
-   frame to each URL (`app/runtime/webhooks.py`, HMAC-signed, retried with
+   frame to each URL (`app/runtime/webhooks.py`, HMAC-signed when a secret is set, retried with
    backoff, never blocking the run). Contract: [api-contract.md](api-contract.md#outbound-webhooks-push).
 
 Cancel works symmetrically: `POST /v1/runs/{id}/cancel` sets a Redis key under

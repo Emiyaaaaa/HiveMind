@@ -640,7 +640,10 @@ Delivery semantics: any 2xx response is treated as delivered. Other statuses
 and transport errors are retried with exponential backoff (0.5s, 1s, 2s, …)
 up to `AGENTFLOW_WEBHOOK_MAX_ATTEMPTS` per URL, then logged as
 `webhook.dropped` and discarded. Delivery is asynchronous and never delays or
-fails the run. Receivers should be idempotent and verify the signature with a
+fails the run. Bounds: at most 16 POSTs in flight per process and 1000
+pending deliveries (further events are dropped with `webhook.overflow`); on
+shutdown the process waits up to 10 seconds for in-flight deliveries. Log
+lines show URLs without userinfo, query or fragment. Receivers should be idempotent and verify the signature with a
 constant-time compare:
 
 ```python
