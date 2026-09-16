@@ -162,6 +162,7 @@ async def run_forever() -> None:
     await _ensure_schema()
 
     bus = get_event_bus()
+    get_webhook_dispatcher()  # validates AGENTFLOW_WEBHOOK_URLS at boot
     cancel_registry = get_cancel_registry()
     queue = get_job_queue()
     backend = jobs_backend()

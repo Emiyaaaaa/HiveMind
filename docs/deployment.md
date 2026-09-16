@@ -48,7 +48,7 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_JOB_QUEUE_DEPTH_ALERT_THRESHOLD` | Warn when `lag + pending` reaches this count (default `100`) |
 | `AGENTFLOW_WORKER_JOB_P95_ALERT_SECONDS` | Warn when rolling worker-job p95 meets or exceeds this duration (default `60`) |
 | `AGENTFLOW_WORKER_JOB_P95_ALERT_MIN_SAMPLES` | Minimum completed jobs before p95 alerting activates (default `10`) |
-| `AGENTFLOW_WEBHOOK_URLS` | Comma-separated URLs that receive `run.completed` / `run.failed` / `run.cancelled` / `run.waiting_human` POSTs (unset = disabled). Contract in [api-contract.md](api-contract.md#outbound-webhooks-push) |
+| `AGENTFLOW_WEBHOOK_URLS` | Comma-separated absolute `http(s)` URLs that receive `run.completed` / `run.failed` / `run.cancelled` / `run.waiting_human` POSTs (unset = disabled; a malformed URL aborts startup). Contract in [api-contract.md](api-contract.md#outbound-webhooks-push) |
 | `AGENTFLOW_WEBHOOK_SECRET` | HMAC-SHA256 key for `X-AgentFlow-Signature` (unset = unsigned; set it whenever receivers are reachable from outside the cluster) |
 | `AGENTFLOW_WEBHOOK_TIMEOUT_SECONDS` | Per-POST timeout (default `10`) |
 | `AGENTFLOW_WEBHOOK_MAX_ATTEMPTS` | Attempts per URL before the event is dropped, exponential backoff (default `3`) |

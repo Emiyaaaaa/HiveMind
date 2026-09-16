@@ -80,12 +80,26 @@ def redact_url(url: str) -> str:
 
 
 def parse_webhook_urls(raw: str) -> list[str]:
-    """Split the comma-separated env value; blanks and duplicates dropped."""
+    """Split the comma-separated env value; blanks and duplicates dropped.
+
+    Raises ``ValueError`` for anything that is not an absolute http(s) URL with
+    a valid port. A bad URL must fail at startup: discovered later, inside a
+    delivery task, it would kill that task before the retry loop and the event
+    would vanish without a ``webhook.dropped`` line.
+    """
     seen: list[str] = []
     for part in raw.split(","):
         url = part.strip()
-        if url and url not in seen:
-            seen.append(url)
+        if not url or url in seen:
+            continue
+        parts = urlsplit(url)
+        try:
+            port = parts.port  # raises ValueError for a non-numeric port
+        except ValueError:
+            port = -1
+        if parts.scheme not in ("http", "https") or not parts.hostname or port == -1:
+            raise ValueError(f"AGENTFLOW_WEBHOOK_URLS: invalid webhook URL {url!r}")
+        seen.append(url)
     return seen
 
 

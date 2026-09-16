@@ -80,6 +80,20 @@ def test_parse_webhook_urls_trims_blanks_and_duplicates():
     assert parse_webhook_urls("") == []
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://hooks.example:bad/path",  # non-numeric port -> urlsplit().port raises
+        "hooks.example/path",  # no scheme
+        "ftp://hooks.example/path",  # not http(s)
+        "https:///path",  # no host
+    ],
+)
+def test_parse_webhook_urls_rejects_malformed_urls_at_config_time(raw: str):
+    with pytest.raises(ValueError, match="invalid webhook URL"):
+        parse_webhook_urls(raw)
+
+
 @pytest.mark.asyncio
 async def test_deliver_posts_signed_sse_frame_to_every_url():
     receiver = _Receiver([200, 200])

@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
 
     bus = get_event_bus()
+    get_webhook_dispatcher()  # validates AGENTFLOW_WEBHOOK_URLS at boot
     logger.info("agentflow.startup", version=__version__)
     try:
         yield
