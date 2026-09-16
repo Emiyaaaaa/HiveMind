@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -80,3 +81,77 @@ class RunCreateRequest:
     input: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     adapter: str | None = None
+    thread_id: str | None = None
+
+
+@dataclass(slots=True)
+class MessagePage:
+    """One page of a run or thread transcript.
+
+    ``next_cursor`` is an int for ``GET /v1/runs/{id}/messages`` (exclusive
+    upper ``index`` bound) and an opaque string for
+    ``GET /v1/threads/{id}/messages``; pass it back verbatim to load older
+    messages. ``None`` / ``has_more=False`` means the oldest page was reached.
+    """
+
+    items: list[dict[str, Any]]
+    next_cursor: int | str | None
+    has_more: bool
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> MessagePage:
+        return cls(
+            items=list(data.get("items") or []),
+            next_cursor=data.get("next_cursor"),
+            has_more=bool(data.get("has_more", False)),
+        )
+
+
+@dataclass(slots=True)
+class Thread:
+    id: str
+    tenant_id: str
+    agent_id: str
+    created_at: str
+    updated_at: str
+    project_id: str | None = None
+    user_id: str | None = None
+    title: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Thread:
+        return cls(
+            id=str(data["id"]),
+            tenant_id=str(data["tenant_id"]),
+            project_id=data.get("project_id"),
+            agent_id=str(data["agent_id"]),
+            user_id=data.get("user_id"),
+            title=data.get("title"),
+            created_at=str(data["created_at"]),
+            updated_at=str(data["updated_at"]),
+        )
+
+
+@dataclass(slots=True)
+class RunAuditEvent:
+    """Cancel/resume governance record from ``GET /v1/runs/{id}/audit``."""
+
+    id: str
+    run_id: str
+    action: str
+    actor_subject: str
+    actor_role: str
+    created_at: str
+    detail: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RunAuditEvent:
+        return cls(
+            id=str(data["id"]),
+            run_id=str(data["run_id"]),
+            action=str(data["action"]),
+            actor_subject=str(data.get("actor_subject") or ""),
+            actor_role=str(data.get("actor_role") or ""),
+            detail=dict(data.get("detail") or {}),
+            created_at=str(data["created_at"]),
+        )
