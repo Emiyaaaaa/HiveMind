@@ -50,6 +50,6 @@ connection across every session, which makes the request session and the
 run executor's session trample each other. Export `AGENTFLOW_DATABASE_URL`
 yourself to run the suite against another database.
 
-The same command runs in CI on every push and pull request
-(`.github/workflows/tests.yml`, together with the Python and TypeScript SDK
-tests).
+The same command runs in CI on pushes to `main` and on pull requests
+targeting `main` (`.github/workflows/tests.yml`, together with the Python
+and TypeScript SDK tests).
