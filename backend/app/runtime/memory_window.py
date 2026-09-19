@@ -10,6 +10,11 @@ Agent config::
     }
 
 When ``window_tokens`` is 0 (default) messages pass through unchanged.
+
+Bounded context assembly pins every ``system`` message, then greedily keeps
+the newest non-system turns under the token budget. Dropped turns can be
+compacted into a system-level summary. After trimming, tool-call chains are
+repaired so a window never starts on an orphan ``role=tool`` message.
 """
 
 from __future__ import annotations
@@ -69,17 +74,40 @@ def _summarize_dropped(messages: list[dict[str, Any]]) -> str:
     return f"[Earlier conversation summary]\n{body}"
 
 
+def _suffix_dropped(
+    rest: list[dict[str, Any]], kept: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Messages in ``rest`` that sit before the kept suffix."""
+    if not kept:
+        return list(rest)
+    start = len(rest) - len(kept)
+    if start < 0 or rest[start:] != kept:
+        # kept is not a clean suffix (should not happen); drop nothing extra.
+        return []
+    return rest[:start]
+
+
 def _repair_tool_chain(
     rest: list[dict[str, Any]], kept: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Ensure a leading tool message still has its assistant tool-call parent."""
+) -> list[dict[str, Any]]:
+    """Ensure a leading tool message still has its assistant tool-call parent.
+
+    Walks backward through ``rest`` while the window head is ``role=tool``,
+    prepending the prior message so OpenAI-compatible tool protocols stay valid.
+    """
     while kept and kept[0].get("role") == "tool":
         idx = len(rest) - len(kept) - 1
         if idx < 0:
             break
         kept = [rest[idx], *kept]
-    dropped = rest[: len(rest) - len(kept)]
-    return dropped, kept
+    return kept
+
+
+def _drop_leading_orphan_tools(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """When shrinking for budget, drop orphan tool heads instead of repairing up."""
+    while kept and kept[0].get("role") == "tool":
+        kept = kept[1:]
+    return kept
 
 
 def fit_messages_to_window(
@@ -109,16 +137,24 @@ def fit_messages_to_window(
         else:
             break
 
-    dropped, kept = _repair_tool_chain(rest, kept)
+    kept = _repair_tool_chain(rest, kept)
+    dropped = _suffix_dropped(rest, kept)
 
-    if dropped and summarize:
+    if not dropped:
+        return [*systems, *kept]
+
+    if not summarize:
+        return [*systems, *kept]
+
+    while True:
         summary = {"role": "system", "content": _summarize_dropped(dropped)}
-        while (
-            len(kept) > 1
-            and _messages_cost([*systems, summary, *kept]) > window_tokens
-        ):
-            dropped = [*dropped, kept.pop(0)]
-            summary = {"role": "system", "content": _summarize_dropped(dropped)}
-        return [*systems, summary, *kept]
-
-    return [*systems, *kept]
+        assembled = [*systems, summary, *kept]
+        if _messages_cost(assembled) <= window_tokens or len(kept) <= 1:
+            return assembled
+        # Summary pushed us over budget: drop the oldest kept turn. If that
+        # would leave an orphan tool head, drop those tools into the summary
+        # rather than repairing upward (which would fight the budget).
+        kept = _drop_leading_orphan_tools(kept[1:])
+        dropped = _suffix_dropped(rest, kept)
+        if not dropped:
+            return [*systems, *kept]
