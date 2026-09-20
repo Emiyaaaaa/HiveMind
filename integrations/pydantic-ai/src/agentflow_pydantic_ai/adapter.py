@@ -1,4 +1,4 @@
-"""Run an existing PydanticAI agent on AgentFlow's adapter surface."""
+"""Run an existing PydanticAI agent on Hivemind's adapter surface."""
 
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ class PydanticAIAdapter(OrchestratorAdapter):
 
 
 def uses_agentflow_tools(config: dict[str, Any]) -> bool:
-    """Return whether this run asks AgentFlow to inject managed tools."""
+    """Return whether this run asks Hivemind to inject managed tools."""
     return bool(config.get("tools") or config.get("mcp_auto_register"))
 
 
@@ -156,7 +156,7 @@ async def emit_tool_result(
     event: FunctionToolResultEvent,
     active_tools: dict[str, tuple[str, str, float]],
 ) -> None:
-    """Pair provider tool IDs locally while persisting AgentFlow-owned ULIDs."""
+    """Pair provider tool IDs locally while persisting Hivemind-owned ULIDs."""
     provider_id = event.tool_call_id
     active = active_tools.pop(provider_id, None)
     name = event.part.tool_name or (active[0] if active else "unknown")

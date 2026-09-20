@@ -2,7 +2,7 @@
 
 The adapter constructs a ``StateGraph`` from the agent's config and streams
 every node tick back to the runtime through ``AdapterContext``. LangGraph is
-imported lazily so the rest of AgentFlow does not pay the import cost in tests
+imported lazily so the rest of Hivemind does not pay the import cost in tests
 that exercise only the echo adapter.
 
 Expected agent.config shape (all optional except when using custom graphs):

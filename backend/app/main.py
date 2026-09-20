@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AgentFlow",
+    title="Hivemind",
     version=__version__,
     description="Open-source multi-agent runtime.",
     lifespan=lifespan,

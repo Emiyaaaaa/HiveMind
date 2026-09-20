@@ -1,4 +1,4 @@
-"""Official PydanticAI adapter plugin for AgentFlow."""
+"""Official PydanticAI adapter plugin for Hivemind."""
 
 from agentflow_pydantic_ai.adapter import PydanticAIAdapter
 from agentflow_pydantic_ai.toolset import AgentFlowToolset

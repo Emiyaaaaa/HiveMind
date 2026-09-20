@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
-  title: AgentFlow API
+  title: Hivemind API
   version: 0.1.0
   description: |
-    HTTP surface for AgentFlow runs, agents, and streaming events.
+    HTTP surface for Hivemind runs, agents, and streaming events.
     Behavioral notes and SSE event types are documented in docs/api-contract.md.
   license:
     name: Apache 2.0

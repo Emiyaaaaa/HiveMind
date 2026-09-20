@@ -1,6 +1,6 @@
 # Architecture
 
-AgentFlow is intentionally small. Every concept maps to a single file or a
+Hivemind is intentionally small. Every concept maps to a single file or a
 small package so contributors can read the whole runtime in an afternoon.
 
 ## Runtime topology
@@ -144,7 +144,7 @@ The official AutoGen integration lives in `integrations/autogen` and registers
 the `autogen` entry point. A trusted `agent_factory` or `team_factory` returns
 an AutoGen AgentChat agent or team. Single-agent runs map to one step; team
 runs can emit one step per agent turn. Token deltas, messages, native tool
-events, and AgentFlow-managed tools (via `AdapterToolSurface`) are translated
+events, and Hivemind-managed tools (via `AdapterToolSurface`) are translated
 to the same adapter contract.
 
 ## MCP tool bridge
@@ -224,7 +224,7 @@ propagate. Raw errors are persisted on `ToolCall.error`; the model only sees
 a structured observation without traceback, arguments, or raw MCP text.
 
 Provider `tool_call_id` values pair assistant tool calls with `role=tool`
-messages. AgentFlow lifecycle ULIDs pair `tool_call.started` /
+messages. Hivemind lifecycle ULIDs pair `tool_call.started` /
 `tool_call.completed` events with `ToolCall.id` rows — these identifiers are
 not unified in v1.
 

@@ -1,4 +1,4 @@
-"""Typed REST client for the AgentFlow API.
+"""Typed REST client for the Hivemind API.
 
 Covers the run lifecycle end to end: create, poll/wait, cancel, retry a
 failed run, resume a ``waiting_human`` run after approval, page through the
@@ -37,7 +37,7 @@ def _page_params(cursor: int | str | None, limit: int | None) -> dict[str, Any]:
 
 
 class AgentFlowClient:
-    """Thin wrapper around the AgentFlow `/v1` HTTP API."""
+    """Thin wrapper around the Hivemind `/v1` HTTP API."""
 
     def __init__(
         self,

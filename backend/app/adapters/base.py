@@ -223,7 +223,7 @@ class AdapterResult:
 
 
 class OrchestratorAdapter(ABC):
-    """Implement this to plug a new multi-agent framework into AgentFlow."""
+    """Implement this to plug a new multi-agent framework into Hivemind."""
 
     name: str = "base"
 

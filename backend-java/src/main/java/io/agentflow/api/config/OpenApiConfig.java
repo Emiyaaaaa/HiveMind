@@ -20,12 +20,12 @@ public class OpenApiConfig {
     public OpenAPI agentflowOpenApi(AgentflowProperties properties) {
         return new OpenAPI()
                 .info(new Info()
-                        .title("AgentFlow API")
+                        .title("Hivemind API")
                         .version(properties.getVersion())
                         .description(
-                                "HTTP surface for AgentFlow runs, agents, and streaming events. "
+                                "HTTP surface for Hivemind runs, agents, and streaming events. "
                                         + "See docs/api-contract.md for behavioral notes.")
-                        .contact(new Contact().name("AgentFlow").url("https://github.com/hivemind/agentflow"))
+                        .contact(new Contact().name("Hivemind").url("https://github.com/hivemind/agentflow"))
                         .license(new License().name("Apache 2.0")))
                 .components(new Components()
                         .addSecuritySchemes(

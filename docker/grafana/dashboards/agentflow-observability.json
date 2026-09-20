@@ -211,7 +211,7 @@
     ]
   },
   "time": { "from": "now-1h", "to": "now" },
-  "title": "AgentFlow observability",
+  "title": "Hivemind observability",
   "uid": "agentflow-observability",
   "version": 2
 }

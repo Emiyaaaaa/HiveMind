@@ -1,7 +1,7 @@
-# AgentFlow PydanticAI adapter
+# Hivemind PydanticAI adapter
 
 This optional plugin runs an existing PydanticAI `Agent` and translates its
-text stream, usage, result, and native tool/MCP events to AgentFlow's shared
+text stream, usage, result, and native tool/MCP events to Hivemind's shared
 runtime contract.
 
 ## Install
@@ -20,7 +20,7 @@ pip install -e ./backend -e ./integrations/pydantic-ai
 ```
 
 The package registers `pydantic-ai` in the `agentflow.adapters` entry-point
-group. It does not add PydanticAI to AgentFlow's core dependencies.
+group. It does not add PydanticAI to Hivemind's core dependencies.
 
 ## Define the Agent
 
@@ -51,7 +51,7 @@ uses MCP tools via `mcp_auto_register` or an explicit `mcp/<server>/<tool>` entr
 pip install "agentflow-pydantic-ai[mcp]"
 ```
 
-## AgentFlow config
+## Hivemind config
 
 ```json
 {
@@ -64,16 +64,16 @@ pip install "agentflow-pydantic-ai[mcp]"
 ```
 
 `tools`, `mcp_servers`, and `mcp_auto_register` use the same format as other
-AgentFlow adapters. The adapter exposes resolved tools to PydanticAI for the
+Hivemind adapters. The adapter exposes resolved tools to PydanticAI for the
 current run and delegates their execution back to `AdapterToolSurface`.
 
 `agent_factory` imports and executes trusted Python code in the worker process.
 Only administrators should be allowed to configure it; this plugin is not a
 sandbox.
 
-One PydanticAI run maps to one AgentFlow step. The plugin emits user and
+One PydanticAI run maps to one Hivemind step. The plugin emits user and
 assistant messages, token deltas, provider usage/cost when available, and
-AgentFlow-owned ToolCall IDs for PydanticAI function-tool and MCP events.
+Hivemind-owned ToolCall IDs for PydanticAI function-tool and MCP events.
 
 The plugin deliberately does not rebuild Agents from JSON or implement
 checkpoint/retry, HITL, and deferred tools.

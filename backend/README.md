@@ -1,4 +1,4 @@
-# AgentFlow backend
+# Hivemind backend
 
 FastAPI runtime that exposes the agent execution API and a default LangGraph
 orchestrator adapter.

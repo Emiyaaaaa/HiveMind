@@ -1,5 +1,5 @@
 /**
- * Typed REST client for the AgentFlow `/v1` API.
+ * Typed REST client for the Hivemind `/v1` API.
  *
  * Covers the run lifecycle end to end: create, poll/wait, cancel, retry a
  * failed run, resume a `waiting_human` run after approval, page through the

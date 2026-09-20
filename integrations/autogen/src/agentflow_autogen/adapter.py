@@ -1,4 +1,4 @@
-"""Run an existing AutoGen agent or team on AgentFlow's adapter surface."""
+"""Run an existing AutoGen agent or team on Hivemind's adapter surface."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ class AutoGenAdapter(OrchestratorAdapter):
 
 
 class _StreamHandler:
-    """Translate AutoGen stream events into AgentFlow adapter events."""
+    """Translate AutoGen stream events into Hivemind adapter events."""
 
     def __init__(
         self,

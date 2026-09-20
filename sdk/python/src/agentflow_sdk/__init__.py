@@ -1,4 +1,4 @@
-"""AgentFlow Python SDK."""
+"""Hivemind Python SDK."""
 
 from agentflow_sdk.client import AgentFlowClient, RunTimeoutError
 from agentflow_sdk.events import RunEvent, subscribe_run_events

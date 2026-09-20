@@ -1,4 +1,4 @@
-# AgentFlow Java API
+# Hivemind Java API
 
 Spring Boot 3 implementation of the frontend-facing API surface documented in
 [`../docs/api-contract.md`](../docs/api-contract.md). Agent orchestration runs

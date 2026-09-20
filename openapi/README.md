@@ -1,6 +1,6 @@
 # OpenAPI spec and SDK generation
 
-The AgentFlow HTTP contract is defined in [`openapi.yaml`](openapi.yaml), aligned
+The Hivemind HTTP contract is defined in [`openapi.yaml`](openapi.yaml), aligned
 with [`docs/api-contract.md`](../docs/api-contract.md).
 
 ## Export from the Java API (springdoc)

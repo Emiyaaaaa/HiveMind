@@ -1,7 +1,7 @@
 [project]
 name = "agentflow-autogen"
 version = "0.1.0"
-description = "Official AutoGen adapter plugin for AgentFlow"
+description = "Official AutoGen adapter plugin for Hivemind"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }

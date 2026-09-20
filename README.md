@@ -1,4 +1,4 @@
-# HiveMind
+# Hivemind
 
 > A Python-first runtime layer for multi-agent systems, with persistent run
 > state, streaming execution events, and a pluggable orchestration interface.
@@ -8,7 +8,7 @@
 [License](LICENSE)
 [Python](https://www.python.org)
 
-AgentFlow provides the runtime infrastructure for multi-agent applications.
+Hivemind provides the runtime infrastructure for multi-agent applications.
 It does not replace frameworks such as LangGraph, AutoGen or CrewAI. Instead,
 it gives them a consistent execution model: agents are invoked as runs, runs
 produce ordered steps and messages, tool calls are recorded, and every state
@@ -32,7 +32,7 @@ concerns that sit outside the framework itself:
 - a stable abstraction for switching or mixing orchestration frameworks;
 - an operator-facing console for inspecting active and historical runs.
 
-AgentFlow focuses on that runtime boundary. The stack pairs a Java/Spring Boot
+Hivemind focuses on that runtime boundary. The stack pairs a Java/Spring Boot
 API for HTTP and SSE with Python workers for adapter execution, SQLAlchemy and
 Alembic for persistence, and Redis for job queues and live events.
 
@@ -220,7 +220,7 @@ PydanticAI to the core backend dependency set.
 
 ## Current architecture (summary)
 
-AgentFlow is a **split runtime**: a Java API tier, a Python execution tier,
+Hivemind is a **split runtime**: a Java API tier, a Python execution tier,
 and shared infrastructure.
 
 

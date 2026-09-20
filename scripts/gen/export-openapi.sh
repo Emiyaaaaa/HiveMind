@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Export the AgentFlow OpenAPI spec from the Spring Boot API (springdoc).
+# Export the Hivemind OpenAPI spec from the Spring Boot API (springdoc).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
