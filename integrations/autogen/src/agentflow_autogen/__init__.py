@@ -1,4 +1,4 @@
-"""Official AutoGen adapter plugin for AgentFlow."""
+"""Official AutoGen adapter plugin for Hivemind."""
 
 from agentflow_autogen.adapter import AutoGenAdapter
 

@@ -1,4 +1,4 @@
-"""Bridge AgentFlow-managed tools into AutoGen ``FunctionTool`` instances."""
+"""Bridge Hivemind-managed tools into AutoGen ``FunctionTool`` instances."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-# AgentFlow
+# Hivemind
 
 > 面向 multi-agent 系统的 Python-first 运行时层，提供持久化运行状态、
 > 流式执行事件和可插拔的编排接口。
@@ -8,7 +8,7 @@
 [License](LICENSE)
 [Python](https://www.python.org)
 
-AgentFlow 提供 multi-agent 应用所需的运行时基础设施。它不替代
+Hivemind 提供 multi-agent 应用所需的运行时基础设施。它不替代
 LangGraph、AutoGen 或 CrewAI 这类编排框架，而是在它们外层提供统一的执行模型：
 agent 以 run 的形式被调用，run 产生有序的 step 和 message，tool call 被持久化记录，
 每一次状态变化都可以作为事件流推送给客户端。
@@ -29,7 +29,7 @@ agent 以 run 的形式被调用，run 产生有序的 step 和 message，tool c
 - 可替换或混用不同编排框架的稳定抽象；
 - 面向开发和运维的运行检查控制台。
 
-AgentFlow 聚焦在这个运行时边界：Java/Spring Boot 提供 HTTP 与 SSE，
+Hivemind 聚焦在这个运行时边界：Java/Spring Boot 提供 HTTP 与 SSE，
 Python worker 执行 adapter，SQLAlchemy + Alembic 负责持久化，Redis 负责
 任务队列与实时事件。
 
@@ -183,7 +183,7 @@ PydanticAI 依赖。
 
 ## 当前架构（摘要）
 
-AgentFlow 是**分层运行时**：Java API 层、Python 执行层、共享基础设施。
+Hivemind 是**分层运行时**：Java API 层、Python 执行层、共享基础设施。
 
 
 | 层级     | 技术栈                          | 职责                                   |

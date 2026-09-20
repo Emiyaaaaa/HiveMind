@@ -1,6 +1,6 @@
-# AgentFlow SDKs
+# Hivemind SDKs
 
-Official client libraries for the AgentFlow HTTP API.
+Official client libraries for the Hivemind HTTP API.
 
 | Language | Package | Highlights |
 | --- | --- | --- |

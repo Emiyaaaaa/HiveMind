@@ -1,6 +1,6 @@
-# AgentFlow console
+# Hivemind console
 
-Next.js 15 + React 19 admin UI for AgentFlow. Renders the run list, a run
+Next.js 15 + React 19 admin UI for Hivemind. Renders the run list, a run
 detail view with step timeline, message stream and tool calls, plus a live
 SSE log panel.
 

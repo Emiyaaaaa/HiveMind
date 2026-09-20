@@ -1,6 +1,6 @@
 # Production deployment
 
-AgentFlow runs as a Java API + Python worker(s) + Postgres + Redis stack.
+Hivemind runs as a Java API + Python worker(s) + Postgres + Redis stack.
 
 ## Components
 

@@ -1,6 +1,6 @@
-# AgentFlow TypeScript SDK
+# Hivemind TypeScript SDK
 
-Typed client for the AgentFlow `/v1` HTTP API. The OpenAPI contract lives in
+Typed client for the Hivemind `/v1` HTTP API. The OpenAPI contract lives in
 [`openapi/openapi.yaml`](../../openapi/openapi.yaml).
 
 ## Install

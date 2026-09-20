@@ -1,6 +1,6 @@
 variable "kubeconfig_path" {
   type        = string
-  description = "Path to a kubeconfig that can install the AgentFlow chart."
+  description = "Path to a kubeconfig that can install the Hivemind chart."
   default     = "~/.kube/config"
 }
 
@@ -12,7 +12,7 @@ variable "kubeconfig_context" {
 
 variable "namespace" {
   type        = string
-  description = "Kubernetes namespace for AgentFlow."
+  description = "Kubernetes namespace for Hivemind."
   default     = "agentflow"
 }
 

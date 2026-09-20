@@ -1,6 +1,6 @@
 # Data model
 
-AgentFlow stores every adapter execution in a small set of tables. The shape
+Hivemind stores every adapter execution in a small set of tables. The shape
 is deliberately framework-agnostic so a single UI and SDK can render any
 agent system.
 

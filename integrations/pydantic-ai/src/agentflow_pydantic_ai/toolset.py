@@ -1,4 +1,4 @@
-"""Expose AgentFlow-managed tools as a per-run PydanticAI toolset."""
+"""Expose Hivemind-managed tools as a per-run PydanticAI toolset."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class AgentFlowToolset(AbstractToolset[Any]):
             existing = self._tools.get(exposed_name)
             if existing is not None and existing.name != tool.name:
                 raise ValueError(
-                    "AgentFlow tool names "
+                    "Hivemind tool names "
                     f"{existing.name!r} and {tool.name!r} both map to "
                     f"PydanticAI name {exposed_name!r}"
                 )
@@ -70,7 +70,7 @@ class AgentFlowToolset(AbstractToolset[Any]):
         return frozenset(self._tools)
 
     def owns(self, name: str | None) -> bool:
-        """Return whether an event belongs to an AgentFlow-managed tool."""
+        """Return whether an event belongs to an Hivemind-managed tool."""
         return name in self._tools if name is not None else False
 
     async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
@@ -101,7 +101,7 @@ class AgentFlowToolset(AbstractToolset[Any]):
         del ctx, tool
         definition = self._tools.get(name)
         if definition is None:
-            raise KeyError(f"Unknown AgentFlow tool: {name!r}")
+            raise KeyError(f"Unknown Hivemind tool: {name!r}")
         return await self._surface.execute(
             self._adapter_ctx,
             step_index=self._step_index,

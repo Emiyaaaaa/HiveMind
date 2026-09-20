@@ -17,7 +17,7 @@
     <version>0.1.0</version>
     <packaging>jar</packaging>
     <name>agentflow-api</name>
-    <description>Java/Spring Boot API server for AgentFlow.</description>
+    <description>Java/Spring Boot API server for Hivemind.</description>
 
     <properties>
         <java.version>21</java.version>

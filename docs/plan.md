@@ -1,4 +1,4 @@
-# AgentFlow 后续开发计划
+# Hivemind 后续开发计划
 
 架构与数据模型见 [architecture.md](architecture.md) 与 [data-model.md](data-model.md)。
 

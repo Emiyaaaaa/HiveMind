@@ -130,7 +130,7 @@ def truncate(text: str, limit: int) -> str:
 
 
 def build_prompt(title: str, body: str, author: str, base: str, head: str, diff: str) -> list[dict[str, str]]:
-    system = """你是 AgentFlow（HiveMind）仓库的资深代码审查助手。
+    system = """你是 Hivemind 仓库的资深代码审查助手。
 根据 PR 标题、描述和 diff，给出可执行的审查建议。
 
 要求：

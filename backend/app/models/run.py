@@ -1,6 +1,6 @@
 """Runtime entities: Run, Step, Message, ToolCall, Checkpoint.
 
-These tables form the core observability surface of AgentFlow. Every adapter
+These tables form the core observability surface of Hivemind. Every adapter
 writes into the same shape so the UI and SDK can render any agent execution
 without knowing the underlying framework.
 """
@@ -171,7 +171,7 @@ class ToolCall(Base):
 class Checkpoint(Base):
     """Adapter-defined snapshot used for resume / replay.
 
-    The `state` blob is opaque to AgentFlow: each adapter encodes what it
+    The `state` blob is opaque to Hivemind: each adapter encodes what it
     needs (LangGraph snapshot bytes encoded as JSON-safe payload, AutoGen
     conversation history, etc.). The runtime only guarantees ordering and
     durability.
