@@ -37,7 +37,7 @@ export default function HomePage() {
   });
 
   const [agentName, setAgentName] = useState("echo-bot");
-  const [prompt, setPrompt] = useState("hello, agentflow");
+  const [prompt, setPrompt] = useState("hello, hivemind");
 
   const createAgent = useMutation({
     mutationFn: () => api.createAgent({ name: agentName, adapter: "echo" }),
@@ -59,7 +59,7 @@ export default function HomePage() {
   return (
     <div className="max-w-3xl mx-auto space-y-8">
       <section className="space-y-2">
-        <h1 className="text-2xl font-semibold">AgentFlow</h1>
+        <h1 className="text-2xl font-semibold">Hivemind</h1>
         <p className="text-muted">
           A Python-first runtime for multi-agent systems. Define agents,
           launch runs, watch every step stream into the console.
