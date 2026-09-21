@@ -6,6 +6,7 @@ from app.api.v1 import (
     batches,
     events,
     health,
+    memories,
     projects,
     retention,
     runs,
@@ -18,6 +19,7 @@ api_router.include_router(health.router)
 api_router.include_router(projects.router)
 api_router.include_router(agents.router)
 api_router.include_router(threads.router)
+api_router.include_router(memories.router)
 api_router.include_router(attachments.router)
 api_router.include_router(runs.router)
 api_router.include_router(batches.router)

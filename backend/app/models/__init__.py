@@ -2,6 +2,7 @@ from app.models.agent import Agent, AgentVersion
 from app.models.attachment import Attachment
 from app.models.audit import RunAuditEvent
 from app.models.batch import RunBatch
+from app.models.memory import MemoryItem
 from app.models.project import Project
 from app.models.quota import AgentQuotaUsage
 from app.models.run import Checkpoint, Message, Run, RunStatus, Step, ToolCall
@@ -15,6 +16,7 @@ __all__ = [
     "Attachment",
     "Checkpoint",
     "Message",
+    "MemoryItem",
     "Project",
     "Run",
     "RunAuditEvent",

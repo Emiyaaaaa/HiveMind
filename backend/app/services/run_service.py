@@ -564,6 +564,17 @@ class RunService:
                 )
 
         run.metadata_ = meta
+        if status in (RunStatus.SUCCEEDED, RunStatus.FAILED):
+            # Same transaction as the terminal status, so a poll that sees
+            # succeeded/failed also sees the episode. Failures here roll back
+            # only the summary, not the run.
+            from app.services.episode_service import EpisodeService
+
+            try:
+                async with self.session.begin_nested():
+                    await EpisodeService(self.session).ingest_run(run)
+            except Exception:
+                logger.exception("episode_ingest_failed", run_id=run_id)
         await self.session.commit()
 
         if status in (
