@@ -29,6 +29,17 @@ def new_tool_call_id() -> str:
 
 
 @dataclass
+class MemoryHit:
+    """One recalled memory row. ``id`` is what audit ``memory_hit_ids`` stores."""
+
+    id: str
+    content: str
+    score: float = 0.0
+    source_run_id: str | None = None
+    kind: str = "episode"
+
+
+@dataclass
 class AdapterContext:
     """Per-run state exposed to adapters.
 
@@ -48,6 +59,8 @@ class AdapterContext:
     # Prior turns from the same thread (window-trimmed); empty when no thread.
     thread_id: str | None = None
     thread_messages: list[dict[str, Any]] = field(default_factory=list)
+    # Episodes recalled for this run (empty when none). Also seeded as a system turn.
+    memory_hits: list[MemoryHit] = field(default_factory=list)
     # Multimodal attachments bound to this run (metadata + storage_key); empty when none.
     attachments: list[Any] = field(default_factory=list)
     step_index_base: int = 0

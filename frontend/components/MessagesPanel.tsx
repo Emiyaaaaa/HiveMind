@@ -28,6 +28,16 @@ function isAttachment(message: Message): boolean {
   return Array.isArray(attachments) && attachments.length > 0;
 }
 
+function isMemory(message: Message): boolean {
+  return message.extra?.kind === "memory";
+}
+
+function memoryHitIds(message: Message): string {
+  const raw = message.extra?.memory_hit_ids;
+  if (!Array.isArray(raw)) return "";
+  return raw.filter((id): id is string => typeof id === "string").join(", ");
+}
+
 function isStreaming(message: Message): boolean {
   const kind = message.extra?.kind;
   return (
@@ -299,6 +309,20 @@ export function MessagesPanel({
                   })}
                 </ul>
               </li>
+            );
+          }
+          if (isMemory(message)) {
+            const ids = memoryHitIds(message);
+            return (
+              <CollapsibleBlock
+                key={key}
+                title="injected memory"
+                meta={ids ? `#${message.index} · ${ids}` : `#${message.index}`}
+                content={message.content}
+                expanded={expanded.has(key)}
+                onToggle={() => toggle(key)}
+                dashed
+              />
             );
           }
           return (

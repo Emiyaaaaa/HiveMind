@@ -20,6 +20,7 @@ from app.models import (  # noqa: F401 -- ensure models are imported
     Agent,
     Attachment,
     Checkpoint,
+    MemoryItem,
     Message,
     Project,
     Run,

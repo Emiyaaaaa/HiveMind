@@ -43,6 +43,11 @@ from app.services.agent_versions import (
     agent_version_from_metadata,
     get_agent_version,
 )
+from app.services.episode_service import (
+    EpisodeService,
+    prompt_text,
+    render_episode_block,
+)
 from app.worker.cancel import CancelRegistry, InMemoryCancelRegistry
 
 logger = get_logger("worker.executor")
@@ -146,6 +151,19 @@ class RunExecutor:
                     agent_config=agent_config,
                 )
 
+            memory_hits: list[Any] = []
+            if resume_ctx is None:
+                try:
+                    memory_hits = await EpisodeService(session).recall(
+                        tenant_id=run.tenant_id,
+                        agent_id=run.agent_id,
+                        thread_id=run.thread_id,
+                        query=prompt_text(run.input),
+                    )
+                except Exception:
+                    logger.exception("episode_recall_failed", run_id=run_id)
+                    memory_hits = []
+
             from app.services.attachment_service import AttachmentService
 
             attachments = await AttachmentService(session).list_for_run(run.id)
@@ -153,6 +171,22 @@ class RunExecutor:
             run.status = RunStatus.RUNNING
             await session.commit()
             await service._broadcast("run.started", run.id, {})
+
+            if memory_hits:
+                block = render_episode_block(memory_hits)
+                thread_messages = [block, *thread_messages]
+                await service._handle_event(
+                    run.id,
+                    "message.created",
+                    {
+                        "role": "system",
+                        "content": block["content"],
+                        "extra": {
+                            "kind": "memory",
+                            "memory_hit_ids": [hit.id for hit in memory_hits],
+                        },
+                    },
+                )
 
             # Serialize DB writes: adapters may emit from concurrent tasks
             # (e.g. parallel tool calls) while sharing one AsyncSession.
@@ -172,6 +206,7 @@ class RunExecutor:
                 run_messages=run_messages,
                 thread_id=run.thread_id,
                 thread_messages=thread_messages,
+                memory_hits=memory_hits,
                 attachments=attachments,
                 step_index_base=step_index_base,
                 emit=_emit,

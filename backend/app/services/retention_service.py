@@ -42,8 +42,10 @@ def register_memory_erasure_hook(hook: MemoryErasureHook) -> None:
 
 def _register_builtin_hooks() -> None:
     from app.services.attachment_service import AttachmentErasureHook
+    from app.services.episode_service import EpisodeErasureHook
 
     register_memory_erasure_hook(AttachmentErasureHook())
+    register_memory_erasure_hook(EpisodeErasureHook())
 
 
 _register_builtin_hooks()
