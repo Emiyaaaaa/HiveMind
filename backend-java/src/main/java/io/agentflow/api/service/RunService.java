@@ -106,11 +106,12 @@ public class RunService {
 
         String threadId = req.getThreadId();
         if (threadId != null && !threadId.isBlank()) {
+            final String requestedThreadId = threadId;
             ThreadEntity thread = threads
-                    .findByIdAndTenantId(threadId, agent.getTenantId())
-                    .orElseThrow(() -> new ThreadNotFoundException(threadId));
+                    .findByIdAndTenantId(requestedThreadId, agent.getTenantId())
+                    .orElseThrow(() -> new ThreadNotFoundException(requestedThreadId));
             if (!agent.getId().equals(thread.getAgentId())) {
-                throw new ThreadNotFoundException(threadId);
+                throw new ThreadNotFoundException(requestedThreadId);
             }
         } else {
             threadId = null;
