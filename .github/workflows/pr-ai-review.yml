@@ -45,7 +45,7 @@ jobs:
 
       - name: Checkout base branch only
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # pull_request_target defaults to the base branch. Do not override
           # ref to the PR head — never run untrusted contributor code here.

@@ -35,7 +35,7 @@ jobs:
           - language: java
             build-mode: manual
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Java
         if: matrix.language == 'java'
@@ -67,7 +67,7 @@ jobs:
     if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build alert summary and upsert Issue
         env:
