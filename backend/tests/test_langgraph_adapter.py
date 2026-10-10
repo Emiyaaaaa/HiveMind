@@ -499,6 +499,57 @@ async def test_langgraph_human_node_pauses_and_resumes():
 
 
 @pytest.mark.asyncio
+async def test_langgraph_resume_with_approval_key_rejected_skips_finalize():
+    # The API contract and both SDKs document the decision as `approval`, not `route`.
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext(
+        resume=RunResumeContext(
+            mode="resume",
+            checkpoint_state={
+                "graph_state": {
+                    "input": "hello",
+                    "messages": [],
+                    "reply": "[mock] draft",
+                    "tool_results": {},
+                    "completed_nodes": ["draft"],
+                    "pending_human": "approve",
+                    "human_input": None,
+                    "route": None,
+                }
+            },
+            human_input={"approval": "rejected"},
+        ),
+        step_index_base=1,
+    )
+    ctx.agent_config = {
+        "graph": {
+            "nodes": [
+                {"id": "draft", "type": "model"},
+                {"id": "approve", "type": "human"},
+                {"id": "finalize", "type": "model"},
+            ],
+            "edges": [
+                ["__start__", "draft"],
+                ["draft", "approve"],
+                {
+                    "from": "approve",
+                    "condition": "route",
+                    "routes": {"approved": "finalize", "rejected": "__end__"},
+                },
+                ["finalize", "__end__"],
+            ],
+        },
+    }
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+    step_nodes = [
+        data["node"] for event, data in ctx.events if event == "step.started"
+    ]
+    assert step_nodes == ["approve"]
+    assert result.output == {"reply": "[mock] draft"}
+
+
+@pytest.mark.asyncio
 async def test_langgraph_conditional_reject_skips_finalize():
     adapter = LangGraphAdapter()
     graph_state = {
