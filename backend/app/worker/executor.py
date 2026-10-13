@@ -66,7 +66,7 @@ class RunExecutor:
         self.cancel_registry = cancel_registry or InMemoryCancelRegistry()
 
     async def execute(self, run_id: str, adapter_name: str) -> None:
-        """Drive a single run from PENDING/WAITING_HUMAN to a terminal state."""
+        """Execute a pending request or recover an interrupted running segment."""
 
         # Import lazily so RunService can import RunExecutor without circularity.
         from app.services.run_service import RunService
@@ -79,15 +79,34 @@ class RunExecutor:
             )
 
             run = await service._get_run(run_id)
-            agent = await session.get(Agent, run.agent_id)
-            if agent is None:
-                await service._finalize(run_id, RunStatus.FAILED, error="agent missing")
+            # A lost ACK can redeliver a segment that already finished. Protect
+            # its outcome before looking at stale cancellation or metadata.
+            if run.status in (
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            ):
+                logger.info("job.skipped", run_id=run_id, status=run.status)
                 return
 
             # Honour a cancel that arrived before the worker picked up the job.
             if await self.cancel_registry.is_cancelled(run_id):
                 await service._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
                 await self._safe_clear_cancel(run_id)
+                return
+
+            resume_ctx = parse_resume_context(run.metadata_)
+            if run.status == RunStatus.WAITING_HUMAN and (
+                resume_ctx is None or resume_ctx.mode != "resume"
+            ):
+                # Redelivery is not human approval. Only a persisted resume
+                # request may advance a paused run; returning lets it be ACKed.
+                logger.info("job.skipped", run_id=run_id, status=run.status)
+                return
+
+            agent = await session.get(Agent, run.agent_id)
+            if agent is None:
+                await service._finalize(run_id, RunStatus.FAILED, error="agent missing")
                 return
 
             try:
@@ -116,21 +135,16 @@ class RunExecutor:
                     return
                 agent_config = dict(snapshot.config or {})
 
-            resume_ctx = parse_resume_context(run.metadata_)
             if resume_ctx is not None:
                 run.metadata_ = without_resume_metadata(dict(run.metadata_ or {}))
                 resume_ctx = await self._hydrate_resume_checkpoint(
                     service, run.id, resume_ctx
                 )
 
-            # Worker crash / Temporal activity retry: the row is still RUNNING
-            # (or WAITING_HUMAN if a resume signal raced). Resume from the
-            # latest checkpoint so a 24h+ run does not start from scratch.
-            if resume_ctx is None and run.status in (
-                RunStatus.RUNNING,
-                RunStatus.WAITING_HUMAN,
-            ):
-                resume_ctx = await self._recover_resume(service, run.id, run.status)
+            # Worker crash / Temporal activity retry: recover RUNNING from
+            # its latest checkpoint. Paused runs require explicit approval.
+            if resume_ctx is None and run.status == RunStatus.RUNNING:
+                resume_ctx = await self._recover_resume(service, run.id)
 
             step_index_base = 0
             if resume_ctx is not None and resume_ctx.mode in ("retry", "resume"):
@@ -266,14 +280,13 @@ class RunExecutor:
             pass
 
     async def _recover_resume(
-        self, service: Any, run_id: str, status: RunStatus
+        self, service: Any, run_id: str
     ) -> RunResumeContext:
         latest = await service._latest_checkpoint(run_id)
-        mode = "resume" if status == RunStatus.WAITING_HUMAN else "retry"
         if latest is None:
-            return RunResumeContext(mode=mode)
+            return RunResumeContext(mode="retry")
         return RunResumeContext(
-            mode=mode,
+            mode="retry",
             checkpoint_state=latest.state,
             checkpoint_index=latest.index,
         )
