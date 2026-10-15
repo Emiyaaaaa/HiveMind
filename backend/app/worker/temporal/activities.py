@@ -95,7 +95,7 @@ async def finalize_cancelled(run_id: str) -> dict[str, str]:
             RunStatus.FAILED,
             RunStatus.CANCELLED,
         ):
-            return {"status": run.status.value}
+            return {"status": str(run.status)}
         await service._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
         return {"status": RunStatus.CANCELLED.value}
 
@@ -105,4 +105,4 @@ async def _load_status(executor: RunExecutor, run_id: str) -> str:
         run = await session.get(Run, run_id)
         if run is None:
             return RunStatus.FAILED.value
-        return run.status.value
+        return str(run.status)
