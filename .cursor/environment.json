@@ -1,0 +1,24 @@
+{
+  "name": "AgentFlow",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "worker",
+      "command": "export PATH=\"$HOME/.local/bin:$PATH\"; cd backend && AGENTFLOW_DATABASE_URL=\"postgresql+asyncpg://agentflow:agentflow@localhost:5432/agentflow\" AGENTFLOW_REDIS_URL=\"redis://localhost:6379/0\" AGENTFLOW_WORKER_MODE=queue uv run python -m app.worker"
+    },
+    {
+      "name": "api",
+      "command": "cd backend-java && AGENTFLOW_DATABASE_URL=\"jdbc:postgresql://localhost:5432/agentflow?stringtype=unspecified\" AGENTFLOW_DATABASE_USERNAME=agentflow AGENTFLOW_DATABASE_PASSWORD=agentflow AGENTFLOW_REDIS_HOST=localhost AGENTFLOW_REDIS_PORT=6379 AGENTFLOW_SERVER_PORT=8000 AGENTFLOW_JPA_DDL=none mvn -q -DskipTests spring-boot:run"
+    },
+    {
+      "name": "frontend",
+      "command": "cd frontend && AGENTFLOW_API_URL=http://localhost:8000 npm run dev"
+    }
+  ],
+  "ports": [
+    { "name": "frontend", "port": 3000 },
+    { "name": "api", "port": 8000 }
+  ]
+}

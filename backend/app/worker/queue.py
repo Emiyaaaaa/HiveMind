@@ -328,6 +328,12 @@ class RedisStreamsJobQueue:
     async def consume(self) -> AsyncIterator[JobLease]:
         await self._ensure_group()
 
+        # A blocking ``XREADGROUP`` whose ``BLOCK`` window expires on an idle
+        # stream surfaces as ``redis.exceptions.TimeoutError`` in redis-py's
+        # async client; that is an empty read, not a fatal error, so swallow it
+        # and loop rather than tearing the worker down.
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
         while True:
             # Yield to the event loop every iteration so a cancelling caller
             # (and unit tests that wrap consume in ``asyncio.wait_for``) can
@@ -339,13 +345,16 @@ class RedisStreamsJobQueue:
             async for lease in self._reap_stale():
                 yield lease
 
-            entries = await self._redis.xreadgroup(
-                groupname=self._group,
-                consumername=self._consumer,
-                streams={self._stream: ">"},
-                count=1,
-                block=self._block_ms,
-            )
+            try:
+                entries = await self._redis.xreadgroup(
+                    groupname=self._group,
+                    consumername=self._consumer,
+                    streams={self._stream: ">"},
+                    count=1,
+                    block=self._block_ms,
+                )
+            except RedisTimeoutError:
+                continue
             if not entries:
                 continue
 
