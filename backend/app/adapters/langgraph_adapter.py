@@ -222,6 +222,7 @@ class GraphSpec:
             return cls.default()
         if not edges:
             edges = _linear_edges(nodes)
+        _reject_cycles(edges)
         return cls(nodes=nodes, edges=edges)
 
 
@@ -286,6 +287,47 @@ def _linear_edges(nodes: list[GraphNodeSpec]) -> list[GraphEdgeSpec]:
         edges.append(GraphEdgeSpec(from_node=left.id, to=right.id))
     edges.append(GraphEdgeSpec(from_node=nodes[-1].id, to=END_NODE))
     return edges
+
+
+def _edge_targets(edge: GraphEdgeSpec) -> list[str]:
+    if not edge.is_conditional:
+        return [edge.to] if edge.to else []
+    assert edge.routes is not None
+    targets = list(edge.routes.values())
+    if edge.default is not None and edge.default not in edge.routes:
+        targets.append(edge.default)
+    return targets
+
+
+def _reject_cycles(edges: list[GraphEdgeSpec]) -> None:
+    """Raise ``ValueError`` when the edges form a cycle.
+
+    A node that already ran is in ``completed_nodes`` and is skipped when it is
+    reached again, so a cycle never re-runs its nodes: the run spins until the
+    recursion limit raises, or moves past a skipped human node without asking again.
+    """
+    successors: dict[str, list[str]] = {}
+    for edge in edges:
+        successors.setdefault(edge.from_node, []).extend(
+            dest for dest in _edge_targets(edge) if dest not in (START_NODE, END_NODE)
+        )
+    done: set[str] = set()
+
+    def visit(node: str, path: list[str]) -> None:
+        if node in path:
+            cycle = " -> ".join([*path[path.index(node) :], node])
+            raise ValueError(
+                f"graph edges form a cycle ({cycle}); a node that already ran is "
+                "skipped when it is reached again, so cycles are not supported"
+            )
+        if node in done:
+            return
+        for dest in successors.get(node, []):
+            visit(dest, [*path, node])
+        done.add(node)
+
+    for node in list(successors):
+        visit(node, [])
 
 
 def _map_endpoint(node_id: str, *, start: Any, end: Any) -> Any:

@@ -396,6 +396,27 @@ def test_graph_spec_conditional_edge():
     assert conditional[0].routes == {"approved": "reply", "rejected": "__end__"}
 
 
+def test_graph_spec_rejects_cycle():
+    with pytest.raises(ValueError, match=r"cycle \(draft -> approve -> draft\)"):
+        GraphSpec.from_config(
+            {
+                "nodes": [
+                    {"id": "draft", "type": "model"},
+                    {"id": "approve", "type": "human"},
+                ],
+                "edges": [
+                    ["__start__", "draft"],
+                    ["draft", "approve"],
+                    {
+                        "from": "approve",
+                        "condition": "route",
+                        "routes": {"approved": "__end__", "rejected": "draft"},
+                    },
+                ],
+            }
+        )
+
+
 def test_graph_spec_rejects_unknown_node_type():
     with pytest.raises(ValueError, match="unsupported graph node type"):
         GraphSpec.from_config(
@@ -549,6 +570,108 @@ async def test_langgraph_conditional_reject_skips_finalize():
     ]
     assert step_nodes == ["approve"]
     assert result.output == {"reply": "[mock] draft"}
+
+
+@pytest.mark.asyncio
+async def test_langgraph_reject_route_back_to_draft_fails_before_running():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext(
+        resume=RunResumeContext(
+            mode="resume",
+            checkpoint_state={
+                "graph_state": {
+                    "input": "hello",
+                    "messages": [],
+                    "reply": "[mock] draft",
+                    "tool_results": {},
+                    "completed_nodes": ["draft"],
+                    "pending_human": "approve",
+                    "human_input": None,
+                    "route": None,
+                }
+            },
+            human_input={"route": "rejected"},
+        ),
+        step_index_base=1,
+    )
+    ctx.agent_config = {
+        "graph": {
+            "nodes": [
+                {"id": "draft", "type": "model"},
+                {"id": "approve", "type": "human"},
+                {"id": "finalize", "type": "model"},
+            ],
+            "edges": [
+                ["__start__", "draft"],
+                ["draft", "approve"],
+                {
+                    "from": "approve",
+                    "condition": "route",
+                    "routes": {"approved": "finalize", "rejected": "draft"},
+                },
+                ["finalize", "__end__"],
+            ],
+        },
+    }
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.FAILED
+    assert "cycle (draft -> approve -> draft)" in (result.error or "")
+    step_nodes = [
+        data["node"] for event, data in ctx.events if event == "step.started"
+    ]
+    assert step_nodes == []
+
+
+@pytest.mark.asyncio
+async def test_langgraph_reject_route_through_revise_fails_before_running():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext(
+        resume=RunResumeContext(
+            mode="resume",
+            checkpoint_state={
+                "graph_state": {
+                    "input": "hello",
+                    "messages": [],
+                    "reply": "[mock] draft",
+                    "tool_results": {},
+                    "completed_nodes": ["draft"],
+                    "pending_human": "approve",
+                    "human_input": None,
+                    "route": None,
+                }
+            },
+            human_input={"route": "rejected"},
+        ),
+        step_index_base=1,
+    )
+    ctx.agent_config = {
+        "graph": {
+            "nodes": [
+                {"id": "draft", "type": "model"},
+                {"id": "approve", "type": "human"},
+                {"id": "revise", "type": "model"},
+                {"id": "finalize", "type": "model"},
+            ],
+            "edges": [
+                ["__start__", "draft"],
+                ["draft", "approve"],
+                {
+                    "from": "approve",
+                    "condition": "route",
+                    "routes": {"approved": "finalize", "rejected": "revise"},
+                },
+                ["revise", "approve"],
+                ["finalize", "__end__"],
+            ],
+        },
+    }
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.FAILED
+    assert "cycle (approve -> revise -> approve)" in (result.error or "")
+    step_nodes = [
+        data["node"] for event, data in ctx.events if event == "step.started"
+    ]
+    assert step_nodes == []
 
 
 def test_checkpoint_payload_omits_messages():
