@@ -406,11 +406,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             initial = {
                 **initial,
                 "human_input": ctx.resume.human_input,
-                "route": str(
-                    ctx.resume.human_input.get(
-                        "route", initial.get("route") or "approved"
-                    )
-                ),
+                "route": _resume_route(ctx.resume.human_input, initial.get("route")),
             }
 
         try:
@@ -572,7 +568,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 step_idx = run_state.next_step_index(spec.id)
                 human_input = dict(ctx.resume.human_input or {})  # type: ignore[union-attr]
                 await ctx.emit_step_started(index=step_idx, node=spec.id)
-                route = str(human_input.get("route") or state.get("route") or "approved")
+                route = _resume_route(human_input, state.get("route"))
                 next_state = {
                     **state,
                     "human_input": human_input,
@@ -1234,6 +1230,12 @@ class LangGraphAdapter(OrchestratorAdapter):
             tokens_in=tokens_in,
             tokens_out=tokens_out,
         )
+
+
+def _resume_route(human_input: dict[str, Any], current: Any) -> str:
+    """The human decision on resume: ``route``, or the documented ``approval`` key."""
+    decision = human_input.get("route") or human_input.get("approval")
+    return str(decision or current or "approved")
 
 
 def _already_completed(state: dict[str, Any], node_id: str) -> bool:
