@@ -48,7 +48,12 @@ class JobProducerTest {
         when(stream.add(anyString(), any(Map.class))).thenReturn(RecordId.of("1-0"));
 
         JobProducer producer = new JobProducer(
-                redis, objectMapper(), props("streams"), noopTracer(), noopPropagator());
+                redis,
+                objectMapper(),
+                props("streams"),
+                noopTracer(),
+                noopPropagator(),
+                mock(TemporalWorkflowClient.class));
         producer.enqueue("run-1", "agent-1", "echo");
 
         @SuppressWarnings("unchecked")
@@ -73,7 +78,12 @@ class JobProducerTest {
         when(list.leftPush(anyString(), anyString())).thenReturn(1L);
 
         JobProducer producer = new JobProducer(
-                redis, objectMapper(), props("list"), noopTracer(), noopPropagator());
+                redis,
+                objectMapper(),
+                props("list"),
+                noopTracer(),
+                noopPropagator(),
+                mock(TemporalWorkflowClient.class));
         producer.enqueue("run-2", "agent-2", "echo");
 
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
@@ -82,6 +92,25 @@ class JobProducerTest {
         assertThat(keyCaptor.getValue()).isEqualTo("test:agentflow:jobs:runs");
         assertThat(jsonCaptor.getValue()).contains("\"run_id\":\"run-2\"");
         verify(redis, never()).opsForStream();
+    }
+
+    @Test
+    void temporalModeStartsWorkflowInsteadOfRedis() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        TemporalWorkflowClient temporal = mock(TemporalWorkflowClient.class);
+
+        JobProducer producer = new JobProducer(
+                redis,
+                objectMapper(),
+                props("temporal"),
+                noopTracer(),
+                noopPropagator(),
+                temporal);
+        producer.enqueue("run-3", "agent-3", "echo");
+
+        verify(temporal).startOrResume(eq("run-3"), eq("agent-3"), eq("echo"), any());
+        verify(redis, never()).opsForStream();
+        verify(redis, never()).opsForList();
     }
 
     private static Tracer noopTracer() {

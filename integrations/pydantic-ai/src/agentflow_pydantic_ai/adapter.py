@@ -1,13 +1,15 @@
-"""Run an existing PydanticAI agent on AgentFlow's adapter surface."""
+"""Run an existing PydanticAI agent on Hivemind's adapter surface."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import time
+from contextlib import AsyncExitStack
 from importlib import import_module
 from typing import Any
 
+from app.adapters.adapter_tools import open_tool_surface
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
 from app.core.logging import get_logger
 from app.models.run import RunStatus
@@ -24,6 +26,8 @@ from pydantic_ai import (
 )
 from pydantic_core import to_jsonable_python
 
+from agentflow_pydantic_ai.toolset import AgentFlowToolset
+
 logger = get_logger("adapter.pydantic_ai")
 
 DEFAULT_NODE = "pydantic_ai"
@@ -39,36 +43,56 @@ class PydanticAIAdapter(OrchestratorAdapter):
         node = str(ctx.agent_config.get("node") or DEFAULT_NODE)
         prompt = prompt_from_input(ctx.input)
         active_tools: dict[str, tuple[str, str, float]] = {}
+        bridged_tool_calls: set[str] = set()
 
         await ctx.emit_step_started(index=step_index, node=node)
-        await ctx.emit_message(role="user", content=prompt)
+        await ctx.emit_message(role="user", content=prompt, step_index=step_index)
         started = time.monotonic()
 
         try:
             agent = load_agent(ctx.agent_config.get("agent_factory"))
+            message_history = openai_dicts_to_pydantic_history(ctx.thread_messages)
+            async with AsyncExitStack() as stack:
+                bridge: AgentFlowToolset | None = None
+                if uses_agentflow_tools(ctx.agent_config):
+                    surface = await stack.enter_async_context(open_tool_surface(ctx.agent_config))
+                    if surface.tools:
+                        bridge = AgentFlowToolset(surface, ctx, step_index)
 
-            async with agent.run_stream_events(
-                prompt,
-                run_id=ctx.run_id,
-                metadata=dict(ctx.metadata) or None,
-            ) as events:
-                async for event in events:
-                    if delta := text_delta(event):
-                        await ctx.emit_token_delta(step_index=step_index, delta=delta)
-                    elif isinstance(event, FunctionToolCallEvent):
-                        call_id = await ctx.emit_tool_call_started(
-                            step_index=step_index,
-                            name=event.part.tool_name,
-                            arguments=event.part.args_as_dict(),
-                        )
-                        active_tools[event.tool_call_id] = (
-                            event.part.tool_name,
-                            call_id,
-                            time.monotonic(),
-                        )
-                    elif isinstance(event, FunctionToolResultEvent):
-                        await emit_tool_result(ctx, step_index, event, active_tools)
-                result = events.result
+                run_kwargs: dict[str, Any] = {
+                    "run_id": ctx.run_id,
+                    "metadata": dict(ctx.metadata) or None,
+                    "toolsets": [bridge] if bridge is not None else None,
+                }
+                if message_history:
+                    run_kwargs["message_history"] = message_history
+
+                async with agent.run_stream_events(prompt, **run_kwargs) as events:
+                    async for event in events:
+                        if delta := text_delta(event):
+                            await ctx.emit_token_delta(step_index=step_index, delta=delta)
+                        elif isinstance(event, FunctionToolCallEvent):
+                            if bridge is not None and bridge.owns(event.part.tool_name):
+                                bridged_tool_calls.add(event.tool_call_id)
+                                continue
+                            call_id = await ctx.emit_tool_call_started(
+                                step_index=step_index,
+                                name=event.part.tool_name,
+                                arguments=event.part.args_as_dict(),
+                            )
+                            active_tools[event.tool_call_id] = (
+                                event.part.tool_name,
+                                call_id,
+                                time.monotonic(),
+                            )
+                        elif isinstance(event, FunctionToolResultEvent):
+                            if event.tool_call_id in bridged_tool_calls or (
+                                bridge is not None and bridge.owns(event.part.tool_name)
+                            ):
+                                bridged_tool_calls.discard(event.tool_call_id)
+                                continue
+                            await emit_tool_result(ctx, step_index, event, active_tools)
+                    result = events.result
 
             if result is None:
                 raise RuntimeError("PydanticAI run ended without a final result")
@@ -84,7 +108,7 @@ class PydanticAIAdapter(OrchestratorAdapter):
             if usage.cost is not None:
                 metrics["cost_usd"] = float(usage.cost)
 
-            await ctx.emit_message(role="assistant", content=output["reply"])
+            await ctx.emit_message(role="assistant", content=output["reply"], step_index=step_index)
             await ctx.emit_step_completed(
                 index=step_index,
                 node=node,
@@ -100,6 +124,11 @@ class PydanticAIAdapter(OrchestratorAdapter):
             await close_active_tools(ctx, step_index, active_tools, error)
             await ctx.emit_step_failed(index=step_index, node=node, error=error)
             return AdapterResult(status=RunStatus.FAILED, error=error)
+
+
+def uses_agentflow_tools(config: dict[str, Any]) -> bool:
+    """Return whether this run asks Hivemind to inject managed tools."""
+    return bool(config.get("tools") or config.get("mcp_auto_register"))
 
 
 def load_agent(reference: Any) -> Agent[Any, Any]:
@@ -127,7 +156,7 @@ async def emit_tool_result(
     event: FunctionToolResultEvent,
     active_tools: dict[str, tuple[str, str, float]],
 ) -> None:
-    """Pair provider tool IDs locally while persisting AgentFlow-owned ULIDs."""
+    """Pair provider tool IDs locally while persisting Hivemind-owned ULIDs."""
     provider_id = event.tool_call_id
     active = active_tools.pop(provider_id, None)
     name = event.part.tool_name or (active[0] if active else "unknown")
@@ -192,6 +221,31 @@ def prompt_from_input(run_input: dict[str, Any]) -> str:
             value = run_input[key]
             return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return json.dumps(run_input, ensure_ascii=False)
+
+
+def openai_dicts_to_pydantic_history(messages: list[dict[str, Any]]) -> list[Any]:
+    """Convert OpenAI-style dicts to PydanticAI ModelMessage history when available."""
+    if not messages:
+        return []
+    try:
+        from pydantic_ai.messages import (
+            ModelRequest,
+            ModelResponse,
+            TextPart,
+            UserPromptPart,
+        )
+    except ImportError:
+        return []
+
+    history: list[Any] = []
+    for message in messages:
+        role = message.get("role")
+        content = str(message.get("content") or "")
+        if role == "user" and content:
+            history.append(ModelRequest(parts=[UserPromptPart(content=content)]))
+        elif role == "assistant" and content:
+            history.append(ModelResponse(parts=[TextPart(content=content)]))
+    return history
 
 
 def adapter_output(value: Any) -> dict[str, Any]:

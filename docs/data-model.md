@@ -1,6 +1,6 @@
 # Data model
 
-AgentFlow stores every adapter execution in a small set of tables. The shape
+Hivemind stores every adapter execution in a small set of tables. The shape
 is deliberately framework-agnostic so a single UI and SDK can render any
 agent system.
 
@@ -8,20 +8,50 @@ agent system.
 
 ```mermaid
 erDiagram
+    Project ||--o{ Agent : contains
     Agent ||--o{ Run : has
     Agent ||--o{ AgentVersion : versions
+    Agent ||--o{ Thread : has
+    Agent ||--o{ AgentQuotaUsage : tracks
+    Thread ||--o{ Run : contains
+    Agent ||--o{ RunSchedule : schedules
+    Agent ||--o{ RunBatch : batches
+    RunBatch ||--o{ Run : contains
+    RunSchedule ||--o{ Run : fires
     Run ||--o{ Step : has
     Run ||--o{ Message : has
     Run ||--o{ Checkpoint : has
+    Run ||--o{ Attachment : has
+    Run ||--o{ RunAuditEvent : audits
     Step ||--o{ ToolCall : has
     Step }o--|| Message : "optional step_id"
+    Message ||--o{ Attachment : "optional message_id"
 
+    Project {
+        string id PK
+        string tenant_id
+        string name UK
+        string description
+    }
     Agent {
         string id PK
+        string tenant_id
+        string project_id FK
         string name UK
         string adapter
         json config
         int version
+    }
+    AgentQuotaUsage {
+        string id PK
+        string tenant_id
+        string agent_id FK
+        string period
+        string period_key
+        int tokens_in
+        int tokens_out
+        float cost_usd
+        int run_count
     }
     AgentVersion {
         string id PK
@@ -31,9 +61,20 @@ erDiagram
         json config
         string note
     }
+    Thread {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        string user_id
+        string title
+    }
     Run {
         string id PK
+        string tenant_id
+        string project_id
         string agent_id FK
+        string thread_id FK
         string adapter
         string status
         json input
@@ -82,6 +123,51 @@ erDiagram
         string label
         json state
     }
+    Attachment {
+        string id PK
+        string tenant_id
+        string run_id FK
+        string message_id FK
+        string media_type
+        string filename
+        string storage_key
+        int size_bytes
+        string sha256
+        text caption
+    }
+    RunAuditEvent {
+        string id PK
+        string tenant_id
+        string run_id FK
+        string action
+        string actor_subject
+        string actor_role
+        json detail
+    }
+    RunSchedule {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        string name
+        string cron
+        int interval_seconds
+        string timezone
+        json input
+        json metadata
+        string adapter
+        bool enabled
+        datetime next_run_at
+        datetime last_run_at
+        string last_run_id
+    }
+    RunBatch {
+        string id PK
+        string tenant_id
+        string project_id
+        string agent_id FK
+        json run_ids
+    }
 ```
 
 ## Status state machine
@@ -103,9 +189,16 @@ stateDiagram-v2
 
 ## Design notes
 
+- **`tenant_id` is the organization id.** Projects belong to one organization;
+  agents and runs persist their `project_id` so authorization remains stable
+  across the Run lifecycle. A key can be organization-, project-, or
+  Agent-scoped; inaccessible sibling resources return 404.
 - **`Agent.version`** is a monotonic integer. Each bump also writes an
   immutable ``agent_versions`` snapshot (adapter + config + description).
   Restore creates a new version rather than rewriting history.
+- **`Agent.config.quota`** optionally caps token and/or USD cost per UTC
+  `day` / `week` / `month`. Usage accumulates in ``agent_quota_usage``;
+  enforced creates return HTTP 429. See [api-contract.md](api-contract.md).
 - **`metadata` is a JSON column** named `metadata_` in Python because
   `metadata` is reserved on `DeclarativeBase`. The column on disk is still
   `metadata`.
@@ -117,6 +210,27 @@ stateDiagram-v2
 - **`Message.step_id` is optional** so an adapter can attach a message to a
   specific node tick when it makes sense, while keeping the run-level
   ordering authoritative.
+- **`Message.extra.kind = "reasoning"`** persists a finished thinking block
+  (content = full reasoning text). Live chunks use SSE `token.delta` with
+  `part: "reasoning"` and are not written to Redis replay or Postgres.
+- **`Message.extra.kind = "attachment"`** persists multimodal attachment refs
+  (`extra.attachments`). Bytes live in object storage keyed by
+  `attachments.storage_key`; `Message.content` stays plain text (caption).
+  Live announcements use SSE `token.delta` with `part: "attachment"`.
+- **`Thread` groups Runs for L1 short memory.** `Run.thread_id` is optional;
+  when set, the worker seeds `AdapterContext.thread_messages` from prior runs
+  in the same thread (window-trimmed). Messages remain Run-scoped rows.
+- **`RunAuditEvent` records cancel/resume actors.** Append-only rows store
+  `actor_subject` (API key prefix or OIDC subject), `actor_role`, and optional
+  `detail` (checkpoint index / human input). They survive message/checkpoint
+  erasure so governance questions remain answerable after a transcript wipe.
+- **`RunSchedule` fires Runs on a cron or fixed interval.** Exactly one of
+  `cron` (5-field UTC minute cron) or `interval_seconds` (≥ 60) is set. The
+  worker sweeper claims due rows (`next_run_at ≤ now`, `enabled`) and creates
+  a normal Run, tagging `_agentflow.schedule_id` in metadata.
+- **`RunBatch` fans out many inputs into independent Runs.** `run_ids` is the
+  ordered list of created Run ids; progress is derived from those Run rows.
+  Each candidate is tagged with `_agentflow.batch_id`.
 - **`ToolCall.id` is the lifecycle association key.** SSE
   ``tool_call.started`` / ``tool_call.completed`` carry the same ``call_id``
   (equal to ``ToolCall.id``) so parallel or same-name tool invocations within
@@ -126,11 +240,35 @@ stateDiagram-v2
 
 | Index | Purpose |
 | --- | --- |
+| `uq_agents_tenant_name` | unique agent name per tenant |
+| `ix_agents_tenant_id` | list agents for a tenant |
+| `ix_agents_project_id` | apply project-scoped access to agents |
+| `uq_agent_quota_usage_period` | one usage row per agent + period bucket |
+| `ix_agent_quota_usage_agent_id` | look up quota counters by agent |
+| `ix_agent_quota_usage_tenant_id` | filter quota rows by tenant |
+| `uq_projects_tenant_name` | unique project name per organization |
+| `ix_projects_tenant_id` | list projects for an organization |
+| `ix_runs_tenant_id` | filter runs by tenant |
+| `ix_runs_project_id` | apply project-scoped access to runs |
+| `ix_runs_thread_id` | list / join runs by conversation thread |
+| `ix_threads_tenant_id` | list threads for a tenant |
+| `ix_threads_tenant_agent` | filter threads by tenant + agent |
+| `ix_threads_agent_id` | cascade / lookup threads by agent |
+| `ix_runs_tenant_created` | tenant-scoped recent runs |
 | `ix_runs_status` | filter pending / running runs from a worker |
 | `ix_runs_agent_id` | list runs for an agent |
 | `ix_steps_run_index` | render the step timeline in O(log n) |
 | `ix_messages_run_index` | stream messages in order |
 | `ix_tool_calls_step` | render tool calls inside a step |
 | `ix_checkpoints_run_index` | replay from the latest checkpoint |
+| `ix_attachments_tenant_id` | tenant-scoped attachment lookup |
+| `ix_attachments_run_id` | list attachments for a run / erase |
+| `ix_attachments_storage_key` | unique object-store key |
+| `ix_run_audit_events_tenant_id` | tenant-scoped audit listing |
+| `ix_run_audit_events_run_id` | list audit events for a run |
+| `ix_run_audit_events_run_created` | order audit events for a run |
 | `ix_agent_versions_agent_id` | list version history for an agent |
 | `uq_agent_versions_agent_version` | one snapshot per (agent, version) |
+| `ix_run_schedules_tenant_id` | list schedules for a tenant |
+| `ix_run_schedules_due` | worker sweeper: enabled + next_run_at |
+| `ix_run_batches_tenant_id` | list batches for a tenant |

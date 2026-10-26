@@ -82,6 +82,8 @@ def _decode_envelope(payload: dict[str, Any]) -> EventRecord:
 class EventBus(Protocol):
     async def publish(self, event: RunEvent, *, persist: bool = True) -> str: ...
 
+    async def delete_run_log(self, run_id: str) -> None: ...
+
     def replay(
         self, run_id: str, after_id: str | None = None
     ) -> AsyncIterator[EventRecord]: ...
@@ -124,6 +126,11 @@ class InMemoryEventBus:
                 queue.get_nowait()
             with suppress(asyncio.QueueFull):
                 queue.put_nowait(record)
+
+    async def delete_run_log(self, run_id: str) -> None:
+        async with self._lock:
+            self._log.pop(run_id, None)
+            self._seq.pop(run_id, None)
 
     async def replay(
         self, run_id: str, after_id: str | None = None
@@ -189,6 +196,9 @@ class RedisEventBus:
         )
         await self._redis.publish(self._channel(event.run_id), envelope)
         return event_id
+
+    async def delete_run_log(self, run_id: str) -> None:
+        await self._redis.delete(self._stream(run_id))
 
     async def replay(
         self, run_id: str, after_id: str | None = None

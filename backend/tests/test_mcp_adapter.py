@@ -136,3 +136,40 @@ async def test_mcp_adapter_config_steps():
     result = await adapter.run(ctx)
     assert result.status == RunStatus.SUCCEEDED
     assert result.output["result"]["text"] == "from-config"
+
+
+@pytest.mark.asyncio
+async def test_mcp_adapter_recoverable_error_still_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.adapters.mcp_client import McpSessionManager
+    from app.adapters.tool_errors import RecoverableToolError
+
+    async def _fake_call_tool(
+        self: McpSessionManager,
+        server_name: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        raise RecoverableToolError(
+            code="mcp_tool_error",
+            public_message=(
+                "The MCP tool returned an error. "
+                "Revise the request or choose another tool."
+            ),
+            internal_message="raw mcp failure",
+        )
+
+    monkeypatch.setattr(McpSessionManager, "call_tool", _fake_call_tool)
+
+    adapter = McpAdapter()
+    ctx = _RecordingContext(
+        agent_config={"mcp_servers": [_mcp_server_config()]},
+        input={"tool": "mcp/echo/ping", "arguments": {"message": "x"}},
+    )
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.FAILED
+    assert "raw mcp failure" in (result.error or "")
+    completed = [d for e, d in ctx.events if e == "tool_call.completed"]
+    assert len(completed) == 1
+    assert completed[0]["error"] == "raw mcp failure"

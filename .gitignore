@@ -36,5 +36,10 @@ htmlcov/
 # Build
 dist/
 build/
+sdk/python/generated/
+sdk/typescript/generated/
+sdk/typescript/node_modules/
+sdk/typescript/dist/
+sdk/python/.venv/
 
 .codegraph

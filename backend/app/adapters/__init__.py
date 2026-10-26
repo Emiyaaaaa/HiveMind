@@ -1,6 +1,6 @@
 """Pluggable orchestrator adapters.
 
-Adapters are the bridge between AgentFlow's runtime tables and a concrete
+Adapters are the bridge between Hivemind's runtime tables and a concrete
 multi-agent framework (LangGraph, AutoGen, CrewAI, custom). Add a new adapter
 by subclassing `OrchestratorAdapter` and registering it via
 `register_adapter`.
@@ -29,6 +29,7 @@ from app.adapters.mcp_client import (
     parse_mcp_servers,
 )
 from app.adapters.mcp_tools import RunToolResolver, resolve_run_tools
+from app.adapters.tool_errors import RecoverableToolError
 from app.adapters.tool_registry import (
     ToolDefinition,
     get_tool,
@@ -51,6 +52,7 @@ __all__ = [
     "McpServerConfig",
     "McpSessionManager",
     "OrchestratorAdapter",
+    "RecoverableToolError",
     "RunToolResolver",
     "ToolDefinition",
     "build_tool_arguments",

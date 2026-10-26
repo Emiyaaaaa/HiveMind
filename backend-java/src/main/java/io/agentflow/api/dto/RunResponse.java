@@ -9,7 +9,9 @@ import java.util.Map;
 public class RunResponse {
 
     private String id;
+    private String tenantId;
     private String agentId;
+    private String threadId;
     private String adapter;
     private RunStatus status;
     private Map<String, Object> input;
@@ -19,6 +21,7 @@ public class RunResponse {
     private Instant updatedAt;
     private List<StepResponse> steps;
     private List<MessageResponse> messages;
+    private boolean messagesTruncated;
     private List<CheckpointResponse> checkpoints;
     private RunUsage usage = RunUsage.empty();
 
@@ -34,13 +37,22 @@ public class RunResponse {
             List<StepResponse> steps,
             List<MessageResponse> messages,
             List<CheckpointResponse> checkpoints) {
+        return fromEntity(entity, steps, messages, false, checkpoints);
+    }
+
+    public static RunResponse fromEntity(
+            RunEntity entity,
+            List<StepResponse> steps,
+            List<MessageResponse> messages,
+            boolean messagesTruncated,
+            List<CheckpointResponse> checkpoints) {
         RunUsage usage = steps.isEmpty()
                 ? RunUsage.fromMetadata(entity.getMetadata())
                 : RunUsage.fromSteps(steps);
         if (usage == null) {
             usage = RunUsage.empty();
         }
-        return fromEntity(entity, steps, messages, checkpoints, usage);
+        return fromEntity(entity, steps, messages, messagesTruncated, checkpoints, usage);
     }
 
     public static RunResponse fromEntity(
@@ -49,9 +61,21 @@ public class RunResponse {
             List<MessageResponse> messages,
             List<CheckpointResponse> checkpoints,
             RunUsage usage) {
+        return fromEntity(entity, steps, messages, false, checkpoints, usage);
+    }
+
+    public static RunResponse fromEntity(
+            RunEntity entity,
+            List<StepResponse> steps,
+            List<MessageResponse> messages,
+            boolean messagesTruncated,
+            List<CheckpointResponse> checkpoints,
+            RunUsage usage) {
         RunResponse dto = new RunResponse();
         dto.id = entity.getId();
+        dto.tenantId = entity.getTenantId();
         dto.agentId = entity.getAgentId();
+        dto.threadId = entity.getThreadId();
         dto.adapter = entity.getAdapter();
         dto.status = entity.getStatus();
         dto.input = entity.getInput();
@@ -61,6 +85,7 @@ public class RunResponse {
         dto.updatedAt = entity.getUpdatedAt();
         dto.steps = steps;
         dto.messages = messages;
+        dto.messagesTruncated = messagesTruncated;
         dto.checkpoints = checkpoints;
         dto.usage = usage;
         return dto;
@@ -70,8 +95,16 @@ public class RunResponse {
         return id;
     }
 
+    public String getTenantId() {
+        return tenantId;
+    }
+
     public String getAgentId() {
         return agentId;
+    }
+
+    public String getThreadId() {
+        return threadId;
     }
 
     public String getAdapter() {
@@ -108,6 +141,10 @@ public class RunResponse {
 
     public List<MessageResponse> getMessages() {
         return messages;
+    }
+
+    public boolean isMessagesTruncated() {
+        return messagesTruncated;
     }
 
     public List<CheckpointResponse> getCheckpoints() {

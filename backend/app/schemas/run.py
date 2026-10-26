@@ -15,6 +15,10 @@ class RunCreate(BaseModel):
         default=None,
         description="Override the agent's default adapter for this run.",
     )
+    thread_id: str | None = Field(
+        default=None,
+        description="Optional conversation thread; prior turns are seeded into the adapter.",
+    )
 
 
 class RunRetry(BaseModel):
@@ -47,12 +51,24 @@ class MessageRead(BaseModel):
 
     id: str
     index: int
+    step_id: str | None = None
     role: str
     name: str | None
     content: str
     tool_call_id: str | None
     extra: dict[str, Any]
     created_at: datetime
+
+
+class MessagePage(BaseModel):
+    """Cursor page of run messages in ascending index order."""
+
+    items: list[MessageRead]
+    next_cursor: int | None = Field(
+        default=None,
+        description="Pass as cursor to fetch older messages (index exclusive).",
+    )
+    has_more: bool = False
 
 
 class StepRead(BaseModel):
@@ -87,7 +103,10 @@ class RunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    tenant_id: str
+    project_id: str | None
     agent_id: str
+    thread_id: str | None = None
     adapter: str
     status: RunStatus
     input: dict[str, Any]
@@ -97,6 +116,7 @@ class RunRead(BaseModel):
     updated_at: datetime
     steps: list[StepRead] = []
     messages: list[MessageRead] = []
+    messages_truncated: bool = False
     checkpoints: list[CheckpointRead] = []
     usage: RunUsage = Field(default_factory=RunUsage)
 
@@ -107,14 +127,48 @@ class RunRead(BaseModel):
         return self
 
 
-def run_read_from_orm(run: Run) -> RunRead:
+def run_header_from_orm(run: Run) -> RunRead:
+    """Serialize a Run without touching lazy-loaded relationships."""
+    stored = usage_from_metadata(run.metadata_)
+    return RunRead(
+        id=run.id,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        agent_id=run.agent_id,
+        thread_id=run.thread_id,
+        adapter=run.adapter,
+        status=run.status,
+        input=dict(run.input or {}),
+        output=run.output,
+        error=run.error,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        steps=[],
+        messages=[],
+        checkpoints=[],
+        usage=stored or RunUsage(),
+    )
+
+
+def run_read_from_orm(
+    run: Run,
+    *,
+    messages_truncated: bool = False,
+) -> RunRead:
     """Build API run DTO with usage from steps or persisted metadata."""
     dto = RunRead.model_validate(run)
+    updates: dict[str, Any] = {}
+    if messages_truncated:
+        updates["messages_truncated"] = True
     if dto.steps:
+        if updates:
+            return dto.model_copy(update=updates)
         return dto
     stored = usage_from_metadata(run.metadata_)
     if stored is not None:
-        return dto.model_copy(update={"usage": stored})
+        updates["usage"] = stored
+    if updates:
+        return dto.model_copy(update=updates)
     return dto
 
 

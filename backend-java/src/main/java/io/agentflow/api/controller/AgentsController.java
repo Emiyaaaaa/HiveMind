@@ -1,6 +1,7 @@
 package io.agentflow.api.controller;
 
 import io.agentflow.api.dto.AgentCreateRequest;
+import io.agentflow.api.dto.AgentQuotaStatusResponse;
 import io.agentflow.api.dto.AgentResponse;
 import io.agentflow.api.dto.AgentUpdateRequest;
 import io.agentflow.api.dto.AgentVersionDiffResponse;
@@ -43,6 +44,11 @@ public class AgentsController {
     @GetMapping("/{id}")
     public AgentResponse get(@PathVariable String id) {
         return service.get(id);
+    }
+
+    @GetMapping("/{id}/quota")
+    public AgentQuotaStatusResponse quota(@PathVariable String id) {
+        return service.quota(id);
     }
 
     @PatchMapping("/{id}")

@@ -1,6 +1,6 @@
 # Architecture
 
-AgentFlow is intentionally small. Every concept maps to a single file or a
+Hivemind is intentionally small. Every concept maps to a single file or a
 small package so contributors can read the whole runtime in an afternoon.
 
 ## Runtime topology
@@ -23,6 +23,8 @@ and persist state to Postgres.
 │ API (Java / Spring Boot)                                     │
 │   controller/AgentsController   CRUD agents                   │
 │   controller/RunsController       create / get / cancel runs  │
+│   controller/BatchesController    fan-out multi-input Runs    │
+│   controller/SchedulesController  cron / interval Run templates│
 │   controller/EventsController     SSE per-run event stream      │
 │   jobs/JobProducer                XADD run jobs to Redis      │
 │   jobs/CancelSignal               SET cancel keys               │
@@ -33,6 +35,7 @@ and persist state to Postgres.
 │ Worker (Python asyncio)                                      │
 │   worker/runner.py            consume jobs, invoke executor   │
 │   worker/queue.py             XREADGROUP / XACK / DLQ         │
+│   worker/schedules.py         claim due RunSchedule rows      │
 └───────────────────┬──────────────────────────────────────────┘
                     │
                     ▼
@@ -49,6 +52,8 @@ and persist state to Postgres.
 │ Persistence (Postgres 16, Alembic-owned schema)              │
 │   models/agent.py       Agent                                 │
 │   models/run.py         Run, Step, Message, ToolCall, Checkpoint│
+│   models/schedule.py    RunSchedule                           │
+│   models/batch.py       RunBatch                              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -72,9 +77,16 @@ API↔worker Redis protocol.
    `GET /v1/events/{run_id}`.
 6. When the adapter returns, the worker writes the terminal status. The API
    and console observe the same rows and events.
+7. If `AGENTFLOW_WEBHOOK_URLS` is set, the finalising process also POSTs the
+   `run.completed` / `run.failed` / `run.cancelled` / `run.waiting_human`
+   frame to each URL (`app/runtime/webhooks.py`, HMAC-signed when a secret is set, retried with
+   backoff, never blocking the run). Contract: [api-contract.md](api-contract.md#outbound-webhooks-push).
 
 Cancel works symmetrically: `POST /v1/runs/{id}/cancel` sets a Redis key under
 `agentflow:cancel:{run_id}`; the worker polls that key and aborts the adapter.
+Cancel and resume also append tenant-scoped `run_audit_events` rows
+(`actor_subject`, `actor_role`, optional `detail`) queryable via
+`GET /v1/runs/{id}/audit`.
 
 ## Why per-task sessions?
 
@@ -127,6 +139,13 @@ Agent, including its instructions, output validators, native tools, and MCP
 toolsets. One PydanticAI run maps to one runtime step; token deltas, output,
 provider usage/cost, and tool events are translated to standard adapter events.
 The MVP does not rebuild Agents from JSON or implement checkpoint/resume.
+
+The official AutoGen integration lives in `integrations/autogen` and registers
+the `autogen` entry point. A trusted `agent_factory` or `team_factory` returns
+an AutoGen AgentChat agent or team. Single-agent runs map to one step; team
+runs can emit one step per agent turn. Token deltas, messages, native tool
+events, and Hivemind-managed tools (via `AdapterToolSurface`) are translated
+to the same adapter contract.
 
 ## MCP tool bridge
 
@@ -188,8 +207,89 @@ Alternatively pass a single call or batch in run `input`:
 LangGraph graphs can invoke the same MCP tools via `type: "tool"` or
 `type: "agent"` nodes without a separate adapter.
 
+### ReAct tool failure recovery
+
+LangGraph `agent` nodes support an optional `tool_error_policy` in agent
+config:
+
+| Policy | Behavior |
+| --- | --- |
+| `fail_fast` (default) | Any tool exception fails the step/run (unchanged) |
+| `feedback` | Only explicit `RecoverableToolError` becomes a safe tool observation; fatal errors still fail-fast |
+
+Recoverable failures include MCP `CallToolResult.is_error=true` (mapped to a
+fixed public message) and custom tools that raise `RecoverableToolError`.
+Programming errors, transport/session failures, and cancellation continue to
+propagate. Raw errors are persisted on `ToolCall.error`; the model only sees
+a structured observation without traceback, arguments, or raw MCP text.
+
+Provider `tool_call_id` values pair assistant tool calls with `role=tool`
+messages. Hivemind lifecycle ULIDs pair `tool_call.started` /
+`tool_call.completed` events with `ToolCall.id` rows — these identifiers are
+not unified in v1.
+
+Parallel tool calls use standard `asyncio.gather` semantics: recoverable
+failures can coexist with successes in one round, but a fatal error in any
+parallel call fails the step without cancelling siblings or rolling back side
+effects. `tool_error_policy` is interpreted only by LangGraph `agent` nodes;
+the direct `mcp` adapter and PydanticAI bridge remain fail-fast.
+
+When `feedback` is enabled and recoverable observations exhaust
+`max_tool_rounds` without a final model reply, the run fails with
+`tool_recovery_exhausted: reached max_tool_rounds=N`.
+
+### Bounded tool observations
+
+Agent tool results have two consumers with different requirements. The full
+result is emitted in `tool_call.completed` for persistence and audit, while
+the model receives the result through a bounded observation. Set
+`tool_observation.max_tokens` to a positive value to enable deterministic,
+structure-aware previewing of large JSON mappings, lists, and strings. The
+preview keeps operational mapping fields such as `status`, `error`, `id`, and
+`message` ahead of ordinary fields, and includes `_observation` metadata with
+the original token estimate and omitted item count. A zero value preserves the
+legacy behavior. This is a size guard, not a semantic summary: the runtime does
+not claim that omitted content is unimportant.
+
+## Fine-grained streaming (reasoning blocks)
+
+`token.delta` carries an optional `part` field:
+
+| `part` | Meaning |
+| --- | --- |
+| `text` (default) | Visible assistant reply chunk |
+| `reasoning` | Model thinking / chain-of-thought chunk |
+
+Deltas stay SSE-only (no Redis replay log, no DB row). When the model finishes,
+LangGraph persists a `message.created` with `extra.kind = "reasoning"` (full
+text) before the visible assistant message. OpenAI-compatible providers that
+emit `reasoning_content` / `reasoning` / `thinking` on deltas are mapped
+automatically; mock mode uses `stream_reasoning: true` in agent config.
+
+The console folds reasoning in Messages and applies live `token.delta` drafts
+so operators see thinking as it streams. Thread L1 seeding skips reasoning
+rows (same as `prompt_echo`) so chain-of-thought is not replayed into the next
+prompt.
+
+## Fine-grained streaming (multimodal attachments)
+
+Attachments are uploaded first (`POST /v1/attachments`), then referenced from
+`POST /v1/runs` via `input.attachments: [{ "id": "…" }]`. Bytes live in a local
+object store (`AGENTFLOW_ATTACHMENT_STORAGE_DIR`); Postgres only stores metadata
+(`attachments` table). The same store is reserved for future memory document
+chunks — Message.content stays plain text.
+
+When a run starts, LangGraph (and adapters that call
+`emit_input_attachments`) streams `token.delta` with `part: "attachment"` for
+each file, then persists a `message.created` with
+`extra.kind = "attachment"` and `extra.attachments` refs. Image bytes are loaded
+into OpenAI-compatible multimodal `image_url` parts for the model call.
+Retention erase deletes attachment rows and blobs with L0 memory. Thread L1
+skips attachment rows (captions stay on the Run transcript for the console).
+
 ## Unit tests
 
 The Python test suite in `backend/tests/` exercises adapter and queue logic
-with an in-process ASGI client and in-memory or fake Redis. That harness is
-not part of the production topology.
+with an in-process ASGI client, a throwaway file-backed SQLite database and
+in-memory or fake Redis. That harness is not part of the production topology.
+CI runs it, plus the SDK suites, in `.github/workflows/tests.yml`.

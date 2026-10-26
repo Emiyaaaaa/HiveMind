@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+JobsImpl = Literal["streams", "list", "temporal"]
+
 
 class Settings(BaseSettings):
     """Runtime configuration loaded from env vars or .env file."""
@@ -65,6 +67,46 @@ class Settings(BaseSettings):
         ),
     )
 
+    jobs_impl: Literal["list", "streams", "temporal"] | None = Field(
+        default=None,
+        description=(
+            "Job dispatch backend. Must match the Java API's AGENTFLOW_JOBS_IMPL. "
+            "When unset, falls back to redis_queue_impl. `temporal` runs each "
+            "Run as a durable workflow so 24h+ executions and waiting_human "
+            "pauses survive worker restarts without Redis claim-idle races."
+        ),
+    )
+    temporal_target: str = Field(
+        default="localhost:7233",
+        description="Temporal frontend gRPC address (host:port).",
+    )
+    temporal_namespace: str = Field(
+        default="default",
+        description="Temporal namespace for Run workflows.",
+    )
+    temporal_task_queue: str = Field(
+        default="agentflow-runs",
+        description="Temporal task queue shared by the API client and Python worker.",
+    )
+    temporal_activity_start_to_close_seconds: int = Field(
+        default=7 * 24 * 3600,
+        ge=60,
+        description="Per-segment adapter activity start-to-close timeout.",
+    )
+    temporal_activity_heartbeat_seconds: int = Field(
+        default=30,
+        ge=5,
+        description=(
+            "Activity heartbeat timeout. A dead worker is detected when heartbeats "
+            "stop, then Temporal retries the segment from the latest checkpoint."
+        ),
+    )
+    temporal_activity_max_attempts: int = Field(
+        default=5,
+        ge=1,
+        description="Maximum Temporal retries for a crashed adapter segment.",
+    )
+
     job_queue_key: str = Field(
         default="agentflow:jobs:runs",
         description=(
@@ -78,7 +120,8 @@ class Settings(BaseSettings):
         description=(
             "Wire protocol for the run job queue. `streams` provides "
             "at-least-once delivery with XACK + XCLAIM-based recovery; "
-            "`list` is the legacy LPUSH/BRPOP path kept for rollback."
+            "`list` is the legacy LPUSH/BRPOP path kept for rollback. "
+            "Ignored when `jobs_impl` is set."
         ),
     )
     job_stream_group: str = Field(
@@ -167,6 +210,21 @@ class Settings(BaseSettings):
     )
     cancel_ttl_seconds: int = 86400
 
+    auth_enabled: bool = Field(
+        default=False,
+        description=(
+            "When true, /v1 endpoints (except health) require an API key. "
+            "Keys are listed in auth_api_keys."
+        ),
+    )
+    auth_api_keys: str = Field(
+        default="",
+        description=(
+            "Comma-separated API keys as key:organization:role[:project_id[:agent_id]] "
+            "(role is viewer|operator|admin; the three-part legacy form is org-wide)."
+        ),
+    )
+
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
 
@@ -198,6 +256,137 @@ class Settings(BaseSettings):
         le=300_000,
         description="Periodic metric reader export interval in milliseconds.",
     )
+
+    run_messages_preview_limit: int = Field(
+        default=50,
+        ge=0,
+        le=500,
+        description=(
+            "Maximum messages embedded in GET /v1/runs/{id} (most recent). "
+            "Use GET /v1/runs/{id}/messages for older pages."
+        ),
+    )
+    run_messages_page_max: int = Field(
+        default=200,
+        ge=1,
+        le=500,
+        description="Upper bound for limit on GET /v1/runs/{id}/messages.",
+    )
+    thread_messages_max: int = Field(
+        default=40,
+        ge=0,
+        le=500,
+        description=(
+            "Maximum prior thread messages seeded into AdapterContext "
+            "(0 = no count cap; token window from agent memory config still applies)."
+        ),
+    )
+
+    memory_checkpoint_bytes_alert_threshold: int = Field(
+        default=262_144,
+        ge=1024,
+        description=(
+            "Log a warning when a checkpoint JSON blob exceeds this many bytes "
+            "(default 256 KiB)."
+        ),
+    )
+    memory_messages_per_run_alert_threshold: int = Field(
+        default=500,
+        ge=1,
+        description="Log a warning when a run persists this many messages.",
+    )
+    memory_prompt_tokens_from_history_alert_threshold: int = Field(
+        default=8000,
+        ge=1,
+        description=(
+            "Log a warning when an LLM prompt includes at least this many "
+            "estimated tokens from prior conversation turns."
+        ),
+    )
+
+    data_retention_tenant_ttl_days: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "When > 0, terminal runs older than this many days have messages "
+            "and checkpoints purged automatically. 0 disables TTL sweeps."
+        ),
+    )
+    data_retention_purge_interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description="Worker sweeper interval for tenant TTL purge.",
+    )
+    data_retention_purge_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Maximum runs purged per sweeper cycle per tenant.",
+    )
+    schedule_sweeper_interval_seconds: int = Field(
+        default=15,
+        ge=5,
+        description="How often the worker claims due RunSchedule rows.",
+    )
+    schedule_sweeper_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum schedules fired per sweeper cycle.",
+    )
+
+    attachment_storage_dir: str = Field(
+        default="./data/attachments",
+        description=(
+            "Local object-store root for multimodal attachments "
+            "(shared later with memory document chunks)."
+        ),
+    )
+    attachment_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        le=100 * 1024 * 1024,
+        description="Maximum upload size per attachment (default 10 MiB).",
+    )
+
+    # Outbound webhooks: pushed by whichever process finalises runs (the
+    # worker in queue mode, the API in inline mode). See app/runtime/webhooks.py.
+    webhook_urls: str = Field(
+        default="",
+        description=(
+            "Comma-separated URLs that receive run.completed / run.failed / "
+            "run.cancelled / run.waiting_human as JSON POSTs. Empty disables webhooks."
+        ),
+    )
+    webhook_secret: str | None = Field(
+        default=None,
+        description="HMAC-SHA256 key for the X-AgentFlow-Signature header (unset = unsigned).",
+    )
+    webhook_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=120,
+        description="Per-request timeout for a webhook POST.",
+    )
+    webhook_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Delivery attempts per URL before the event is dropped (exponential backoff).",
+    )
+
+
+def effective_jobs_impl(settings: Settings | None = None) -> JobsImpl:
+    """Resolve the job protocol Java and Python must agree on."""
+    cfg = settings or get_settings()
+    if cfg.jobs_impl is not None:
+        return cfg.jobs_impl
+    return cfg.redis_queue_impl
+
+
+def jobs_backend() -> JobsImpl:
+    """Backwards-compatible alias used across worker/service modules."""
+    return effective_jobs_impl()
 
 
 @lru_cache

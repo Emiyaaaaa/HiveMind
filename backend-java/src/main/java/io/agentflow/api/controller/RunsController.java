@@ -1,5 +1,7 @@
 package io.agentflow.api.controller;
 
+import io.agentflow.api.dto.MessagePageResponse;
+import io.agentflow.api.dto.RunAuditEventResponse;
 import io.agentflow.api.dto.RunCreateRequest;
 import io.agentflow.api.dto.RunResponse;
 import io.agentflow.api.dto.RunResumeRequest;
@@ -43,6 +45,14 @@ public class RunsController {
         return service.get(id);
     }
 
+    @GetMapping("/{id}/messages")
+    public MessagePageResponse listMessages(
+            @PathVariable String id,
+            @RequestParam(required = false) Integer cursor,
+            @RequestParam(defaultValue = "50") int limit) {
+        return service.listMessages(id, cursor, limit);
+    }
+
     @PostMapping("/{id}/cancel")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void cancel(@PathVariable String id) {
@@ -61,5 +71,10 @@ public class RunsController {
     public RunResponse resume(
             @PathVariable String id, @RequestBody(required = false) RunResumeRequest payload) {
         return service.resume(id, payload);
+    }
+
+    @GetMapping("/{id}/audit")
+    public List<RunAuditEventResponse> listAudit(@PathVariable String id) {
+        return service.listAudit(id);
     }
 }

@@ -1,0 +1,147 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Wednesdays 06:00 UTC
+    - cron: "0 6 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: java
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        if: matrix.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build Java for CodeQL
+        if: matrix.language == 'java'
+        working-directory: backend-java
+        run: mvn -B -DskipTests package
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  open-issue:
+    name: Summarize open alerts as Issue
+    needs: analyze
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build alert summary and upsert Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/upsert_automation_issue.sh
+
+          ALERTS_JSON="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" \
+            || echo '[]')"
+
+          COUNT="$(echo "$ALERTS_JSON" | jq 'if type=="array" then length else 0 end')"
+          REPORT="codeql-alerts-report.md"
+
+          {
+            echo "# CodeQL / code scanning open alerts"
+            echo
+            echo "Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+            echo
+            echo "Open alerts: **${COUNT}**"
+            echo
+            echo "Alerts also appear under the repository **Security → Code scanning** tab."
+            echo
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+          } >"$REPORT"
+
+          TITLE="[automation] CodeQL open alerts"
+
+          if [[ "$COUNT" -eq 0 ]]; then
+            EXISTING="$(
+              gh issue list --state open --limit 100 --json number,title \
+                | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
+                | head -n 1
+            )"
+            if [[ -n "$EXISTING" ]]; then
+              gh issue comment "$EXISTING" --body "No open code scanning alerts remain. Closing. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              gh issue close "$EXISTING" --reason completed
+              echo "Closed issue #${EXISTING}"
+            else
+              echo "No open alerts and no tracking issue."
+            fi
+            exit 0
+          fi
+
+          {
+            echo "| Severity | Rule | Path | State | URL |"
+            echo "|---|---|---|---|---|"
+            echo "$ALERTS_JSON" | jq -r '
+              .[] |
+              [
+                (.rule.security_severity_level // .rule.severity // "unknown"),
+                (.rule.id // .rule.name // "unknown"),
+                (.most_recent_instance.location.path // "n/a"),
+                .state,
+                .html_url
+              ] | @tsv
+            ' | while IFS=$'\t' read -r sev rule path state url; do
+              echo "| ${sev} | \`${rule}\` | \`${path}\` | ${state} | [alert](${url}) |"
+            done
+            echo
+            echo "<details><summary>Raw alert JSON (truncated)</summary>"
+            echo
+            echo '```json'
+            echo "$ALERTS_JSON" | jq '.[0:20]'
+            echo '```'
+            echo
+            echo "</details>"
+          } >>"$REPORT"
+
+          scripts/ci/upsert_automation_issue.sh \
+            "$TITLE" \
+            "$REPORT" \
+            automation \
+            security

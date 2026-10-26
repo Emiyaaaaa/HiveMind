@@ -4,12 +4,16 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { use } from "react";
 
+import { ApprovalAudit } from "@/components/ApprovalAudit";
+import { ApprovalPanel } from "@/components/ApprovalPanel";
 import { CheckpointPanel } from "@/components/CheckpointPanel";
 import { EventStream } from "@/components/EventStream";
+import { MessagesPanel } from "@/components/MessagesPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StepTimeline } from "@/components/StepTimeline";
 import { TokenCostSummary } from "@/components/TokenCostSummary";
 import { ToolCallPanel } from "@/components/ToolCallPanel";
+import { isWaitingHuman } from "@/lib/approval";
 import { checkpointsByStep } from "@/lib/checkpoints";
 import { api } from "@/lib/api";
 import { useRunWithLiveUpdates } from "@/lib/useRunLiveSync";
@@ -25,7 +29,11 @@ export default function RunDetailPage({ params }: PageProps) {
 
   const cancel = useMutation({
     mutationFn: () => api.cancelRun(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["run", id] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["run", id] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["run-audit", id] });
+    },
   });
 
   if (run.isLoading) return <p className="text-muted">Loading…</p>;
@@ -47,12 +55,24 @@ export default function RunDetailPage({ params }: PageProps) {
             <StatusBadge status={r.status} />
           </div>
           <div className="text-xs text-muted">
-            agent <span className="font-mono">{r.agent_id}</span> · created{" "}
-            {new Date(r.created_at).toLocaleString()}
+            agent <span className="font-mono">{r.agent_id}</span>
+            {r.thread_id ? (
+              <>
+                {" "}
+                · thread{" "}
+                <Link
+                  href={`/threads/${r.thread_id}`}
+                  className="font-mono hover:text-accent"
+                >
+                  {r.thread_id}
+                </Link>
+              </>
+            ) : null}{" "}
+            · created {new Date(r.created_at).toLocaleString()}
           </div>
         </div>
         <div className="flex gap-2">
-          {run.isLive && (
+          {(run.isLive || isWaitingHuman(r.status)) && (
             <button
               className="rounded border border-bad/40 text-bad px-3 py-1.5 text-sm hover:bg-bad/10"
               onClick={() => cancel.mutate()}
@@ -60,6 +80,12 @@ export default function RunDetailPage({ params }: PageProps) {
               Cancel
             </button>
           )}
+          <Link
+            href="/approvals"
+            className="rounded border border-border px-3 py-1.5 text-sm hover:bg-surface"
+          >
+            Approvals
+          </Link>
           <Link
             href="/runs"
             className="rounded border border-border px-3 py-1.5 text-sm hover:bg-surface"
@@ -75,6 +101,14 @@ export default function RunDetailPage({ params }: PageProps) {
         </div>
       ) : null}
 
+      <ApprovalPanel
+        runId={id}
+        status={r.status}
+        output={r.output}
+        messages={r.messages}
+        checkpoints={r.checkpoints}
+      />
+
       <section className="rounded-lg border border-border bg-surface p-4 space-y-3">
         <h2 className="font-medium">Token &amp; cost</h2>
         <TokenCostSummary usage={r.usage} steps={r.steps} />
@@ -85,6 +119,8 @@ export default function RunDetailPage({ params }: PageProps) {
         status={r.status}
         checkpoints={r.checkpoints}
       />
+
+      <ApprovalAudit runId={id} />
 
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-border bg-surface p-4 space-y-2">
@@ -108,23 +144,12 @@ export default function RunDetailPage({ params }: PageProps) {
 
       <ToolCallPanel steps={r.steps} />
 
-      <section className="space-y-3">
-        <h2 className="font-medium">Messages</h2>
-        <ol className="space-y-2">
-          {r.messages.map((m) => (
-            <li
-              key={m.id}
-              className="rounded border border-border bg-surface p-3 text-sm"
-            >
-              <div className="text-xs uppercase tracking-wide text-muted mb-1">
-                {m.role}
-                {m.name ? ` · ${m.name}` : ""}
-              </div>
-              <div className="whitespace-pre-wrap">{m.content}</div>
-            </li>
-          ))}
-        </ol>
-      </section>
+      <MessagesPanel
+        runId={id}
+        messages={r.messages}
+        messagesTruncated={r.messages_truncated ?? false}
+        steps={r.steps}
+      />
 
       <EventStream events={run.events} status={run.streamStatus} />
     </div>

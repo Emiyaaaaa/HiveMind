@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from app.adapters.adapter_tools import (
     open_tool_surface,
 )
 from app.adapters.base import AdapterContext
+from app.adapters.tool_errors import RecoverableToolError
 from app.adapters.tool_registry import ToolDefinition, get_tool
 
 _FIXTURE_SERVER = Path(__file__).resolve().parent / "fixtures" / "mcp_echo_server.py"
@@ -99,3 +101,55 @@ async def test_open_tool_surface_context_manager():
         tool = surface.lookup("echo")
         assert isinstance(tool, ToolDefinition)
         assert tool.name == "echo"
+
+
+async def _raise_recoverable(_args: dict[str, Any]) -> dict[str, Any]:
+    raise RecoverableToolError(
+        code="recoverable",
+        public_message="safe message",
+        internal_message="raw internal detail",
+    )
+
+
+@pytest.mark.asyncio
+async def test_adapter_tool_surface_preserves_recoverable_error_type():
+    from app.adapters.tool_registry import register_tool
+
+    register_tool("recoverable_probe", _raise_recoverable, overwrite=True)
+    ctx = _RecordingContext()
+    surface = await AdapterToolSurface.open({"tools": ["recoverable_probe"]}, ["recoverable_probe"])
+    try:
+        with pytest.raises(RecoverableToolError) as exc_info:
+            await surface.execute(
+                ctx,
+                step_index=0,
+                name="recoverable_probe",
+                arguments={},
+            )
+        assert exc_info.value.code == "recoverable"
+        completed = [d for e, d in ctx.events if e == "tool_call.completed"]
+        assert completed[0]["error"] == "raw internal detail"
+    finally:
+        await surface.close()
+
+
+@pytest.mark.asyncio
+async def test_adapter_tool_surface_cancellation_propagates():
+    async def _cancelled(_args: dict[str, Any]) -> dict[str, Any]:
+        raise asyncio.CancelledError()
+
+    from app.adapters.tool_registry import register_tool
+
+    register_tool("cancel_probe", _cancelled, overwrite=True)
+    ctx = _RecordingContext()
+    surface = await AdapterToolSurface.open({"tools": ["cancel_probe"]}, ["cancel_probe"])
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await surface.execute(
+                ctx,
+                step_index=0,
+                name="cancel_probe",
+                arguments={},
+            )
+    finally:
+        await surface.close()

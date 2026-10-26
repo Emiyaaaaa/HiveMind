@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars (not committed) and fill in image registries / DB URLs.
+namespace        = "agentflow"
+install_keda     = true
+autoscaling_enabled = true
+
+api_image_repository    = "ghcr.io/example/agentflow-api"
+api_image_tag           = "0.1.0"
+worker_image_repository = "ghcr.io/example/agentflow-worker"
+worker_image_tag        = "0.1.0"
+
+postgres_enabled = false
+redis_enabled    = false
+
+database_jdbc_url       = "jdbc:postgresql://postgres.example:5432/agentflow"
+database_sqlalchemy_url = "postgresql+asyncpg://agentflow:changeme@postgres.example:5432/agentflow"
+database_username       = "agentflow"
+database_password       = "changeme"
+
+redis_host = "redis.example"
+redis_port = 6379
+redis_url  = "redis://redis.example:6379/0"
+
+otel_enabled            = true
+otel_exporter_endpoint  = "http://otel-collector.observability.svc.cluster.local:4318"
+prometheus_server_address = "http://prometheus.observability.svc.cluster.local:9090"
+
+target_consumer_delay_seconds = 30
+worker_min_replicas           = 1
+worker_max_replicas           = 10

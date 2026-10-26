@@ -1,4 +1,4 @@
-# AgentFlow
+# Hivemind
 
 > A Python-first runtime layer for multi-agent systems, with persistent run
 > state, streaming execution events, and a pluggable orchestration interface.
@@ -8,7 +8,7 @@
 [License](LICENSE)
 [Python](https://www.python.org)
 
-AgentFlow provides the runtime infrastructure for multi-agent applications.
+Hivemind provides the runtime infrastructure for multi-agent applications.
 It does not replace frameworks such as LangGraph, AutoGen or CrewAI. Instead,
 it gives them a consistent execution model: agents are invoked as runs, runs
 produce ordered steps and messages, tool calls are recorded, and every state
@@ -32,7 +32,7 @@ concerns that sit outside the framework itself:
 - a stable abstraction for switching or mixing orchestration frameworks;
 - an operator-facing console for inspecting active and historical runs.
 
-AgentFlow focuses on that runtime boundary. The stack pairs a Java/Spring Boot
+Hivemind focuses on that runtime boundary. The stack pairs a Java/Spring Boot
 API for HTTP and SSE with Python workers for adapter execution, SQLAlchemy and
 Alembic for persistence, and Redis for job queues and live events.
 
@@ -47,6 +47,10 @@ the API or database schema.
 observability surface across different orchestration engines.
 - **Server-Sent Events.** Run lifecycle changes are emitted as SSE events, so
 clients can follow execution without polling.
+- **Outbound webhooks.** Run outcomes (`run.completed`, `run.failed`,
+`run.cancelled`, `run.waiting_human`) are pushed to configured URLs with
+retries, HMAC-signed when a secret is configured, for integrations that
+cannot hold an SSE stream.
 - **Lightweight admin console.** The Next.js console lists runs, opens run
 details, renders steps and messages, and subscribes to the live event stream.
 - **Contributor-oriented stack.** Java 21, Spring Boot 3, Python 3.12,
@@ -58,6 +62,10 @@ The HTTP layer that the frontend talks to is a Java/Spring Boot service in
 [`backend-java/`](backend-java/). Agent orchestration runs in Python worker
 processes in [`backend/`](backend/) that consume a Redis-backed job queue and
 drive adapters (LangGraph, Echo, ...) to completion.
+
+The API supports tenant-scoped RBAC through API keys and OIDC Bearer tokens.
+For identity-provider setup, tenant claim requirements, and group-to-role
+mapping, see [`docs/oidc.md`](docs/oidc.md).
 
 ```
 ┌───────────────────┐  REST   ┌──────────────────────┐
@@ -85,7 +93,7 @@ See:
 
 - [docs/api-contract.md](docs/api-contract.md) — frozen `/v1` HTTP contract
   and the API↔worker Redis protocol.
-- [docs/deployment.md](docs/deployment.md) — production runbook.
+- [docs/deployment.md](docs/deployment.md) — production runbook (Compose, Helm, Terraform).
 - [docs/architecture.md](docs/architecture.md) and
   [docs/data-model.md](docs/data-model.md) — runtime topology and database
   model.
@@ -212,7 +220,7 @@ PydanticAI to the core backend dependency set.
 
 ## Current architecture (summary)
 
-AgentFlow is a **split runtime**: a Java API tier, a Python execution tier,
+Hivemind is a **split runtime**: a Java API tier, a Python execution tier,
 and shared infrastructure.
 
 

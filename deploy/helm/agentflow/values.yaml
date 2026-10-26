@@ -1,0 +1,151 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+otel:
+  enabled: true
+  # Worker uses the OTLP HTTP base URL (no path). API appends /v1/traces and /v1/metrics.
+  exporterEndpoint: http://otel-collector.observability.svc.cluster.local:4318
+
+jobs:
+  impl: streams
+
+auth:
+  enabled: false
+
+api:
+  replicaCount: 2
+  image:
+    repository: agentflow-api
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  env: {}
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+worker:
+  replicaCount: 1
+  image:
+    repository: agentflow-worker
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  concurrency: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  env: {}
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Scale workers from Prometheus queue delay (agentflow_queue_consumer_delay).
+  # Requires OTel export from workers and a Prometheus that scrapes the collector.
+  autoscaling:
+    enabled: true
+    # keda (queue delay via Prometheus) or hpa (CPU only)
+    provider: keda
+    minReplicas: 1
+    maxReplicas: 10
+    pollingInterval: 15
+    cooldownPeriod: 300
+    targetConsumerDelaySeconds: 30
+    activationConsumerDelaySeconds: 5
+    prometheus:
+      serverAddress: http://prometheus.observability.svc.cluster.local:9090
+    # Optional second trigger: undelivered + pending jobs.
+    backlogThreshold: 0
+    cpu:
+      targetAverageUtilization: 70
+
+migrate:
+  enabled: true
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+
+postgres:
+  # Demo-only in-cluster Postgres. Production should set enabled=false and
+  # point database.url at a managed instance.
+  enabled: false
+  image: postgres:16-alpine
+  auth:
+    username: agentflow
+    password: agentflow
+    database: agentflow
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""
+
+redis:
+  enabled: false
+  image: redis:7-alpine
+
+database:
+  # Used when postgres.enabled is false.
+  jdbcUrl: jdbc:postgresql://postgres:5432/agentflow
+  sqlalchemyUrl: postgresql+asyncpg://agentflow:agentflow@postgres:5432/agentflow
+  username: agentflow
+  password: ""
+  existingSecret: ""
+  existingSecretUsernameKey: username
+  existingSecretPasswordKey: password
+
+redisExternal:
+  # Used when redis.enabled is false.
+  host: redis
+  port: 6379
+  url: redis://redis:6379/0
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: agentflow.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Optional console Deployment. Image is not built by default compose.
+console:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: agentflow-console
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

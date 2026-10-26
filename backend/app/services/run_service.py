@@ -11,13 +11,13 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, attributes
 
 from app.adapters import get_adapter
-from app.core.config import get_settings
+from app.core.config import get_settings, jobs_backend
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.events import EventBus
@@ -26,24 +26,38 @@ from app.models import (
     Checkpoint,
     Message,
     Run,
+    RunAuditEvent,
     RunStatus,
     Step,
+    Thread,
     ToolCall,
 )
 from app.core.telemetry import (
+    record_checkpoint_bytes,
     record_llm_usage,
+    record_messages_per_run,
     record_run_outcome,
     record_step_outcome,
     record_tool_call,
 )
+from app.runtime.memory_metrics import (
+    checkpoint_state_bytes,
+    clear_memory_alerts,
+    maybe_alert_checkpoint_bytes,
+    maybe_alert_messages_per_run,
+)
+from app.runtime.messages import messages_from_rows
 from app.runtime.usage import aggregate_run_usage
-from app.schemas.run import EventType, RunCreate, RunEvent, RunResume, RunRetry
+from app.runtime.webhooks import get_webhook_dispatcher
+from app.runtime.quota import QuotaExceeded
+from app.schemas.run import EventType, MessagePage, MessageRead, RunCreate, RunEvent, RunResume, RunRetry
 from app.runtime.resume_context import (
     RunResumeContext,
     parse_resume_context,
     resume_metadata,
     without_resume_metadata,
 )
+from app.services.quota_service import QuotaService
 from app.worker.cancel import CancelRegistry, get_cancel_registry
 from app.worker.queue import JobQueue, RunJob, get_job_queue
 
@@ -55,6 +69,18 @@ class RunNotFound(Exception):
 
 
 class AgentNotFound(Exception):
+    pass
+
+
+class AttachmentRefNotFound(Exception):
+    """Raised when ``input.attachments`` references a missing / cross-tenant id."""
+
+    def __init__(self, attachment_id: str) -> None:
+        self.attachment_id = attachment_id
+        super().__init__(attachment_id)
+
+
+class ThreadNotFound(Exception):
     pass
 
 
@@ -94,13 +120,61 @@ class RunService:
         self.job_queue = job_queue or get_job_queue()
         self.cancel_registry = cancel_registry or get_cancel_registry()
 
-    async def create_run(self, payload: RunCreate) -> Run:
+    async def create_run(
+        self,
+        payload: RunCreate,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> Run:
         agent = await self.session.get(Agent, payload.agent_id)
-        if agent is None:
+        if (
+            agent is None
+            or (tenant_id is not None and agent.tenant_id != tenant_id)
+            or (project_id is not None and agent.project_id != project_id)
+            or (agent_id is not None and agent.id != agent_id)
+        ):
             raise AgentNotFound(payload.agent_id)
 
+        thread_id: str | None = payload.thread_id
+        if thread_id is not None:
+            thread = await self.session.get(Thread, thread_id)
+            if (
+                thread is None
+                or thread.tenant_id != agent.tenant_id
+                or thread.agent_id != agent.id
+                or (
+                    project_id is not None
+                    and thread.project_id is not None
+                    and thread.project_id != project_id
+                )
+            ):
+                raise ThreadNotFound(thread_id)
+
+        from app.services.attachment_service import (
+            AttachmentNotFound,
+            AttachmentService,
+        )
+
+        # Validate attachment refs before inserting the run row.
+        attachment_service = AttachmentService(self.session)
+        try:
+            await attachment_service.resolve_input_attachments(
+                dict(payload.input or {}),
+                tenant_id=agent.tenant_id,
+                run_id=None,
+            )
+        except AttachmentNotFound as exc:
+            raise AttachmentRefNotFound(exc.attachment_id) from exc
+
+        await QuotaService(self.session).assert_can_create_run(agent)
+
         run = Run(
+            tenant_id=agent.tenant_id,
+            project_id=agent.project_id,
             agent_id=agent.id,
+            thread_id=thread_id,
             adapter=payload.adapter or agent.adapter,
             status=RunStatus.PENDING,
             input=payload.input,
@@ -109,6 +183,12 @@ class RunService:
         self.session.add(run)
         await self.session.commit()
         await self.session.refresh(run)
+
+        await attachment_service.resolve_input_attachments(
+            dict(payload.input or {}),
+            tenant_id=agent.tenant_id,
+            run_id=run.id,
+        )
 
         await self._broadcast("run.created", run.id, {"agent_id": agent.id})
         return run
@@ -163,13 +243,27 @@ class RunService:
         finally:
             _running_tasks.pop(run_id, None)
 
-    async def retry_run(self, run_id: str, payload: RunRetry | None = None) -> Run:
+    async def retry_run(
+        self,
+        run_id: str,
+        payload: RunRetry | None = None,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> Run:
         """Re-queue a failed run, optionally from a checkpoint snapshot."""
-        run = await self._get_run(run_id, with_relations=True)
+        run = await self._get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
         if run.status != RunStatus.FAILED:
             raise RunConflict(run_id, run.status, "retry")
 
-        checkpoint_state: dict[str, Any] | None = None
+        agent = await self.session.get(Agent, run.agent_id)
+        if agent is not None:
+            await QuotaService(self.session).assert_can_create_run(agent)
+
         checkpoint_index: int | None = None
         if run.checkpoints:
             req_index = payload.checkpoint_index if payload else None
@@ -182,18 +276,14 @@ class RunService:
                     raise RunConflict(
                         run_id, run.status, f"retry (checkpoint {req_index} missing)"
                     )
-                checkpoint_state = match.state
                 checkpoint_index = match.index
             else:
-                latest = run.checkpoints[-1]
-                checkpoint_state = latest.state
-                checkpoint_index = latest.index
+                checkpoint_index = run.checkpoints[-1].index
 
         meta = without_resume_metadata(dict(run.metadata_ or {}))
         meta.update(
             resume_metadata(
                 mode="retry",
-                checkpoint_state=checkpoint_state,
                 checkpoint_index=checkpoint_index,
             )
         )
@@ -203,11 +293,27 @@ class RunService:
         await self.session.commit()
 
         await self.start_run(run_id)
-        return await self.get_run(run_id, with_relations=True)
+        return await self.get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
 
-    async def resume_run(self, run_id: str, payload: RunResume | None = None) -> Run:
+    async def resume_run(
+        self,
+        run_id: str,
+        payload: RunResume | None = None,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        actor_subject: str | None = None,
+        actor_role: str | None = None,
+    ) -> Run:
         """Continue a run paused for human approval."""
-        run = await self._get_run(run_id, with_relations=True)
+        run = await self._get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
         if run.status != RunStatus.WAITING_HUMAN:
             raise RunConflict(run_id, run.status, "resume")
 
@@ -217,33 +323,70 @@ class RunService:
             merged.update(human_input)
             run.input = merged
 
-        checkpoint_state: dict[str, Any] | None = None
         checkpoint_index: int | None = None
         if run.checkpoints:
-            latest = run.checkpoints[-1]
-            checkpoint_state = latest.state
-            checkpoint_index = latest.index
+            checkpoint_index = run.checkpoints[-1].index
 
         meta = without_resume_metadata(dict(run.metadata_ or {}))
         meta.update(
             resume_metadata(
                 mode="resume",
-                checkpoint_state=checkpoint_state,
                 checkpoint_index=checkpoint_index,
                 human_input=human_input or None,
             )
         )
         run.status = RunStatus.PENDING
         run.metadata_ = meta
+        detail: dict[str, Any] = {}
+        if checkpoint_index is not None:
+            detail["checkpoint_index"] = checkpoint_index
+        if human_input:
+            detail["input"] = human_input
+        self._record_audit(
+            run,
+            action="resume",
+            actor_subject=actor_subject,
+            actor_role=actor_role,
+            detail=detail,
+        )
         await self.session.commit()
 
         await self.start_run(run_id)
-        return await self.get_run(run_id, with_relations=True)
+        return await self.get_run(
+            run_id, with_relations=True, tenant_id=tenant_id,
+            project_id=project_id, agent_id=agent_id,
+        )
 
-    async def cancel_run(self, run_id: str) -> None:
+    async def cancel_run(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        actor_subject: str | None = None,
+        actor_role: str | None = None,
+    ) -> None:
         # Ensure the run exists so the API returns 404 for unknown ids
         # whether or not a worker is currently executing it.
-        await self._get_run(run_id)
+        run = await self._get_run(
+            run_id, tenant_id=tenant_id, project_id=project_id, agent_id=agent_id
+        )
+        self._record_audit(
+            run,
+            action="cancel",
+            actor_subject=actor_subject,
+            actor_role=actor_role,
+            detail={},
+        )
+
+        if (
+            get_settings().worker_mode == "queue"
+            and jobs_backend() == "temporal"
+        ):
+            from app.worker.temporal.client import signal_cancel
+
+            await signal_cancel(run_id)
 
         # Signal external workers (queue mode) via the cancel registry.
         await self.cancel_registry.request_cancel(run_id)
@@ -251,29 +394,129 @@ class RunService:
         # Inline-mode shortcut: cancel the in-process task directly.
         task = _running_tasks.get(run_id)
         if task is not None:
+            await self.session.commit()
             task.cancel()
             return
 
-        # No live task and no external worker would pick it up: finalize now.
+        # No live task: finalize pending/running/waiting runs. Terminal runs
+        # only need the audit row persisted (cancel stays idempotent).
+        terminal = {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }
         if get_settings().worker_mode == "inline":
-            await self._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
+            if run.status not in terminal:
+                await self._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
+            else:
+                await self.session.commit()
+            return
 
-    async def get_run(self, run_id: str, *, with_relations: bool = True) -> Run:
-        return await self._get_run(run_id, with_relations=with_relations)
+        await self.session.commit()
 
-    async def list_runs(self, limit: int = 50) -> list[Run]:
+    async def list_audit_events(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[RunAuditEvent]:
+        await self._get_run(
+            run_id, tenant_id=tenant_id, project_id=project_id, agent_id=agent_id
+        )
+        stmt = (
+            select(RunAuditEvent)
+            .where(RunAuditEvent.run_id == run_id)
+            .order_by(RunAuditEvent.created_at.asc(), RunAuditEvent.id.asc())
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(RunAuditEvent.tenant_id == tenant_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    def _record_audit(
+        self,
+        run: Run,
+        *,
+        action: str,
+        actor_subject: str | None,
+        actor_role: str | None,
+        detail: dict[str, Any],
+    ) -> RunAuditEvent:
+        event = RunAuditEvent(
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            action=action,
+            actor_subject=actor_subject or "anonymous",
+            actor_role=(actor_role or "admin").lower(),
+            detail=dict(detail or {}),
+        )
+        self.session.add(event)
+        logger.info(
+            "run.audit",
+            run_id=run.id,
+            action=action,
+            actor_subject=event.actor_subject,
+            actor_role=event.actor_role,
+        )
+        return event
+    async def get_run(
+        self,
+        run_id: str,
+        *,
+        with_relations: bool = True,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> Run:
+        return await self._get_run(
+            run_id,
+            with_relations=with_relations,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            agent_id=agent_id,
+        )
+
+    async def list_runs(
+        self,
+        limit: int = 50,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[Run]:
         stmt = select(Run).order_by(Run.created_at.desc()).limit(limit)
+        if tenant_id is not None:
+            stmt = stmt.where(Run.tenant_id == tenant_id)
+        if project_id is not None:
+            stmt = stmt.where(Run.project_id == project_id)
+        if agent_id is not None:
+            stmt = stmt.where(Run.agent_id == agent_id)
         result = await self.session.execute(stmt)
         return list(result.scalars())
 
     # ------------------------------------------------------------------ helpers
 
-    async def _get_run(self, run_id: str, *, with_relations: bool = False) -> Run:
+    async def _get_run(
+        self,
+        run_id: str,
+        *,
+        with_relations: bool = False,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> Run:
         stmt = select(Run).where(Run.id == run_id)
+        if tenant_id is not None:
+            stmt = stmt.where(Run.tenant_id == tenant_id)
+        if project_id is not None:
+            stmt = stmt.where(Run.project_id == project_id)
+        if agent_id is not None:
+            stmt = stmt.where(Run.agent_id == agent_id)
         if with_relations:
             stmt = stmt.options(
                 selectinload(Run.steps).selectinload(Step.tool_calls),
-                selectinload(Run.messages),
                 selectinload(Run.checkpoints),
             )
         try:
@@ -297,6 +540,7 @@ class RunService:
         if error is not None:
             run.error = error
         usage = aggregate_run_usage(run.steps)
+        meta = dict(run.metadata_ or {})
         if (
             usage.tokens_in
             or usage.tokens_out
@@ -304,9 +548,33 @@ class RunService:
             or usage.step_count
             or usage.tool_call_count
         ):
-            meta = dict(run.metadata_ or {})
             meta["usage"] = usage.model_dump()
-            run.metadata_ = meta
+
+        if status in (
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        ):
+            agent = await self.session.get(Agent, run.agent_id)
+            if agent is not None:
+                meta = await QuotaService(self.session).apply_run_usage(
+                    agent=agent,
+                    run_metadata=meta,
+                    usage=usage,
+                )
+
+        run.metadata_ = meta
+        if status in (RunStatus.SUCCEEDED, RunStatus.FAILED):
+            # Same transaction as the terminal status, so a poll that sees
+            # succeeded/failed also sees the episode. Failures here roll back
+            # only the summary, not the run.
+            from app.services.episode_service import EpisodeService
+
+            try:
+                async with self.session.begin_nested():
+                    await EpisodeService(self.session).ingest_run(run)
+            except Exception:
+                logger.exception("episode_ingest_failed", run_id=run_id)
         await self.session.commit()
 
         if status in (
@@ -321,24 +589,32 @@ class RunService:
                 tokens_out=usage.tokens_out,
                 cost_usd=usage.cost_usd,
             )
+            message_count = await self._count_messages(run_id)
+            record_messages_per_run(
+                adapter=run.adapter, message_count=message_count
+            )
+            maybe_alert_messages_per_run(
+                run_id=run_id,
+                adapter=run.adapter,
+                message_count=message_count,
+            )
+            clear_memory_alerts(run_id)
 
         usage_payload = usage.model_dump()
+        outcome: tuple[EventType, dict[str, Any]] | None = None
         if status == RunStatus.SUCCEEDED:
-            await self._broadcast(
-                "run.completed",
-                run_id,
-                {"output": output, "usage": usage_payload},
-            )
+            outcome = ("run.completed", {"output": output, "usage": usage_payload})
         elif status == RunStatus.FAILED:
-            await self._broadcast("run.failed", run_id, {"error": error})
+            outcome = ("run.failed", {"error": error})
         elif status == RunStatus.CANCELLED:
-            await self._broadcast("run.cancelled", run_id, {"error": error})
+            outcome = ("run.cancelled", {"error": error})
         elif status == RunStatus.WAITING_HUMAN:
-            await self._broadcast(
-                "run.waiting_human",
-                run_id,
-                {"output": output},
-            )
+            outcome = ("run.waiting_human", {"output": output})
+        if outcome is not None:
+            event = await self._broadcast(outcome[0], run_id, outcome[1])
+            # Same frame the SSE client sees, pushed to configured URLs.
+            # Fire-and-forget: a slow receiver must not hold the run's session.
+            get_webhook_dispatcher().dispatch(event)
 
     async def _broadcast(
         self,
@@ -347,7 +623,7 @@ class RunService:
         data: dict[str, Any],
         *,
         persist: bool = True,
-    ) -> None:
+    ) -> RunEvent:
         event = RunEvent(
             type=event_type,
             run_id=run_id,
@@ -355,6 +631,7 @@ class RunService:
             data=data,
         )
         await self.bus.publish(event, persist=persist)
+        return event
 
     async def _handle_event(
         self, run_id: str, event_type: EventType, data: dict[str, Any]
@@ -412,6 +689,7 @@ class RunService:
                 step.status = RunStatus.FAILED
                 step.error = data.get("error")
                 await self.session.commit()
+                await self._retain_latest_checkpoint(run_id, reason="pre_failure")
                 run = await self._get_run(run_id)
                 record_step_outcome(
                     adapter=run.adapter,
@@ -420,17 +698,47 @@ class RunService:
                 )
         elif event_type == "message.created":
             index = await self._next_message_index(run_id)
+            step_id: str | None = None
+            raw_step_index = data.get("step_index")
+            if isinstance(raw_step_index, int):
+                step = await self._find_step(run_id, raw_step_index)
+                if step is not None:
+                    step_id = step.id
+            extra = dict(data.get("extra") or {})
             message = Message(
                 run_id=run_id,
                 index=index,
+                step_id=step_id,
                 role=data["role"],
                 name=data.get("name"),
                 content=data.get("content", ""),
                 tool_call_id=data.get("tool_call_id"),
-                extra=data.get("extra", {}),
+                extra=extra,
             )
             self.session.add(message)
             await self.session.commit()
+            await self.session.refresh(message)
+            attachment_ids = [
+                str(item.get("id"))
+                for item in (extra.get("attachments") or [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+            if attachment_ids:
+                from app.services.attachment_service import AttachmentService
+
+                run = await self._get_run(run_id)
+                await AttachmentService(self.session).bind_message(
+                    attachment_ids=attachment_ids,
+                    message_id=message.id,
+                    tenant_id=run.tenant_id,
+                )
+            data = {
+                **data,
+                "id": message.id,
+                "index": index,
+                "step_id": step_id,
+                "extra": extra,
+            }
         elif event_type == "tool_call.started":
             step = await self._find_step(run_id, data["step_index"])
             if step is not None:
@@ -478,6 +786,15 @@ class RunService:
             )
             self.session.add(cp)
             await self.session.commit()
+            await self._prune_checkpoints(run_id, keep_index=cp_index)
+            run = await self._get_run(run_id)
+            cp_bytes = checkpoint_state_bytes(cp.state)
+            record_checkpoint_bytes(adapter=run.adapter, checkpoint_bytes=cp_bytes)
+            maybe_alert_checkpoint_bytes(
+                run_id=run_id,
+                adapter=run.adapter,
+                checkpoint_bytes=cp_bytes,
+            )
 
         await self._broadcast(event_type, run_id, data)
 
@@ -534,6 +851,127 @@ class RunService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def load_run_messages(self, run_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            select(Message)
+            .where(Message.run_id == run_id)
+            .order_by(Message.index)
+        )
+        result = await self.session.execute(stmt)
+        return messages_from_rows(list(result.scalars().all()))
+
+    async def list_messages(
+        self,
+        run_id: str,
+        *,
+        cursor: int | None = None,
+        limit: int = 50,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        require_access: bool = True,
+    ) -> MessagePage:
+        """Return a page of messages in ascending index order (newest page first)."""
+        if require_access:
+            await self._get_run(
+                run_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                agent_id=agent_id,
+            )
+
+        capped = max(1, min(limit, get_settings().run_messages_page_max))
+        rows, has_more, next_cursor = await self._fetch_message_page(
+            run_id, cursor=cursor, limit=capped
+        )
+        items = [MessageRead.model_validate(row) for row in rows]
+        return MessagePage(items=items, next_cursor=next_cursor, has_more=has_more)
+
+    async def hydrate_run_messages(
+        self,
+        run: Run,
+        *,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> bool:
+        """Attach a message preview to ``run``; return whether older rows exist."""
+        preview_limit = get_settings().run_messages_preview_limit
+        if preview_limit <= 0:
+            attributes.set_committed_value(run, "messages", [])
+            rows, _, _ = await self._fetch_message_page(run.id, limit=1)
+            return bool(rows)
+
+        rows, has_more, _ = await self._fetch_message_page(
+            run.id, limit=preview_limit
+        )
+        attributes.set_committed_value(run, "messages", rows)
+        return has_more
+
+    async def _fetch_message_page(
+        self,
+        run_id: str,
+        *,
+        cursor: int | None = None,
+        limit: int,
+    ) -> tuple[list[Message], bool, int | None]:
+        stmt = select(Message).where(Message.run_id == run_id)
+        if cursor is not None:
+            stmt = stmt.where(Message.index < cursor)
+        stmt = stmt.order_by(Message.index.desc()).limit(limit + 1)
+
+        result = await self.session.execute(stmt)
+        rows = list(result.scalars().all())
+        has_more = len(rows) > limit
+        if has_more:
+            rows = rows[:limit]
+        rows.reverse()
+
+        next_cursor = rows[0].index if rows and has_more else None
+        return rows, has_more, next_cursor
+
+    async def _retain_latest_checkpoint(
+        self, run_id: str, *, reason: str
+    ) -> None:
+        cp = await self._latest_checkpoint(run_id)
+        if cp is None:
+            return
+        state = dict(cp.state or {})
+        if state.get("retain"):
+            return
+        state["retain"] = True
+        state["retain_reason"] = reason
+        cp.state = state
+        await self.session.commit()
+
+    async def _prune_checkpoints(self, run_id: str, *, keep_index: int) -> None:
+        stmt = (
+            select(Checkpoint)
+            .where(Checkpoint.run_id == run_id)
+            .order_by(Checkpoint.index)
+        )
+        result = await self.session.execute(stmt)
+        checkpoints = list(result.scalars().all())
+        keep_ids: set[str] = set()
+        for cp in checkpoints:
+            state = cp.state or {}
+            graph = state.get("graph_state") or {}
+            if cp.index == keep_index:
+                keep_ids.add(cp.id)
+            elif graph.get("pending_human"):
+                keep_ids.add(cp.id)
+            elif state.get("retain"):
+                keep_ids.add(cp.id)
+        for cp in checkpoints:
+            if cp.id not in keep_ids:
+                await self.session.delete(cp)
+        await self.session.commit()
+
+    async def _count_messages(self, run_id: str) -> int:
+        stmt = select(func.count()).select_from(Message).where(Message.run_id == run_id)
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one() or 0)
+
     async def _next_message_index(self, run_id: str) -> int:
         stmt = (
             select(Message.index)
@@ -555,3 +993,27 @@ class RunService:
         result = await self.session.execute(stmt)
         last = result.scalar_one_or_none()
         return 0 if last is None else last + 1
+
+    async def _latest_checkpoint(self, run_id: str) -> Checkpoint | None:
+        stmt = (
+            select(Checkpoint)
+            .where(Checkpoint.run_id == run_id)
+            .order_by(Checkpoint.index.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_checkpoint_by_index(
+        self, run_id: str, checkpoint_index: int
+    ) -> Checkpoint | None:
+        stmt = (
+            select(Checkpoint)
+            .where(
+                Checkpoint.run_id == run_id,
+                Checkpoint.index == checkpoint_index,
+            )
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()

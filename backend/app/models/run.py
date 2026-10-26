@@ -1,6 +1,6 @@
 """Runtime entities: Run, Step, Message, ToolCall, Checkpoint.
 
-These tables form the core observability surface of AgentFlow. Every adapter
+These tables form the core observability surface of Hivemind. Every adapter
 writes into the same shape so the UI and SDK can render any agent execution
 without knowing the underlying framework.
 """
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ulid import ULID
 
 from app.db.base import Base
+from app.models.agent import DEFAULT_TENANT_ID
 
 
 def _ulid() -> str:
@@ -36,13 +37,26 @@ class Run(Base):
     A run is the top-level unit users observe and operate on (cancel, retry,
     resume). It owns an ordered stream of `Step` rows, which in turn own
     `Message` and `ToolCall` rows.
+
+    ``tenant_id`` mirrors the owning agent's tenant for query isolation.
     """
 
     __tablename__ = "runs"
+    __table_args__ = (
+        Index("ix_runs_tenant_id", "tenant_id"),
+        Index("ix_runs_tenant_created", "tenant_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(26), primary_key=True, default=_ulid)
+    tenant_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_TENANT_ID, nullable=False
+    )
+    project_id: Mapped[str | None] = mapped_column(String(26), nullable=True, index=True)
     agent_id: Mapped[str] = mapped_column(
         ForeignKey("agents.id", ondelete="CASCADE"), index=True
+    )
+    thread_id: Mapped[str | None] = mapped_column(
+        ForeignKey("threads.id", ondelete="SET NULL"), nullable=True, index=True
     )
     adapter: Mapped[str] = mapped_column(String(64))
     status: Mapped[RunStatus] = mapped_column(
@@ -56,6 +70,7 @@ class Run(Base):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
     agent: Mapped[Agent] = relationship(back_populates="runs")  # noqa: F821
+    thread: Mapped["Thread | None"] = relationship(back_populates="runs")
     steps: Mapped[list[Step]] = relationship(
         back_populates="run",
         order_by="Step.index",
@@ -156,7 +171,7 @@ class ToolCall(Base):
 class Checkpoint(Base):
     """Adapter-defined snapshot used for resume / replay.
 
-    The `state` blob is opaque to AgentFlow: each adapter encodes what it
+    The `state` blob is opaque to Hivemind: each adapter encodes what it
     needs (LangGraph snapshot bytes encoded as JSON-safe payload, AutoGen
     conversation history, etc.). The runtime only guarantees ordering and
     durability.

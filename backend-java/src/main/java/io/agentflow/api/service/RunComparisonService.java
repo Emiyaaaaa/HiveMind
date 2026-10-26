@@ -6,6 +6,8 @@ import io.agentflow.api.dto.RunComparisonResponse.RunSide;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.entity.RunStatus;
 import io.agentflow.api.repository.RunRepository;
+import io.agentflow.api.security.AccessControl;
+import io.agentflow.api.security.Role;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
@@ -25,6 +27,7 @@ public class RunComparisonService {
 
     @Transactional(readOnly = true)
     public RunComparisonResponse preview(RunComparisonPreviewRequest request) {
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
         String baselineId = normalizedId(
                 request == null ? null : request.baselineRunId(), "baseline_run_id");
         String candidateId = normalizedId(
@@ -34,9 +37,9 @@ public class RunComparisonService {
                     "Baseline and candidate run IDs must differ.");
         }
 
-        RunEntity baseline = runs.findById(baselineId)
+        RunEntity baseline = runs.findByIdAndTenantId(baselineId, tenantId)
                 .orElseThrow(() -> new RunNotFoundException(baselineId));
-        RunEntity candidate = runs.findById(candidateId)
+        RunEntity candidate = runs.findByIdAndTenantId(candidateId, tenantId)
                 .orElseThrow(() -> new RunNotFoundException(candidateId));
         if (!Objects.equals(baseline.getAgentId(), candidate.getAgentId())) {
             throw new RunComparisonValidationException(

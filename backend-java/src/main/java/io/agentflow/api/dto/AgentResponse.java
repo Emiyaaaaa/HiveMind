@@ -7,6 +7,7 @@ import java.util.Map;
 public class AgentResponse {
 
     private String id;
+    private String tenantId;
     private String name;
     private String description;
     private String adapter;
@@ -18,6 +19,7 @@ public class AgentResponse {
     public static AgentResponse fromEntity(AgentEntity entity) {
         AgentResponse dto = new AgentResponse();
         dto.id = entity.getId();
+        dto.tenantId = entity.getTenantId();
         dto.name = entity.getName();
         dto.description = entity.getDescription();
         dto.adapter = entity.getAdapter();
@@ -30,6 +32,10 @@ public class AgentResponse {
 
     public String getId() {
         return id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
     }
 
     public String getName() {

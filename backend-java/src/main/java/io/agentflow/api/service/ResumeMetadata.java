@@ -10,13 +10,9 @@ final class ResumeMetadata {
 
     private ResumeMetadata() {}
 
-    static Map<String, Object> retry(
-            Map<String, Object> checkpointState, Integer checkpointIndex) {
+    static Map<String, Object> retry(Integer checkpointIndex) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("mode", "retry");
-        if (checkpointState != null) {
-            payload.put("checkpoint_state", checkpointState);
-        }
         if (checkpointIndex != null) {
             payload.put("checkpoint_index", checkpointIndex);
         }
@@ -24,14 +20,9 @@ final class ResumeMetadata {
     }
 
     static Map<String, Object> resume(
-            Map<String, Object> checkpointState,
-            Integer checkpointIndex,
-            Map<String, Object> humanInput) {
+            Integer checkpointIndex, Map<String, Object> humanInput) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("mode", "resume");
-        if (checkpointState != null) {
-            payload.put("checkpoint_state", checkpointState);
-        }
         if (checkpointIndex != null) {
             payload.put("checkpoint_index", checkpointIndex);
         }

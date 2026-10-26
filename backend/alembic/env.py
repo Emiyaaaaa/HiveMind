@@ -18,10 +18,14 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.models import (  # noqa: F401 -- ensure models are imported
     Agent,
+    Attachment,
     Checkpoint,
+    MemoryItem,
     Message,
+    Project,
     Run,
     Step,
+    Thread,
     ToolCall,
 )
 

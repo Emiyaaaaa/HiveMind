@@ -3,11 +3,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AuthPrincipal, Role, require_role
 from app.db.session import get_session
-from app.models import Agent
+from app.models import Agent, Project
 from app.models.agent import AgentVersion
 from app.schemas.agent import (
     AgentCreate,
+    AgentQuotaStatus,
     AgentRead,
     AgentUpdate,
     AgentVersionDiff,
@@ -20,15 +22,38 @@ from app.services.agent_versions import (
     snapshot_agent,
     version_diff,
 )
+from app.services.quota_service import QuotaService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
+async def _load_agent(
+    session: AsyncSession, agent_id: str, principal: AuthPrincipal, minimum: Role
+) -> Agent:
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    principal.require_agent(agent.tenant_id, agent.project_id, agent.id, minimum)
+    return agent
+
+
 @router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
 async def create_agent(
-    payload: AgentCreate, session: AsyncSession = Depends(get_session)
+    payload: AgentCreate,
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.ADMIN)),
 ) -> Agent:
+    project_id = payload.project_id
+    if project_id is None:
+        principal.require_organization(principal.tenant_id, Role.ADMIN)
+    else:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        principal.require_project(project.tenant_id, project.id, Role.ADMIN)
     agent = Agent(
+        tenant_id=principal.tenant_id,
+        project_id=project_id,
         name=payload.name,
         description=payload.description,
         adapter=payload.adapter,
@@ -51,19 +76,38 @@ async def create_agent(
 
 
 @router.get("", response_model=list[AgentRead])
-async def list_agents(session: AsyncSession = Depends(get_session)) -> list[Agent]:
-    result = await session.execute(select(Agent).order_by(Agent.created_at.desc()))
+async def list_agents(
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
+) -> list[Agent]:
+    stmt = select(Agent).where(Agent.tenant_id == principal.tenant_id)
+    if principal.project_id is not None:
+        stmt = stmt.where(Agent.project_id == principal.project_id)
+    if principal.agent_id is not None:
+        stmt = stmt.where(Agent.id == principal.agent_id)
+    result = await session.execute(stmt.order_by(Agent.created_at.desc()))
     return list(result.scalars())
 
 
 @router.get("/{agent_id}", response_model=AgentRead)
 async def get_agent(
-    agent_id: str, session: AsyncSession = Depends(get_session)
+    agent_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> Agent:
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    return agent
+    return await _load_agent(session, agent_id, principal, Role.VIEWER)
+
+
+@router.get("/{agent_id}/quota", response_model=AgentQuotaStatus)
+async def get_agent_quota(
+    agent_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
+) -> AgentQuotaStatus:
+    agent = await _load_agent(session, agent_id, principal, Role.VIEWER)
+    return AgentQuotaStatus.model_validate(
+        await QuotaService(session).status_for_agent(agent)
+    )
 
 
 @router.patch("/{agent_id}", response_model=AgentRead)
@@ -71,10 +115,9 @@ async def update_agent(
     agent_id: str,
     payload: AgentUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.ADMIN)),
 ) -> Agent:
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = await _load_agent(session, agent_id, principal, Role.ADMIN)
 
     fields_set = payload.model_fields_set
     if "name" in fields_set and payload.name is not None:
@@ -124,11 +167,11 @@ async def update_agent(
 
 @router.get("/{agent_id}/versions", response_model=list[AgentVersionRead])
 async def list_versions(
-    agent_id: str, session: AsyncSession = Depends(get_session)
+    agent_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> list[AgentVersion]:
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    await _load_agent(session, agent_id, principal, Role.VIEWER)
     return await list_agent_versions(session, agent_id)
 
 
@@ -141,10 +184,9 @@ async def diff_versions(
     from_version: int = Query(..., alias="from", ge=1),
     to_version: int = Query(..., alias="to", ge=1),
     session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> AgentVersionDiff:
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    await _load_agent(session, agent_id, principal, Role.VIEWER)
     left = await get_agent_version(session, agent_id, from_version)
     right = await get_agent_version(session, agent_id, to_version)
     if left is None or right is None:
@@ -163,10 +205,9 @@ async def get_version(
     agent_id: str,
     version: int,
     session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> AgentVersion:
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    await _load_agent(session, agent_id, principal, Role.VIEWER)
     row = await get_agent_version(session, agent_id, version)
     if row is None:
         raise HTTPException(status_code=404, detail="Agent version not found")
@@ -181,11 +222,10 @@ async def restore_version(
     agent_id: str,
     version: int,
     session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.ADMIN)),
 ) -> Agent:
     """Restore adapter/config/description from a snapshot as a new version."""
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = await _load_agent(session, agent_id, principal, Role.ADMIN)
     snap = await get_agent_version(session, agent_id, version)
     if snap is None:
         raise HTTPException(status_code=404, detail="Agent version not found")
@@ -201,9 +241,7 @@ async def restore_version(
     agent.config = dict(snap.config or {})
     agent.description = snap.description
     agent.version = int(agent.version or 1) + 1
-    session.add(
-        snapshot_agent(agent, note=f"restored from v{version}")
-    )
+    session.add(snapshot_agent(agent, note=f"restored from v{version}"))
     await session.commit()
     await session.refresh(agent)
     return agent

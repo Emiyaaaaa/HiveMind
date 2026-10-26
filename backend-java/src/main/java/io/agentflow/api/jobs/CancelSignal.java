@@ -14,13 +14,21 @@ public class CancelSignal {
 
     private final StringRedisTemplate redis;
     private final AgentflowProperties props;
+    private final TemporalWorkflowClient temporal;
 
-    public CancelSignal(StringRedisTemplate redis, AgentflowProperties props) {
+    public CancelSignal(
+            StringRedisTemplate redis,
+            AgentflowProperties props,
+            TemporalWorkflowClient temporal) {
         this.redis = redis;
         this.props = props;
+        this.temporal = temporal;
     }
 
     public void requestCancel(String runId) {
+        if ("temporal".equalsIgnoreCase(props.getJobs().getImpl())) {
+            temporal.signalCancel(runId);
+        }
         String key = props.getCancel().getKeyPrefix() + runId;
         redis.opsForValue().set(key, "1", Duration.ofSeconds(props.getCancel().getTtlSeconds()));
     }

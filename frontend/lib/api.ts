@@ -1,11 +1,32 @@
-import type { Agent, AgentVersion, AgentVersionDiff, Run } from "./types";
+import type {
+  Agent,
+  AgentQuotaStatus,
+  AgentVersion,
+  AgentVersionDiff,
+  Attachment,
+  MessagePage,
+  RegressionExecution,
+  RegressionExecutionResults,
+  Run,
+  RunAuditEvent,
+  RunComparison,
+  Thread,
+  ThreadMessagePage,
+} from "./types";
 import { normalizeUsage } from "./usage";
+
+function authHeaders(): Record<string, string> {
+  const key = process.env.NEXT_PUBLIC_AGENTFLOW_API_KEY;
+  if (!key) return {};
+  return { Authorization: `Bearer ${key}` };
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders(),
       ...(init?.headers || {}),
     },
     cache: "no-store",
@@ -28,6 +49,22 @@ export const api = {
     return runs.map(normalizeRun);
   },
   getRun: async (id: string) => normalizeRun(await request<Run>(`/v1/runs/${id}`)),
+  listRunMessages: async (
+    id: string,
+    params?: { cursor?: number; limit?: number },
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.cursor != null) {
+      search.set("cursor", String(params.cursor));
+    }
+    if (params?.limit != null) {
+      search.set("limit", String(params.limit));
+    }
+    const query = search.toString();
+    return request<MessagePage>(
+      `/v1/runs/${id}/messages${query ? `?${query}` : ""}`,
+    );
+  },
   cancelRun: (id: string) =>
     request<void>(`/v1/runs/${id}/cancel`, { method: "POST" }),
   retryRun: async (id: string, body?: { checkpoint_index?: number }) =>
@@ -44,9 +81,12 @@ export const api = {
         body: JSON.stringify(body ?? {}),
       }),
     ),
+  getRunAudit: (id: string) =>
+    request<RunAuditEvent[]>(`/v1/runs/${id}/audit`),
   createRun: async (body: {
     agent_id: string;
     input: Record<string, unknown>;
+    thread_id?: string;
   }) =>
     normalizeRun(
       await request<Run>("/v1/runs", {
@@ -54,7 +94,59 @@ export const api = {
         body: JSON.stringify(body),
       }),
     ),
+  listThreads: () => request<Thread[]>("/v1/threads"),
+  getThread: (id: string) => request<Thread>(`/v1/threads/${id}`),
+  createThread: (body: {
+    agent_id: string;
+    title?: string;
+    user_id?: string;
+  }) =>
+    request<Thread>("/v1/threads", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listThreadMessages: async (
+    id: string,
+    params?: { cursor?: string; limit?: number },
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.cursor != null) {
+      search.set("cursor", params.cursor);
+    }
+    if (params?.limit != null) {
+      search.set("limit", String(params.limit));
+    }
+    const query = search.toString();
+    return request<ThreadMessagePage>(
+      `/v1/threads/${id}/messages${query ? `?${query}` : ""}`,
+    );
+  },
+  listThreadRuns: async (id: string) => {
+    const runs = await request<Run[]>(`/v1/threads/${id}/runs`);
+    return runs.map(normalizeRun);
+  },
+  uploadAttachment: async (file: File, caption?: string) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (caption) body.append("caption", caption);
+    const response = await fetch("/api/v1/attachments", {
+      method: "POST",
+      headers: { ...authHeaders() },
+      body,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`${response.status} ${response.statusText}: ${detail}`);
+    }
+    return response.json() as Promise<Attachment>;
+  },
+  getAttachment: (id: string) =>
+    request<Attachment>(`/v1/attachments/${id}`),
+  attachmentContentUrl: (id: string) => `/api/v1/attachments/${id}/content`,
   listAgents: () => request<Agent[]>("/v1/agents"),
+  getAgentQuota: (id: string) =>
+    request<AgentQuotaStatus>(`/v1/agents/${id}/quota`),
   createAgent: (body: {
     name: string;
     adapter?: string;
@@ -91,6 +183,25 @@ export const api = {
     request<Agent>(`/v1/agents/${id}/versions/${version}/restore`, {
       method: "POST",
     }),
+  previewRunComparison: (body: {
+    baseline_run_id: string;
+    candidate_run_id: string;
+  }) =>
+    request<RunComparison>("/v1/run-comparisons/preview", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  createRegressionExecution: (body: { baseline_run_ids: string[] }) =>
+    request<RegressionExecution>("/v1/regression-executions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getRegressionExecution: (executionId: string) =>
+    request<RegressionExecution>(`/v1/regression-executions/${executionId}`),
+  getRegressionResults: (executionId: string) =>
+    request<RegressionExecutionResults>(
+      `/v1/regression-executions/${executionId}/results`,
+    ),
 };
 
 export function eventStreamUrl(runId: string): string {

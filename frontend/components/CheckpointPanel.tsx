@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 
 import { CheckpointMarker } from "@/components/CheckpointMarker";
 import { api } from "@/lib/api";
@@ -16,7 +15,6 @@ interface Props {
 
 export function CheckpointPanel({ runId, status, checkpoints }: Props) {
   const queryClient = useQueryClient();
-  const [resumeInput, setResumeInput] = useState('{"approval": "ok"}');
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["run", runId] });
@@ -30,20 +28,7 @@ export function CheckpointPanel({ runId, status, checkpoints }: Props) {
     onSuccess: invalidate,
   });
 
-  const resume = useMutation({
-    mutationFn: () => {
-      let input: Record<string, unknown> | undefined;
-      try {
-        input = JSON.parse(resumeInput) as Record<string, unknown>;
-      } catch {
-        throw new Error("Resume input must be valid JSON");
-      }
-      return api.resumeRun(runId, { input });
-    },
-    onSuccess: invalidate,
-  });
-
-  if (checkpoints.length === 0 && status !== "failed" && status !== "waiting_human") {
+  if (checkpoints.length === 0 && status !== "failed") {
     return null;
   }
 
@@ -99,32 +84,8 @@ export function CheckpointPanel({ runId, status, checkpoints }: Props) {
         </ol>
       )}
 
-      {status === "waiting_human" ? (
-        <div className="space-y-2 pt-1 border-t border-border">
-          <label className="block text-xs text-muted uppercase tracking-wide">
-            Resume input (JSON)
-          </label>
-          <textarea
-            className="w-full rounded border border-border bg-bg px-3 py-2 text-xs font-mono min-h-[4rem]"
-            value={resumeInput}
-            onChange={(e) => setResumeInput(e.target.value)}
-          />
-          <button
-            type="button"
-            className="rounded border border-warn/40 text-warn px-3 py-1.5 text-sm hover:bg-warn/10 disabled:opacity-50"
-            disabled={resume.isPending}
-            onClick={() => resume.mutate()}
-          >
-            {resume.isPending ? "Resuming…" : "Resume from latest checkpoint"}
-          </button>
-        </div>
-      ) : null}
-
       {retry.error ? (
         <p className="text-bad text-xs">{String(retry.error)}</p>
-      ) : null}
-      {resume.error ? (
-        <p className="text-bad text-xs">{String(resume.error)}</p>
       ) : null}
     </section>
   );

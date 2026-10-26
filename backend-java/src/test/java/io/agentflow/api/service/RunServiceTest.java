@@ -12,10 +12,13 @@ import io.agentflow.api.entity.AgentEntity;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.jobs.CancelSignal;
 import io.agentflow.api.jobs.JobProducer;
+import io.agentflow.api.jobs.TemporalWorkflowClient;
 import io.agentflow.api.repository.CheckpointRepository;
 import io.agentflow.api.repository.MessageRepository;
+import io.agentflow.api.repository.RunAuditEventRepository;
 import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
+import io.agentflow.api.repository.ThreadRepository;
 import io.agentflow.api.repository.ToolCallRepository;
 import java.util.List;
 import java.util.Map;
@@ -76,8 +79,12 @@ class RunServiceTest {
                 mock(MessageRepository.class),
                 mock(ToolCallRepository.class),
                 mock(CheckpointRepository.class),
+                mock(RunAuditEventRepository.class),
                 agents,
+                mock(ThreadRepository.class),
                 mock(JobProducer.class),
-                mock(CancelSignal.class));
+                mock(CancelSignal.class),
+                mock(AttachmentService.class),
+                mock(AgentQuotaService.class));
     }
 }

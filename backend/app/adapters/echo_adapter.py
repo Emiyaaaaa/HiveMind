@@ -59,7 +59,7 @@ class EchoAdapter(OrchestratorAdapter):
         if start <= 0:
             idx = _step_index(ctx, 0, start)
             await ctx.emit_step_started(index=idx, node="plan")
-            await ctx.emit_message(role="user", content=str(prompt))
+            await ctx.emit_message(role="user", content=str(prompt), step_index=idx)
             await asyncio.sleep(delay)
             await ctx.emit_step_completed(
                 index=idx, node="plan", output={"plan": ["greet", "respond"]}
@@ -114,7 +114,7 @@ class EchoAdapter(OrchestratorAdapter):
         tokens_out = estimate_tokens(reply)
         cost_usd = estimate_cost_usd(model, tokens_in, tokens_out)
         await ctx.emit_step_started(index=idx, node="reply")
-        await ctx.emit_message(role="assistant", content=reply)
+        await ctx.emit_message(role="assistant", content=reply, step_index=idx)
         await ctx.emit_step_updated(
             index=idx,
             tokens_in=tokens_in,

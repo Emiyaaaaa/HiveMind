@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from app.adapters.base import AdapterContext
-from app.adapters.langgraph_adapter import GraphSpec, LangGraphAdapter
+from app.adapters.langgraph_adapter import GraphSpec, LangGraphAdapter, _checkpoint_payload
 from app.adapters.tool_registry import get_tool, list_tools, register_tool, resolve_tools
 from app.models.run import RunStatus
 from app.runtime.resume_context import RunResumeContext
@@ -27,6 +27,31 @@ class _RecordingContext(AdapterContext):
 
     async def _emit(self, event_type: str, data: dict[str, Any]) -> None:
         self.events.append((event_type, data))
+
+
+def _run_messages_from_events(
+    events: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for event, data in events:
+        if event != "message.created":
+            continue
+        msg: dict[str, Any] = {"role": data["role"], "content": data.get("content", "")}
+        if data.get("name"):
+            msg["name"] = data["name"]
+        if data.get("tool_call_id"):
+            msg["tool_call_id"] = data["tool_call_id"]
+        extra = data.get("extra") or {}
+        if extra:
+            msg["extra"] = extra
+        if extra.get("tool_calls"):
+            msg["tool_calls"] = extra["tool_calls"]
+        rows.append(msg)
+    return rows
+
+
+def _message_events(events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [data for event, data in events if event == "message.created"]
 
 
 @pytest.mark.asyncio
@@ -86,6 +111,62 @@ async def test_langgraph_default_single_node():
 
 
 @pytest.mark.asyncio
+async def test_langgraph_model_routing_fallback(monkeypatch: pytest.MonkeyPatch):
+    from app.adapters.langgraph_adapter import LangGraphAdapter, ModelResponse
+
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/primary",
+        "fallback_models": ["openai/backup"],
+    }
+
+    calls: list[str] = []
+
+    async def _scripted(
+        self: LangGraphAdapter,
+        _ctx: AdapterContext,
+        _step_index: int,
+        model: str,
+        _messages: list[dict[str, Any]],
+        **_kwargs: Any,
+    ) -> ModelResponse:
+        calls.append(model)
+        if model == "openai/primary":
+            import httpx
+
+            request = httpx.Request("POST", "https://example.com")
+            response = httpx.Response(503, request=request)
+            raise httpx.HTTPStatusError(
+                "unavailable", request=request, response=response
+            )
+        return ModelResponse(
+            content=f"from:{model}",
+            tokens_in=1,
+            tokens_out=1,
+            model=model,
+        )
+
+    monkeypatch.setattr(LangGraphAdapter, "_invoke_model_once", _scripted)
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+    assert result.output == {"reply": "from:openai/backup"}
+    assert calls == ["openai/primary", "openai/backup"]
+
+    completed = [
+        data
+        for event, data in ctx.events
+        if event == "step.completed"
+    ]
+    assert completed
+    assert completed[0].get("model") == "openai/backup"
+    assert completed[0].get("model_routing", {}).get("fell_back") is True
+
+    logs = [data for event, data in ctx.events if event == "log"]
+    assert any(d.get("message") == "model_routing_fallback" for d in logs)
+
+
+@pytest.mark.asyncio
 async def test_langgraph_multi_node_with_tool():
     adapter = LangGraphAdapter()
     ctx = _RecordingContext()
@@ -120,6 +201,77 @@ async def test_langgraph_multi_node_with_tool():
 
 
 @pytest.mark.asyncio
+async def test_langgraph_dedupes_system_and_tags_user_prompt_echo():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "system_prompt": "Be brief.",
+        "graph": {
+            "nodes": [
+                {"id": "draft", "type": "model"},
+                {"id": "finalize", "type": "model"},
+            ],
+            "edges": [
+                ["__start__", "draft"],
+                ["draft", "finalize"],
+                ["finalize", "__end__"],
+            ],
+        },
+    }
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+
+    messages = _message_events(ctx.events)
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    user_msgs = [m for m in messages if m["role"] == "user"]
+
+    assert len(system_msgs) == 2
+    assert (system_msgs[0].get("extra") or {}).get("kind") is None
+    assert (system_msgs[1].get("extra") or {}).get("kind") == "prompt_echo"
+    assert (system_msgs[1].get("extra") or {}).get("node") == "finalize"
+
+    assert len(user_msgs) == 2
+    assert all((m.get("extra") or {}).get("kind") == "prompt_echo" for m in user_msgs)
+    assert (user_msgs[0].get("extra") or {}).get("node") == "draft"
+    assert (user_msgs[1].get("extra") or {}).get("node") == "finalize"
+
+
+@pytest.mark.asyncio
+async def test_langgraph_resume_seeds_emitted_system_from_run_messages():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "system_prompt": "Be brief.",
+        "graph": {
+            "nodes": [{"id": "draft", "type": "model"}],
+            "edges": [["__start__", "draft"], ["draft", "__end__"]],
+        },
+    }
+    await adapter.run(ctx)
+
+    resume_ctx = _RecordingContext(
+        run_messages=_run_messages_from_events(ctx.events),
+        step_index_base=1,
+    )
+    resume_ctx.agent_config = {
+        **ctx.agent_config,
+        "graph": {
+            "nodes": [{"id": "finalize", "type": "model"}],
+            "edges": [["__start__", "finalize"], ["finalize", "__end__"]],
+        },
+    }
+    await adapter.run(resume_ctx)
+
+    resume_system = [
+        m for m in _message_events(resume_ctx.events) if m["role"] == "system"
+    ]
+    assert len(resume_system) == 1
+    assert (resume_system[0].get("extra") or {}).get("kind") == "prompt_echo"
+
+
+@pytest.mark.asyncio
 async def test_langgraph_unknown_tool_fails():
     adapter = LangGraphAdapter()
     ctx = _RecordingContext()
@@ -142,6 +294,7 @@ async def test_langgraph_streams_token_deltas_and_defers_step_tokens():
     ]
     assert len(token_events) > 0
     assert all(e["step_index"] == 0 for e in token_events)
+    assert all(e.get("part", "text") == "text" for e in token_events)
     reply = (result.output or {}).get("reply", "")
     assert "".join(e["delta"] for e in token_events) == reply
 
@@ -161,6 +314,49 @@ async def test_langgraph_streams_token_deltas_and_defers_step_tokens():
     ]
     assert completed[0]["tokens_in"] == updated[0]["tokens_in"]
     assert completed[0]["tokens_out"] == updated[0]["tokens_out"]
+
+
+@pytest.mark.asyncio
+async def test_langgraph_streams_and_persists_reasoning_blocks():
+    adapter = LangGraphAdapter()
+    ctx = _RecordingContext()
+    ctx.agent_config = {
+        "model": "openai/gpt-4o-mini",
+        "stream_tokens": True,
+        "stream_reasoning": True,
+    }
+    result = await adapter.run(ctx)
+    assert result.status == RunStatus.SUCCEEDED
+
+    reasoning_deltas = [
+        data
+        for event, data in ctx.events
+        if event == "token.delta" and data.get("part") == "reasoning"
+    ]
+    text_deltas = [
+        data
+        for event, data in ctx.events
+        if event == "token.delta" and data.get("part", "text") == "text"
+    ]
+    assert reasoning_deltas
+    assert text_deltas
+    reply = (result.output or {}).get("reply", "")
+    assert "".join(e["delta"] for e in text_deltas) == reply
+
+    reasoning_msgs = [
+        m
+        for m in _message_events(ctx.events)
+        if (m.get("extra") or {}).get("kind") == "reasoning"
+    ]
+    assert len(reasoning_msgs) == 1
+    assert "".join(e["delta"] for e in reasoning_deltas) == reasoning_msgs[0]["content"]
+
+    assistant = [
+        m
+        for m in _message_events(ctx.events)
+        if m["role"] == "assistant" and (m.get("extra") or {}).get("kind") != "reasoning"
+    ]
+    assert assistant[-1]["content"] == reply
 
 
 @pytest.mark.asyncio
@@ -277,6 +473,7 @@ async def test_langgraph_human_node_pauses_and_resumes():
     graph_state = checkpoints[-1]["state"]["graph_state"]
     assert graph_state["pending_human"] == "approve"
     assert "draft" in graph_state["completed_nodes"]
+    assert "messages" not in graph_state
 
     resume_ctx = _RecordingContext(
         resume=RunResumeContext(
@@ -284,6 +481,7 @@ async def test_langgraph_human_node_pauses_and_resumes():
             checkpoint_state={"graph_state": graph_state},
             human_input={"route": "approved", "note": "lgtm"},
         ),
+        run_messages=_run_messages_from_events(ctx.events),
         step_index_base=1,
     )
     resume_ctx.agent_config = ctx.agent_config
@@ -351,3 +549,52 @@ async def test_langgraph_conditional_reject_skips_finalize():
     ]
     assert step_nodes == ["approve"]
     assert result.output == {"reply": "[mock] draft"}
+
+
+def test_checkpoint_payload_omits_messages():
+    state = {
+        "input": "hello",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reply": "done",
+        "completed_nodes": ["draft"],
+        "pending_human": "approve",
+    }
+    payload = _checkpoint_payload(state)
+    graph = payload["graph_state"]
+    assert graph["reply"] == "done"
+    assert graph["pending_human"] == "approve"
+    assert "messages" not in graph
+
+
+def test_initial_graph_state_keeps_thread_messages_on_resume():
+    from app.adapters.langgraph_adapter import _initial_graph_state
+
+    ctx = _RecordingContext(
+        thread_messages=[
+            {"role": "user", "content": "prior turn"},
+            {"role": "assistant", "content": "prior reply"},
+        ],
+        run_messages=[{"role": "user", "content": "this run"}],
+        resume=RunResumeContext(
+            mode="resume",
+            checkpoint_index=0,
+            checkpoint_state={"graph_state": {"completed_nodes": ["draft"]}},
+        ),
+    )
+    state = _initial_graph_state(ctx)
+    assert state["messages"] == [
+        {"role": "user", "content": "prior turn"},
+        {"role": "assistant", "content": "prior reply"},
+        {"role": "user", "content": "this run"},
+    ]
+    assert state["completed_nodes"] == ["draft"]
+
+
+def test_initial_graph_state_seeds_thread_only_without_resume():
+    from app.adapters.langgraph_adapter import _initial_graph_state
+
+    ctx = _RecordingContext(
+        thread_messages=[{"role": "user", "content": "hello"}],
+    )
+    state = _initial_graph_state(ctx)
+    assert state["messages"] == [{"role": "user", "content": "hello"}]

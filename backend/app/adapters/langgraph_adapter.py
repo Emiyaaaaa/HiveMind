@@ -2,7 +2,7 @@
 
 The adapter constructs a ``StateGraph`` from the agent's config and streams
 every node tick back to the runtime through ``AdapterContext``. LangGraph is
-imported lazily so the rest of AgentFlow does not pay the import cost in tests
+imported lazily so the rest of Hivemind does not pay the import cost in tests
 that exercise only the echo adapter.
 
 Expected agent.config shape (all optional except when using custom graphs):
@@ -10,8 +10,15 @@ Expected agent.config shape (all optional except when using custom graphs):
 ```jsonc
 {
   "model": "openai/gpt-4o-mini",
+  "fallback_models": ["openai/gpt-4o"],  // shorthand; or model_routing.fallbacks
+  "model_routing": {
+    "fallbacks": ["openai/gpt-4o"],
+    "max_attempts_per_model": 1,
+    "retry_on": ["timeout", "rate_limit", "server_error", "connection"]
+  },
   "system_prompt": "You are a helpful coordinator.",
   "stream_tokens": true,       // emit token.delta SSE; defer tokens to step.updated
+  "stream_reasoning": false,   // mock / providers: also stream part=reasoning blocks
   "tools": ["echo"],           // builtin or MCP keys (mcp/{server}/{tool})
   "mcp_servers": [             // optional MCP stdio/SSE/HTTP servers
     {
@@ -23,6 +30,14 @@ Expected agent.config shape (all optional except when using custom graphs):
   ],
   "mcp_auto_register": false,  // register every tool from mcp_servers
   "max_tool_rounds": 4,        // agent-node ReAct iterations (default 4)
+  "tool_error_policy": "feedback", // fail_fast (default) | feedback
+  "tool_observation": {
+    "max_tokens": 2000        // 0 = disabled; bound model-visible tool results
+  },
+  "memory": {
+    "window_tokens": 8000,       // 0 = disabled; trim prompt before LLM calls
+    "summarize": true            // summarize dropped turns instead of deleting
+  },
   "graph": {
     "nodes": [
       {"id": "agent", "type": "agent"},
@@ -62,7 +77,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from app.adapters.adapter_tools import (
     AdapterToolSurface,
@@ -70,18 +85,73 @@ from app.adapters.adapter_tools import (
     tool_schemas_from_definitions,
 )
 from app.adapters.base import AdapterContext, AdapterResult, OrchestratorAdapter
+from app.adapters.tool_errors import (
+    RecoverableToolError,
+    build_safe_tool_error_observation,
+)
 from app.adapters.tool_registry import ToolDefinition
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import (
+    record_model_routing,
+    record_prompt_tokens_from_history,
+)
 from app.models.run import RunStatus
+from app.runtime.memory_metrics import (
+    estimate_prompt_tokens_from_history,
+    maybe_alert_prompt_tokens_from_history,
+)
+from app.runtime.memory_window import fit_messages_to_window, parse_memory_config
+from app.runtime.model_router import (
+    ModelAttempt,
+    ModelRoutingExhaustedError,
+    invoke_with_fallback,
+    parse_model_routing,
+)
 from app.runtime.pricing import estimate_cost_usd
 from app.runtime.tokens import estimate_tokens
+from app.runtime.tool_observation import (
+    ToolObservationConfig,
+    parse_tool_observation_config,
+    serialize_tool_observation,
+)
 
 logger = get_logger("adapter.langgraph")
 
 START_NODE = "__start__"
 END_NODE = "__end__"
 DEFAULT_MAX_TOOL_ROUNDS = 4
+DEFAULT_TOOL_ERROR_POLICY = "fail_fast"
+ToolErrorPolicy = Literal["fail_fast", "feedback"]
+
+
+class ToolRecoveryExhaustedError(Exception):
+    """Raised when recoverable tool feedback exhausts ``max_tool_rounds``."""
+
+    def __init__(self, max_tool_rounds: int) -> None:
+        self.max_tool_rounds = max_tool_rounds
+        super().__init__(
+            f"tool_recovery_exhausted: reached max_tool_rounds={max_tool_rounds}"
+        )
+
+
+def parse_tool_error_policy(config: dict[str, Any]) -> ToolErrorPolicy:
+    """Parse and validate agent-level ``tool_error_policy``."""
+    raw = config.get("tool_error_policy", DEFAULT_TOOL_ERROR_POLICY)
+    if raw not in ("fail_fast", "feedback"):
+        raise ValueError(
+            f"invalid tool_error_policy={raw!r}; expected fail_fast|feedback"
+        )
+    return raw  # type: ignore[return-value]
+
+
+@dataclass
+class ToolOutcome:
+    """Result of one agent-node tool invocation."""
+
+    call: dict[str, Any]
+    result: dict[str, Any] | None = None
+    error_observation: dict[str, Any] | None = None
 
 
 class WaitingHumanInterrupt(Exception):
@@ -95,9 +165,12 @@ class WaitingHumanInterrupt(Exception):
 @dataclass
 class ModelResponse:
     content: str
+    reasoning: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
+    model: str | None = None
+    routing: dict[str, Any] | None = None
 
 
 @dataclass
@@ -234,8 +307,13 @@ class _RunState:
     default_model: str
     default_system_prompt: str
     max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS
+    tool_error_policy: ToolErrorPolicy = DEFAULT_TOOL_ERROR_POLICY
+    tool_observation: ToolObservationConfig = field(default_factory=ToolObservationConfig)
     step_index: int = 0
     node_indices: dict[str, int] = field(default_factory=dict)
+    emitted_system_prompts: set[str] = field(default_factory=set)
+    input_attachments: list[Any] = field(default_factory=list)
+    attachments_emitted: bool = False
 
     def next_step_index(self, node_id: str) -> int:
         if node_id not in self.node_indices:
@@ -270,6 +348,18 @@ class LangGraphAdapter(OrchestratorAdapter):
             await tool_surface.close()
             return AdapterResult(status=RunStatus.FAILED, error=str(exc))
 
+        try:
+            tool_error_policy = parse_tool_error_policy(config)
+        except ValueError as exc:
+            await tool_surface.close()
+            return AdapterResult(status=RunStatus.FAILED, error=str(exc))
+
+        try:
+            tool_observation = parse_tool_observation_config(config)
+        except ValueError as exc:
+            await tool_surface.close()
+            return AdapterResult(status=RunStatus.FAILED, error=str(exc))
+
         max_rounds = int(config.get("max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS))
         run_state = _RunState(
             ctx=ctx,
@@ -281,7 +371,23 @@ class LangGraphAdapter(OrchestratorAdapter):
                 config.get("system_prompt", "You are a helpful agent.")
             ),
             max_tool_rounds=max(1, max_rounds),
+            tool_error_policy=tool_error_policy,
+            tool_observation=tool_observation,
+            emitted_system_prompts=_emitted_system_prompts_from_messages(
+                ctx.run_messages
+            ),
         )
+        run_state.input_attachments = list(ctx.attachments or [])
+        # Skip re-emitting on retry/resume when transcript already has attachment rows.
+        if _messages_have_attachments(ctx.run_messages):
+            run_state.attachments_emitted = True
+        elif run_state.input_attachments:
+            from app.runtime.attachments import emit_input_attachments
+
+            await emit_input_attachments(
+                ctx, run_state.input_attachments, step_index=None, role="user"
+            )
+            run_state.attachments_emitted = True
 
         graph = StateGraph(dict)
         for node_spec in graph_spec.nodes:
@@ -398,7 +504,10 @@ class LangGraphAdapter(OrchestratorAdapter):
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                # LangGraph may treat node outputs as the next state.
+                # Returning an empty dict can wipe keys required for later
+                # nodes (e.g. `pending_human` on resume), so preserve state.
+                return state
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx
             arguments = build_tool_arguments(tool_def, state)
@@ -415,16 +524,25 @@ class LangGraphAdapter(OrchestratorAdapter):
                     node=spec.id,
                     output={"tool": tool_def.name, "result": result},
                 )
+                observation = serialize_tool_observation(
+                    result,
+                    max_tokens=run_state.tool_observation.max_tokens,
+                )
                 tool_results = dict(state.get("tool_results") or {})
-                tool_results[tool_def.name] = result
+                tool_results[tool_def.name] = json.loads(observation)
+                reply = (
+                    observation
+                    if run_state.tool_observation.enabled
+                    else str(result)
+                )
                 next_state = {
                     "tool_results": tool_results,
-                    "reply": str(result),
+                    "reply": reply,
                     "completed_nodes": _with_completed(state, spec.id),
                 }
                 await ctx.emit_checkpoint(
                     label=spec.id,
-                    state={"graph_state": {**state, **next_state}},
+                    state=_checkpoint_payload({**state, **next_state}),
                 )
                 return next_state
             except Exception as exc:
@@ -440,7 +558,7 @@ class LangGraphAdapter(OrchestratorAdapter):
     ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                return state
 
             ctx = run_state.ctx
             pending = state.get("pending_human")
@@ -456,6 +574,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 await ctx.emit_step_started(index=step_idx, node=spec.id)
                 route = str(human_input.get("route") or state.get("route") or "approved")
                 next_state = {
+                    **state,
                     "human_input": human_input,
                     "route": route,
                     "pending_human": None,
@@ -468,7 +587,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 )
                 await ctx.emit_checkpoint(
                     label=spec.id,
-                    state={"graph_state": {**state, **next_state}},
+                    state=_checkpoint_payload({**state, **next_state}),
                 )
                 return next_state
 
@@ -480,7 +599,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             }
             await ctx.emit_checkpoint(
                 label=spec.id,
-                state={"graph_state": pause_state},
+                state=_checkpoint_payload(pause_state),
             )
             raise WaitingHumanInterrupt(
                 output={
@@ -502,23 +621,34 @@ class LangGraphAdapter(OrchestratorAdapter):
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                return state
 
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx
             stream_tokens = run_state.config.get("stream_tokens", True)
             messages = _seed_agent_messages(state, system_prompt)
+            if run_state.input_attachments:
+                user_content = await _multimodal_user_content(
+                    str(state.get("input", "")), run_state.input_attachments
+                )
+                messages = _apply_multimodal_to_seed(messages, user_content)
             tool_results = dict(state.get("tool_results") or {})
             started = time.monotonic()
             total_in = 0
             total_out = 0
+            total_cost = 0.0
             final_reply = ""
+            final_reasoning = ""
+            had_recoverable_feedback = False
+            policy = run_state.tool_error_policy
+            last_response: ModelResponse | None = None
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
-            await ctx.emit_message(role="system", content=system_prompt)
+            await _emit_llm_system_prompt(
+                ctx, run_state, node_id=spec.id, system_prompt=system_prompt, step_index=step_idx
+            )
             user_seed = str(state.get("input", ""))
-            if user_seed:
-                await ctx.emit_message(role="user", content=user_seed)
+            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_seed, step_index=step_idx)
 
             try:
                 for round_idx in range(max_rounds):
@@ -531,53 +661,100 @@ class LangGraphAdapter(OrchestratorAdapter):
                         stream_tokens=bool(stream_tokens) and not resolved_tools,
                         mock_tool_round=round_idx if resolved_tools else None,
                     )
+                    last_response = response
                     total_in += response.tokens_in
                     total_out += response.tokens_out
+                    total_cost += estimate_cost_usd(
+                        response.model or model,
+                        response.tokens_in,
+                        response.tokens_out,
+                    )
 
                     if response.tool_calls:
+                        tool_call_payload = [
+                            _openai_tool_call_payload(tc)
+                            for tc in response.tool_calls
+                        ]
                         messages.append(
                             {
                                 "role": "assistant",
                                 "content": response.content or None,
-                                "tool_calls": [
-                                    _openai_tool_call_payload(tc)
-                                    for tc in response.tool_calls
-                                ],
+                                "tool_calls": tool_call_payload,
                             }
                         )
+                        await ctx.emit_message(
+                            role="assistant",
+                            content=response.content or "",
+                            tool_calls=tool_call_payload,
+                            step_index=step_idx,
+                        )
 
-                        async def _run_tool(tc: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+                        async def _run_one_tool(tc: dict[str, Any]) -> ToolOutcome:
                             name = str(tc.get("name") or "")
                             arguments = dict(tc.get("arguments") or {})
-                            result = await run_state.tool_surface.execute(
-                                ctx,
-                                step_index=step_idx,
-                                name=name,
-                                arguments=arguments,
-                            )
-                            return tc, result
+                            try:
+                                result = await run_state.tool_surface.execute(
+                                    ctx,
+                                    step_index=step_idx,
+                                    name=name,
+                                    arguments=arguments,
+                                )
+                                return ToolOutcome(call=tc, result=result)
+                            except RecoverableToolError as exc:
+                                if policy == "fail_fast":
+                                    raise
+                                return ToolOutcome(
+                                    call=tc,
+                                    error_observation=build_safe_tool_error_observation(
+                                        tool_name=name,
+                                        exc=exc,
+                                    ),
+                                )
 
                         # Parallel tool calls share one step; call_id keeps
                         # started/completed pairs associated correctly.
-                        pairs = await asyncio.gather(
-                            *[_run_tool(tc) for tc in response.tool_calls]
+                        outcomes = await asyncio.gather(
+                            *[_run_one_tool(tc) for tc in response.tool_calls]
                         )
-                        for tc, result in pairs:
+                        for outcome in outcomes:
+                            tc = outcome.call
                             name = str(tc.get("name") or "")
-                            tool_results[name] = result
+                            if outcome.result is not None:
+                                content = serialize_tool_observation(
+                                    outcome.result,
+                                    max_tokens=run_state.tool_observation.max_tokens,
+                                )
+                                tool_results[name] = json.loads(content)
+                            else:
+                                assert outcome.error_observation is not None
+                                had_recoverable_feedback = True
+                                content = serialize_tool_observation(
+                                    outcome.error_observation,
+                                    max_tokens=run_state.tool_observation.max_tokens,
+                                )
+                                tool_results[name] = json.loads(content)
                             messages.append(
                                 {
                                     "role": "tool",
                                     "tool_call_id": str(tc.get("id") or name),
-                                    "content": json.dumps(result, default=str),
+                                    "content": content,
                                 }
+                            )
+                            await ctx.emit_message(
+                                role="tool",
+                                content=content,
+                                tool_call_id=str(tc.get("id") or name),
+                                step_index=step_idx,
                             )
                         continue
 
                     final_reply = response.content or ""
+                    final_reasoning = response.reasoning or ""
                     messages.append({"role": "assistant", "content": final_reply})
                     break
                 else:
+                    if policy == "feedback" and had_recoverable_feedback:
+                        raise ToolRecoveryExhaustedError(max_rounds)
                     final_reply = (
                         final_reply
                         or f"[agent:{spec.id}] reached max_tool_rounds={max_rounds}"
@@ -585,14 +762,27 @@ class LangGraphAdapter(OrchestratorAdapter):
                     messages.append({"role": "assistant", "content": final_reply})
 
                 latency_ms = int((time.monotonic() - started) * 1000)
-                cost_usd = estimate_cost_usd(model, total_in, total_out)
-                await ctx.emit_message(role="assistant", content=final_reply)
+                used_model = (
+                    (last_response.model if last_response else None) or model
+                )
+                routing_meta = (
+                    last_response.routing if last_response is not None else None
+                )
+                cost_usd = estimate_cost_usd(used_model, total_in, total_out)
+                await _emit_assistant_messages(
+                    ctx,
+                    step_index=step_idx,
+                    content=final_reply,
+                    reasoning=final_reasoning,
+                )
                 await ctx.emit_step_updated(
                     index=step_idx,
                     tokens_in=total_in,
                     tokens_out=total_out,
                     cost_usd=cost_usd,
                     latency_ms=latency_ms,
+                    model=used_model,
+                    model_routing=routing_meta,
                 )
                 await ctx.emit_step_completed(
                     index=step_idx,
@@ -602,6 +792,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                     tokens_out=total_out,
                     cost_usd=cost_usd,
                     latency_ms=latency_ms,
+                    model=used_model,
+                    model_routing=routing_meta,
                 )
                 next_state = {
                     "reply": final_reply,
@@ -611,7 +803,7 @@ class LangGraphAdapter(OrchestratorAdapter):
                 }
                 await ctx.emit_checkpoint(
                     label=spec.id,
-                    state={"graph_state": {**state, **next_state}},
+                    state=_checkpoint_payload({**state, **next_state}),
                 )
                 return next_state
             except WaitingHumanInterrupt:
@@ -633,7 +825,7 @@ class LangGraphAdapter(OrchestratorAdapter):
 
         async def handler(state: dict[str, Any]) -> dict[str, Any]:
             if _already_completed(state, spec.id):
-                return {}
+                return state
 
             step_idx = run_state.next_step_index(spec.id)
             ctx = run_state.ctx
@@ -649,14 +841,25 @@ class LangGraphAdapter(OrchestratorAdapter):
                 user_input = f"{user_input}\n\n" + "\n".join(context_bits)
 
             await ctx.emit_step_started(index=step_idx, node=spec.id)
-            await ctx.emit_message(role="system", content=system_prompt)
-            await ctx.emit_message(role="user", content=user_input)
+            await _emit_llm_system_prompt(
+                ctx, run_state, node_id=spec.id, system_prompt=system_prompt, step_index=step_idx
+            )
+            await _emit_llm_user_prompt(ctx, node_id=spec.id, content=user_input, step_index=step_idx)
 
             stream_tokens = run_state.config.get("stream_tokens", True)
             started = time.monotonic()
+            history = [
+                m
+                for m in (state.get("messages") or [])
+                if isinstance(m, dict) and m.get("role") != "system"
+            ]
+            user_content = await _multimodal_user_content(
+                user_input, run_state.input_attachments
+            )
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
+                *history,
+                {"role": "user", "content": user_content},
             ]
             response = await self._invoke_model(
                 ctx,
@@ -672,8 +875,9 @@ class LangGraphAdapter(OrchestratorAdapter):
             else:
                 reply = response.content
             latency_ms = int((time.monotonic() - started) * 1000)
+            used_model = response.model or model
             cost_usd = estimate_cost_usd(
-                model, response.tokens_in, response.tokens_out
+                used_model, response.tokens_in, response.tokens_out
             )
 
             await ctx.emit_step_updated(
@@ -682,8 +886,15 @@ class LangGraphAdapter(OrchestratorAdapter):
                 tokens_out=response.tokens_out,
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
+                model=used_model,
+                model_routing=response.routing,
             )
-            await ctx.emit_message(role="assistant", content=reply)
+            await _emit_assistant_messages(
+                ctx,
+                step_index=step_idx,
+                content=reply,
+                reasoning=response.reasoning,
+            )
             await ctx.emit_step_completed(
                 index=step_idx,
                 node=spec.id,
@@ -692,6 +903,8 @@ class LangGraphAdapter(OrchestratorAdapter):
                 tokens_out=response.tokens_out,
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
+                model=used_model,
+                model_routing=response.routing,
             )
             history = list(state.get("messages") or [])
             history.extend(
@@ -708,7 +921,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             }
             await ctx.emit_checkpoint(
                 label=spec.id,
-                state={"graph_state": {**state, **next_state}},
+                state=_checkpoint_payload({**state, **next_state}),
             )
             return next_state
 
@@ -725,7 +938,93 @@ class LangGraphAdapter(OrchestratorAdapter):
         stream_tokens: bool = True,
         mock_tool_round: int | None = None,
     ) -> ModelResponse:
-        """Call the configured chat model, optionally streaming token deltas."""
+        """Call the configured chat model with runtime routing / fallback."""
+        memory_cfg = parse_memory_config(ctx.agent_config)
+        if memory_cfg.window_tokens > 0:
+            messages = fit_messages_to_window(
+                messages,
+                window_tokens=memory_cfg.window_tokens,
+                summarize=memory_cfg.summarize,
+            )
+
+        history_tokens = estimate_prompt_tokens_from_history(messages)
+        record_prompt_tokens_from_history(
+            adapter=self.name, tokens=history_tokens
+        )
+        maybe_alert_prompt_tokens_from_history(
+            run_id=ctx.run_id,
+            adapter=self.name,
+            tokens=history_tokens,
+            step_index=step_index,
+        )
+
+        routing = parse_model_routing(ctx.agent_config, primary=model)
+
+        async def _on_fallback(attempt: ModelAttempt, next_model: str) -> None:
+            record_model_routing(
+                adapter=self.name,
+                fell_back=True,
+                from_model=attempt.model,
+                to_model=next_model,
+                error_kind=attempt.error_kind,
+            )
+            await ctx.emit_log(
+                "model_routing_fallback",
+                from_model=attempt.model,
+                to_model=next_model,
+                error_kind=attempt.error_kind,
+                error=attempt.error,
+                step_index=step_index,
+            )
+
+        async def _call(candidate: str) -> ModelResponse:
+            return await self._invoke_model_once(
+                ctx,
+                step_index,
+                candidate,
+                messages,
+                tools=tools,
+                stream_tokens=stream_tokens,
+                mock_tool_round=mock_tool_round,
+            )
+
+        try:
+            response, routed = await invoke_with_fallback(
+                _call,
+                routing=routing,
+                on_fallback=_on_fallback,
+            )
+        except ModelRoutingExhaustedError as exc:
+            record_model_routing(
+                adapter=self.name,
+                exhausted=True,
+                from_model=routing.primary,
+                to_model=exc.routing.model,
+            )
+            await ctx.emit_log(
+                "model_routing_exhausted",
+                primary=routing.primary,
+                attempts=exc.routing.as_dict()["attempts"],
+                step_index=step_index,
+            )
+            raise exc.last_error from exc
+
+        response.model = routed.model
+        response.routing = routed.as_dict()
+        return response
+
+    async def _invoke_model_once(
+        self,
+        ctx: AdapterContext,
+        step_index: int,
+        model: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[ToolDefinition] | None = None,
+        stream_tokens: bool = True,
+        mock_tool_round: int | None = None,
+    ) -> ModelResponse:
+        """Single provider attempt (no routing)."""
         settings = get_settings()
         if not settings.openai_api_key:
             return await self._invoke_mock(
@@ -748,9 +1047,11 @@ class LangGraphAdapter(OrchestratorAdapter):
             payload["tools"] = tool_schemas_from_definitions(tools)
 
         if stream_tokens and not tools:
-            return await self._invoke_openai_streaming(
+            response = await self._invoke_openai_streaming(
                 ctx, step_index, settings, payload
             )
+            response.model = model
+            return response
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -763,6 +1064,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             message = data["choices"][0]["message"]
             tool_calls = _parse_openai_tool_calls(message.get("tool_calls"))
             content = message.get("content") or ""
+            reasoning = _extract_reasoning_text(message)
             usage = data.get("usage") or {}
             prompt_text = json.dumps(messages, default=str)
             tokens_in = int(
@@ -770,13 +1072,19 @@ class LangGraphAdapter(OrchestratorAdapter):
             )
             tokens_out = int(
                 usage.get("completion_tokens")
-                or estimate_tokens(content or json.dumps(tool_calls, default=str))
+                or estimate_tokens(
+                    (content or "")
+                    + reasoning
+                    + (json.dumps(tool_calls, default=str) if tool_calls else "")
+                )
             )
             return ModelResponse(
                 content=content,
+                reasoning=reasoning,
                 tool_calls=tool_calls,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                model=model,
             )
 
     async def _invoke_mock(
@@ -829,14 +1137,27 @@ class LangGraphAdapter(OrchestratorAdapter):
         else:
             reply = f"[mock:{model}]{suffix} {user_input}"
         tokens_in = estimate_tokens(json.dumps(messages, default=str))
-        tokens_out = estimate_tokens(reply)
+        reasoning = ""
+        if bool(ctx.agent_config.get("stream_reasoning")):
+            preview = user_input[:48].replace("\n", " ")
+            reasoning = f"[think:{model}] weigh options for: {preview}"
+        tokens_out = estimate_tokens(reply + reasoning)
         if stream_tokens:
+            if reasoning:
+                for chunk in _chunk_text(reasoning):
+                    await ctx.emit_token_delta(
+                        step_index=step_index, delta=chunk, part="reasoning"
+                    )
             for chunk in _chunk_text(reply):
-                await ctx.emit_token_delta(step_index=step_index, delta=chunk)
+                await ctx.emit_token_delta(
+                    step_index=step_index, delta=chunk, part="text"
+                )
         return ModelResponse(
             content=reply,
+            reasoning=reasoning,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            model=model,
         )
 
     async def _invoke_openai_streaming(
@@ -854,6 +1175,7 @@ class LangGraphAdapter(OrchestratorAdapter):
             "stream_options": {"include_usage": True},
         }
         parts: list[str] = []
+        reasoning_parts: list[str] = []
         tokens_in = 0
         tokens_out = 0
 
@@ -883,20 +1205,34 @@ class LangGraphAdapter(OrchestratorAdapter):
                         )
                     for choice in chunk.get("choices") or []:
                         delta = choice.get("delta") or {}
+                        reasoning_piece = _extract_reasoning_text(delta)
+                        if reasoning_piece:
+                            reasoning_parts.append(reasoning_piece)
+                            await ctx.emit_token_delta(
+                                step_index=step_index,
+                                delta=reasoning_piece,
+                                part="reasoning",
+                            )
                         content = delta.get("content")
                         if content:
                             parts.append(content)
                             await ctx.emit_token_delta(
-                                step_index=step_index, delta=content
+                                step_index=step_index,
+                                delta=content,
+                                part="text",
                             )
 
         reply = "".join(parts)
+        reasoning = "".join(reasoning_parts)
         if not tokens_in:
             tokens_in = estimate_tokens(str(payload.get("messages", "")))
         if not tokens_out:
-            tokens_out = estimate_tokens(reply)
+            tokens_out = estimate_tokens(reply + reasoning)
         return ModelResponse(
-            content=reply, tokens_in=tokens_in, tokens_out=tokens_out
+            content=reply,
+            reasoning=reasoning,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
         )
 
 
@@ -912,16 +1248,89 @@ def _with_completed(state: dict[str, Any], node_id: str) -> list[str]:
     return completed
 
 
+def _emitted_system_prompts_from_messages(
+    messages: list[dict[str, Any]] | None,
+) -> set[str]:
+    """Seed dedupe state from persisted messages on retry / resume."""
+    if not messages:
+        return set()
+    emitted: set[str] = set()
+    for message in messages:
+        if message.get("role") != "system":
+            continue
+        extra = message.get("extra") or {}
+        if extra.get("kind") == "prompt_echo":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            emitted.add(content)
+    return emitted
+
+
+async def _emit_llm_system_prompt(
+    ctx: AdapterContext,
+    run_state: _RunState,
+    *,
+    node_id: str,
+    system_prompt: str,
+    step_index: int,
+) -> None:
+    """Emit system once per unique prompt; repeats are tagged for UI collapse."""
+    if system_prompt in run_state.emitted_system_prompts:
+        await ctx.emit_message(
+            role="system",
+            content=system_prompt,
+            kind="prompt_echo",
+            node=node_id,
+            step_index=step_index,
+        )
+        return
+    await ctx.emit_message(role="system", content=system_prompt, step_index=step_index)
+    run_state.emitted_system_prompts.add(system_prompt)
+
+
+async def _emit_llm_user_prompt(
+    ctx: AdapterContext,
+    *,
+    node_id: str,
+    content: str,
+    step_index: int,
+) -> None:
+    """Record the user-side LLM input without flooding the transcript."""
+    if not content:
+        return
+    await ctx.emit_message(
+        role="user",
+        content=content,
+        kind="prompt_echo",
+        node=node_id,
+        step_index=step_index,
+    )
+
+
 def _seed_agent_messages(
     state: dict[str, Any], system_prompt: str
 ) -> list[dict[str, Any]]:
     existing = state.get("messages")
     if isinstance(existing, list) and existing:
-        return list(existing)
-    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        messages = list(existing)
+    else:
+        messages = []
+
+    if not any(
+        isinstance(m, dict) and m.get("role") == "system" for m in messages
+    ):
+        messages = [{"role": "system", "content": system_prompt}, *messages]
+
     user_input = str(state.get("input", ""))
     if user_input:
-        messages.append({"role": "user", "content": user_input})
+        last = messages[-1] if messages else None
+        if not (
+            isinstance(last, dict)
+            and last.get("role") == "user"
+            and last.get("content") == user_input
+        ):
+            messages.append({"role": "user", "content": user_input})
     return messages
 
 
@@ -962,6 +1371,26 @@ def _openai_tool_call_payload(tc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_GRAPH_CONTROL_KEYS = (
+    "input",
+    "reply",
+    "tool_results",
+    "completed_nodes",
+    "pending_human",
+    "human_input",
+    "route",
+)
+
+
+def _graph_control_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Graph control fields only — messages are rebuilt from the messages table."""
+    return {key: state[key] for key in _GRAPH_CONTROL_KEYS if key in state}
+
+
+def _checkpoint_payload(state: dict[str, Any]) -> dict[str, Any]:
+    return {"graph_state": _graph_control_state(state)}
+
+
 def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
     default: dict[str, Any] = {
         "input": ctx.input.get("prompt", ""),
@@ -973,13 +1402,96 @@ def _initial_graph_state(ctx: AdapterContext) -> dict[str, Any]:
         "human_input": None,
         "route": None,
     }
+    # Prior thread turns (other runs) + this run's transcript on resume.
+    # run_messages alone used to drop L1 context across HITL / retry.
+    seed: list[dict[str, Any]] = list(ctx.thread_messages or [])
+    if ctx.run_messages is not None:
+        seed = [*seed, *ctx.run_messages]
+    if seed:
+        default["messages"] = seed
     if ctx.resume and ctx.resume.checkpoint_state:
         saved = ctx.resume.checkpoint_state.get("graph_state")
         if isinstance(saved, dict):
-            return {**default, **saved}
+            merged = {**default, **saved}
+            if ctx.run_messages is not None or ctx.thread_messages:
+                merged["messages"] = list(default["messages"])
+            elif isinstance(saved.get("messages"), list):
+                # Legacy checkpoints that still inlined messages.
+                merged["messages"] = list(saved["messages"])
+            return merged
     return default
 
 
 def _chunk_text(text: str, *, size: int = 8) -> list[str]:
     """Split text into small chunks for mock streaming."""
     return [text[i : i + size] for i in range(0, len(text), size)] or [text]
+
+
+def _extract_reasoning_text(payload: dict[str, Any] | None) -> str:
+    """Pull reasoning / thinking text from OpenAI-compatible message or delta.
+
+    Providers disagree on the field name (``reasoning_content``, ``reasoning``,
+    Anthropic-style ``thinking``). Empty / missing values are ignored.
+    """
+    if not payload:
+        return ""
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+async def _emit_assistant_messages(
+    ctx: AdapterContext,
+    *,
+    step_index: int,
+    content: str,
+    reasoning: str = "",
+) -> None:
+    """Persist optional reasoning block, then the visible assistant reply."""
+    if reasoning.strip():
+        await ctx.emit_message(
+            role="assistant",
+            content=reasoning,
+            step_index=step_index,
+            kind="reasoning",
+        )
+    await ctx.emit_message(role="assistant", content=content, step_index=step_index)
+
+
+def _messages_have_attachments(messages: list[dict[str, Any]] | None) -> bool:
+    if not messages:
+        return False
+    for message in messages:
+        extra = message.get("extra") or {}
+        if extra.get("kind") == "attachment" or extra.get("attachments"):
+            return True
+        if message.get("attachments"):
+            return True
+    return False
+
+
+async def _multimodal_user_content(
+    text: str, attachments: list[Any]
+) -> str | list[dict[str, Any]]:
+    if not attachments:
+        return text
+    from app.runtime.attachments import openai_user_content
+
+    return await openai_user_content(text, attachments)
+
+
+def _apply_multimodal_to_seed(
+    messages: list[dict[str, Any]],
+    user_content: str | list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Replace the trailing user turn with multimodal content when needed."""
+    if not messages or isinstance(user_content, str):
+        return messages
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if isinstance(out[i], dict) and out[i].get("role") == "user":
+            out[i] = {**out[i], "content": user_content}
+            break
+    return out

@@ -1,0 +1,8 @@
+generatorName: typescript-fetch
+inputSpec: openapi/openapi.yaml
+outputDir: sdk/typescript/.gen/typescript
+additionalProperties:
+  npmName: "@agentflow/sdk"
+  npmVersion: 0.1.0
+  supportsES6: true
+  typescriptThreePlus: true

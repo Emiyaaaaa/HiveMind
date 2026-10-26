@@ -1,7 +1,9 @@
 package io.agentflow.api.service;
 
 import io.agentflow.api.dto.CheckpointResponse;
+import io.agentflow.api.dto.MessagePageResponse;
 import io.agentflow.api.dto.MessageResponse;
+import io.agentflow.api.dto.RunAuditEventResponse;
 import io.agentflow.api.dto.RunCreateRequest;
 import io.agentflow.api.dto.RunResponse;
 import io.agentflow.api.dto.RunResumeRequest;
@@ -10,18 +12,27 @@ import io.agentflow.api.entity.CheckpointEntity;
 import io.agentflow.api.dto.StepResponse;
 import io.agentflow.api.dto.ToolCallResponse;
 import io.agentflow.api.entity.AgentEntity;
+import io.agentflow.api.entity.MessageEntity;
+import io.agentflow.api.entity.RunAuditEventEntity;
 import io.agentflow.api.entity.RunEntity;
 import io.agentflow.api.entity.RunStatus;
 import io.agentflow.api.entity.StepEntity;
+import io.agentflow.api.entity.ThreadEntity;
 import io.agentflow.api.entity.ToolCallEntity;
 import io.agentflow.api.jobs.CancelSignal;
 import io.agentflow.api.jobs.JobProducer;
 import io.agentflow.api.repository.CheckpointRepository;
 import io.agentflow.api.repository.MessageRepository;
+import io.agentflow.api.repository.RunAuditEventRepository;
 import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
+import io.agentflow.api.repository.ThreadRepository;
 import io.agentflow.api.repository.ToolCallRepository;
+import io.agentflow.api.security.AccessControl;
+import io.agentflow.api.security.AuthPrincipal;
+import io.agentflow.api.security.Role;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,9 +60,13 @@ public class RunService {
     private final MessageRepository messages;
     private final ToolCallRepository toolCalls;
     private final CheckpointRepository checkpoints;
+    private final RunAuditEventRepository auditEvents;
     private final AgentService agentService;
+    private final ThreadRepository threads;
     private final JobProducer jobProducer;
     private final CancelSignal cancelSignal;
+    private final AttachmentService attachmentService;
+    private final AgentQuotaService quotaService;
 
     public RunService(
             RunRepository runs,
@@ -59,28 +74,52 @@ public class RunService {
             MessageRepository messages,
             ToolCallRepository toolCalls,
             CheckpointRepository checkpoints,
+            RunAuditEventRepository auditEvents,
             AgentService agentService,
+            ThreadRepository threads,
             JobProducer jobProducer,
-            CancelSignal cancelSignal) {
+            CancelSignal cancelSignal,
+            AttachmentService attachmentService,
+            AgentQuotaService quotaService) {
         this.runs = runs;
         this.steps = steps;
         this.messages = messages;
         this.toolCalls = toolCalls;
         this.checkpoints = checkpoints;
+        this.auditEvents = auditEvents;
         this.agentService = agentService;
+        this.threads = threads;
         this.jobProducer = jobProducer;
         this.cancelSignal = cancelSignal;
+        this.attachmentService = attachmentService;
+        this.quotaService = quotaService;
     }
 
     @Transactional
     public RunResponse create(RunCreateRequest req) {
+        AccessControl.require(Role.OPERATOR);
         AgentEntity agent = agentService.getEntity(req.getAgentId());
+        quotaService.assertCanCreateRun(agent);
         String adapter = (req.getAdapter() != null && !req.getAdapter().isBlank())
                 ? req.getAdapter()
                 : agent.getAdapter();
 
+        String threadId = req.getThreadId();
+        if (threadId != null && !threadId.isBlank()) {
+            ThreadEntity thread = threads
+                    .findByIdAndTenantId(threadId, agent.getTenantId())
+                    .orElseThrow(() -> new ThreadNotFoundException(threadId));
+            if (!agent.getId().equals(thread.getAgentId())) {
+                throw new ThreadNotFoundException(threadId);
+            }
+        } else {
+            threadId = null;
+        }
+
         RunEntity run = new RunEntity();
+        run.setTenantId(agent.getTenantId());
         run.setAgentId(agent.getId());
+        run.setThreadId(threadId);
         run.setAdapter(adapter);
         run.setStatus(RunStatus.PENDING);
         run.setInput(new HashMap<>(req.getInput()));
@@ -90,6 +129,8 @@ public class RunService {
                 Map.of(AGENT_VERSION_METADATA_KEY, agent.getVersion()));
         run.setMetadata(metadata);
         RunEntity saved = runs.save(run);
+        attachmentService.bindInputAttachments(
+                saved.getId(), agent.getTenantId(), saved.getInput());
         enqueueJobAfterCommit(saved.getId(), agent.getId(), adapter);
 
         return toResponse(saved);
@@ -102,9 +143,12 @@ public class RunService {
             String adapter,
             int agentVersion,
             List<Map<String, Object>> inputs) {
+        AccessControl.require(Role.OPERATOR);
+        AgentEntity agent = agentService.getEntity(agentId);
         List<RunEntity> candidates = new ArrayList<>(inputs.size());
         for (Map<String, Object> input : inputs) {
             RunEntity run = new RunEntity();
+            run.setTenantId(agent.getTenantId());
             run.setAgentId(agentId);
             run.setAdapter(adapter);
             run.setStatus(RunStatus.PENDING);
@@ -117,6 +161,52 @@ public class RunService {
         return List.copyOf(runs.saveAll(candidates));
     }
 
+    /**
+     * Create a pending Run with caller-owned {@code _agentflow} metadata (batch /
+     * schedule pins) and enqueue after commit.
+     */
+    @Transactional
+    public RunEntity createTaggedRun(
+            AgentEntity agent,
+            String adapter,
+            Map<String, Object> input,
+            Map<String, Object> metadata) {
+        AccessControl.require(Role.OPERATOR);
+        String resolvedAdapter =
+                (adapter != null && !adapter.isBlank()) ? adapter : agent.getAdapter();
+        RunEntity run = new RunEntity();
+        run.setTenantId(agent.getTenantId());
+        run.setAgentId(agent.getId());
+        run.setAdapter(resolvedAdapter);
+        run.setStatus(RunStatus.PENDING);
+        run.setInput(new HashMap<>(input == null ? Map.of() : input));
+        run.setMetadata(new HashMap<>(metadata == null ? Map.of() : metadata));
+        RunEntity saved = runs.save(run);
+        enqueueJobAfterCommit(saved.getId(), saved.getAgentId(), saved.getAdapter());
+        return saved;
+    }
+
+    /** Header-only responses for an ordered list of Run ids (missing ids skipped). */
+    @Transactional(readOnly = true)
+    public List<RunResponse> listByIds(List<String> runIds) {
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
+        if (runIds == null || runIds.isEmpty()) {
+            return List.of();
+        }
+        Map<String, RunEntity> byId = new HashMap<>();
+        for (String id : runIds) {
+            runs.findByIdAndTenantId(id, tenantId).ifPresent(run -> byId.put(id, run));
+        }
+        List<RunResponse> out = new ArrayList<>();
+        for (String id : runIds) {
+            RunEntity run = byId.get(id);
+            if (run != null) {
+                out.add(RunResponse.fromEntity(run));
+            }
+        }
+        return out;
+    }
+
     /** Dispatch already-committed candidate Runs after their Redis manifest exists. */
     public void enqueueCandidates(List<RunEntity> candidates) {
         candidates.forEach(run ->
@@ -125,22 +215,38 @@ public class RunService {
 
     @Transactional(readOnly = true)
     public List<RunResponse> list(int limit) {
+        String tenantId = AccessControl.tenantId(Role.VIEWER);
         int capped = Math.max(1, Math.min(limit, 200));
         // Header rows only — matches Python list_runs (no steps/messages/checkpoints).
-        return runs.findRecent(PageRequest.of(0, capped)).stream()
+        return runs.findRecentByTenantId(tenantId, PageRequest.of(0, capped)).stream()
                 .map(RunResponse::fromEntity)
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public RunResponse get(String id) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
-        return toResponse(run);
+        return toResponse(requireRun(id, Role.VIEWER));
+    }
+
+    @Transactional(readOnly = true)
+    public MessagePageResponse listMessages(String id, Integer cursor, int limit) {
+        RunEntity run = requireRun(id, Role.VIEWER);
+        int capped = Math.max(1, Math.min(limit, MessagePagination.PAGE_MAX));
+        MessagePage page = fetchMessagePage(run.getId(), cursor, capped);
+        return MessagePageResponse.of(page.items(), page.nextCursor(), page.hasMore());
+    }
+
+    /** Ensure the run exists in the caller's tenant (for SSE and cross-service checks). */
+    @Transactional(readOnly = true)
+    public void requireAccessible(String id) {
+        requireRun(id, Role.VIEWER);
     }
 
     @Transactional
     public void cancel(String id) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
+        AuthPrincipal principal = AccessControl.require(Role.OPERATOR);
+        RunEntity run = requireRun(id, Role.OPERATOR);
+        recordAudit(run, "cancel", principal, Map.of());
         cancelSignal.requestCancel(run.getId());
         // We do not flip the row to CANCELLED here: the worker owns the
         // transition so steps/messages can be flushed first.
@@ -148,34 +254,33 @@ public class RunService {
 
     @Transactional
     public RunResponse retry(String id, RunRetryRequest req) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
+        RunEntity run = requireRun(id, Role.OPERATOR);
         if (run.getStatus() != RunStatus.FAILED) {
             throw new RunConflictException(
                     "Cannot retry run " + id + " in status " + run.getStatus().wire());
         }
 
+        AgentEntity agent = agentService.getEntity(run.getAgentId());
+        quotaService.assertCanCreateRun(agent);
+
         List<CheckpointEntity> cps = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId());
-        Map<String, Object> checkpointState = null;
         Integer checkpointIndex = null;
         if (!cps.isEmpty()) {
             Integer requested = req != null ? req.getCheckpointIndex() : null;
-            CheckpointEntity chosen;
             if (requested != null) {
-                chosen = cps.stream()
+                CheckpointEntity chosen = cps.stream()
                         .filter(cp -> cp.getIndex() == requested)
                         .findFirst()
                         .orElseThrow(() -> new RunConflictException(
                                 "Cannot retry run " + id + " (checkpoint " + requested + " missing)"));
+                checkpointIndex = chosen.getIndex();
             } else {
-                chosen = cps.get(cps.size() - 1);
+                checkpointIndex = cps.get(cps.size() - 1).getIndex();
             }
-            checkpointState = chosen.getState();
-            checkpointIndex = chosen.getIndex();
         }
 
         Map<String, Object> meta = ResumeMetadata.withoutResume(run.getMetadata());
-        ResumeMetadata.mergeInto(
-                meta, ResumeMetadata.retry(checkpointState, checkpointIndex));
+        ResumeMetadata.mergeInto(meta, ResumeMetadata.retry(checkpointIndex));
         run.setStatus(RunStatus.PENDING);
         run.setError(null);
         run.setMetadata(meta);
@@ -186,7 +291,8 @@ public class RunService {
 
     @Transactional
     public RunResponse resume(String id, RunResumeRequest req) {
-        RunEntity run = runs.findById(id).orElseThrow(() -> new RunNotFoundException(id));
+        AuthPrincipal principal = AccessControl.require(Role.OPERATOR);
+        RunEntity run = requireRun(id, Role.OPERATOR);
         if (run.getStatus() != RunStatus.WAITING_HUMAN) {
             throw new RunConflictException(
                     "Cannot resume run " + id + " in status " + run.getStatus().wire());
@@ -201,22 +307,57 @@ public class RunService {
         }
 
         List<CheckpointEntity> cps = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId());
-        Map<String, Object> checkpointState = null;
         Integer checkpointIndex = null;
         if (!cps.isEmpty()) {
-            CheckpointEntity latest = cps.get(cps.size() - 1);
-            checkpointState = latest.getState();
-            checkpointIndex = latest.getIndex();
+            checkpointIndex = cps.get(cps.size() - 1).getIndex();
         }
 
         Map<String, Object> meta = ResumeMetadata.withoutResume(run.getMetadata());
         ResumeMetadata.mergeInto(
-                meta, ResumeMetadata.resume(checkpointState, checkpointIndex, humanInput));
+                meta, ResumeMetadata.resume(checkpointIndex, humanInput));
         run.setStatus(RunStatus.PENDING);
         run.setMetadata(meta);
+
+        Map<String, Object> detail = new HashMap<>();
+        if (checkpointIndex != null) {
+            detail.put("checkpoint_index", checkpointIndex);
+        }
+        if (!humanInput.isEmpty()) {
+            detail.put("input", humanInput);
+        }
+        recordAudit(run, "resume", principal, detail);
+
         RunEntity saved = runs.save(run);
         enqueueJobAfterCommit(saved.getId(), saved.getAgentId(), saved.getAdapter());
         return toResponse(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<RunAuditEventResponse> listAudit(String id) {
+        RunEntity run = requireRun(id, Role.VIEWER);
+        return auditEvents
+                .findAllByRunIdAndTenantIdOrderByCreatedAtAscIdAsc(run.getId(), run.getTenantId())
+                .stream()
+                .map(RunAuditEventResponse::fromEntity)
+                .toList();
+    }
+
+    private void recordAudit(
+            RunEntity run, String action, AuthPrincipal principal, Map<String, Object> detail) {
+        RunAuditEventEntity event = new RunAuditEventEntity();
+        event.setTenantId(run.getTenantId());
+        event.setRunId(run.getId());
+        event.setAction(action);
+        event.setActorSubject(principal.subject());
+        event.setActorRole(principal.role().name().toLowerCase());
+        event.setDetail(detail == null ? Map.of() : new HashMap<>(detail));
+        auditEvents.save(event);
+    }
+
+    private RunEntity requireRun(String id, Role minimum) {
+        String tenantId = AccessControl.tenantId(minimum);
+        return runs.findByIdAndTenantId(id, tenantId)
+                .orElseThrow(() -> new RunNotFoundException(id));
     }
 
     /**
@@ -248,14 +389,47 @@ public class RunService {
         List<StepResponse> stepDtos = stepEntities.stream()
                 .map(s -> StepResponse.fromEntity(s, toolsByStep.getOrDefault(s.getId(), List.of())))
                 .toList();
-        List<MessageResponse> messageDtos = messages.findAllByRunIdOrderByIndexAsc(run.getId())
-                .stream()
-                .map(MessageResponse::fromEntity)
-                .toList();
+        List<MessageResponse> messageDtos;
+        boolean messagesTruncated;
+        if (MessagePagination.PREVIEW_LIMIT <= 0) {
+            messageDtos = List.of();
+            MessagePage probe = fetchMessagePage(run.getId(), null, 1);
+            messagesTruncated = !probe.items().isEmpty();
+        } else {
+            MessagePage preview = fetchMessagePage(
+                    run.getId(), null, MessagePagination.PREVIEW_LIMIT);
+            messageDtos = preview.items();
+            messagesTruncated = preview.hasMore();
+        }
         List<CheckpointResponse> checkpointDtos = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId())
                 .stream()
                 .map(CheckpointResponse::fromEntity)
                 .toList();
-        return RunResponse.fromEntity(run, stepDtos, messageDtos, checkpointDtos);
+        return RunResponse.fromEntity(
+                run, stepDtos, messageDtos, messagesTruncated, checkpointDtos);
     }
+
+    private MessagePage fetchMessagePage(String runId, Integer cursor, int limit) {
+        List<MessageEntity> rows;
+        if (cursor == null) {
+            rows = new ArrayList<>(
+                    messages.findByRunIdOrderByIndexDesc(runId, PageRequest.of(0, limit + 1)));
+        } else {
+            rows = new ArrayList<>(messages.findByRunIdAndIndexLessThanOrderByIndexDesc(
+                    runId, cursor, PageRequest.of(0, limit + 1)));
+        }
+        boolean hasMore = rows.size() > limit;
+        if (hasMore) {
+            rows = rows.subList(0, limit);
+        }
+        Collections.reverse(rows);
+        List<MessageResponse> items = rows.stream()
+                .map(MessageResponse::fromEntity)
+                .toList();
+        Integer nextCursor = !items.isEmpty() && hasMore ? items.getFirst().getIndex() : null;
+        return new MessagePage(items, nextCursor, hasMore);
+    }
+
+    private record MessagePage(
+            List<MessageResponse> items, Integer nextCursor, boolean hasMore) {}
 }

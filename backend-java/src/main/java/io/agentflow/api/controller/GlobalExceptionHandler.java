@@ -2,11 +2,19 @@ package io.agentflow.api.controller;
 
 import io.agentflow.api.service.AgentNameConflictException;
 import io.agentflow.api.service.AgentNotFoundException;
+import io.agentflow.api.service.AgentQuotaExceededException;
 import io.agentflow.api.service.AgentVersionNotFoundException;
+import io.agentflow.api.service.AttachmentNotFoundException;
+import io.agentflow.api.service.AttachmentTooLargeException;
+import io.agentflow.api.service.BatchException;
 import io.agentflow.api.service.RegressionExecutionException;
 import io.agentflow.api.service.RunComparisonValidationException;
 import io.agentflow.api.service.RunConflictException;
 import io.agentflow.api.service.RunNotFoundException;
+import io.agentflow.api.service.ScheduleException;
+import io.agentflow.api.service.ThreadNotFoundException;
+import io.agentflow.api.security.ForbiddenException;
+import io.agentflow.api.security.UnauthorizedException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -31,6 +39,27 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
     }
 
+    @ExceptionHandler(ThreadNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleThreadNotFound(ThreadNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AttachmentNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleAttachmentNotFound(
+            AttachmentNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("detail", "Attachment not found: " + ex.getMessage()));
+    }
+
+    @ExceptionHandler(AttachmentTooLargeException.class)
+    public ResponseEntity<Map<String, String>> handleAttachmentTooLarge(
+            AttachmentTooLargeException ex) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(Map.of(
+                        "detail",
+                        "Attachment too large: " + ex.getSize() + " > " + ex.getLimit() + " bytes"));
+    }
+
     @ExceptionHandler(RunNotFoundException.class)
     public ResponseEntity<Map<String, String>> handleRunNotFound(RunNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
@@ -39,6 +68,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AgentNameConflictException.class)
     public ResponseEntity<Map<String, String>> handleAgentNameConflict(AgentNameConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AgentQuotaExceededException.class)
+    public ResponseEntity<Map<String, String>> handleAgentQuotaExceeded(
+            AgentQuotaExceededException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(Map.of("detail", ex.getMessage()));
     }
 
     @ExceptionHandler(RunConflictException.class)
@@ -57,5 +93,27 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, String>> handleRegressionExecution(
             RegressionExecutionException ex) {
         return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(BatchException.class)
+    public ResponseEntity<Map<String, String>> handleBatch(BatchException ex) {
+        return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(ScheduleException.class)
+    public ResponseEntity<Map<String, String>> handleSchedule(ScheduleException ex) {
+        return ResponseEntity.status(ex.status()).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<Map<String, String>> handleUnauthorized(UnauthorizedException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .header("WWW-Authenticate", "Bearer")
+                .body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<Map<String, String>> handleForbidden(ForbiddenException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("detail", ex.getMessage()));
     }
 }

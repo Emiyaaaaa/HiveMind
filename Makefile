@@ -1,4 +1,4 @@
-.PHONY: help up down api worker frontend db-schema test lint format integration
+.PHONY: help up down api worker frontend db-schema test lint format integration gen-openapi gen-sdks sdk-test
 
 help:
 	@echo "Available targets:"
@@ -12,6 +12,9 @@ help:
 	@echo "  integration  - compose app profile + end-to-end smoke test"
 	@echo "  lint         - run ruff + tsc"
 	@echo "  format       - run ruff format"
+	@echo "  gen-openapi  - export openapi/openapi.yaml from Spring Boot"
+	@echo "  gen-sdks     - generate REST stubs from openapi/openapi.yaml"
+	@echo "  sdk-test     - run Python + TypeScript SDK tests"
 
 up:
 	docker compose up -d postgres redis
@@ -48,3 +51,13 @@ lint:
 
 format:
 	cd backend && uv run ruff format .
+
+gen-openapi:
+	scripts/gen/export-openapi.sh
+
+gen-sdks:
+	scripts/gen/generate-sdks.sh
+
+sdk-test:
+	cd sdk/python && uv run --with pytest pytest -q
+	cd sdk/typescript && npm install && npm run build && npm run lint

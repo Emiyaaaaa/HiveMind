@@ -34,7 +34,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from app.core.config import get_settings
+from app.core.config import get_settings, jobs_backend
 from app.core.logging import get_logger
 
 logger = get_logger("worker.queue")
@@ -132,25 +132,34 @@ class RunJob:
             trace_context=trace_context,
         )
 
-    def to_json(self) -> str:
+    def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         if data.get("trace_context") is None:
             data.pop("trace_context", None)
-        return json.dumps(data)
+        return data
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict())
 
     @classmethod
-    def from_json(cls, payload: str) -> RunJob:
-        data = json.loads(payload)
+    def from_mapping(cls, data: dict[str, Any]) -> RunJob:
         trace_context = data.get("trace_context")
         if trace_context is not None and not isinstance(trace_context, dict):
             trace_context = None
+        enqueued_at = data.get("enqueued_at", datetime.now(UTC).isoformat())
+        if not isinstance(enqueued_at, str):
+            enqueued_at = str(enqueued_at)
         return cls(
-            run_id=data["run_id"],
-            agent_id=data["agent_id"],
-            adapter=data["adapter"],
-            enqueued_at=data.get("enqueued_at", datetime.now(UTC).isoformat()),
+            run_id=str(data["run_id"]),
+            agent_id=str(data["agent_id"]),
+            adapter=str(data["adapter"]),
+            enqueued_at=enqueued_at,
             trace_context=trace_context,
         )
+
+    @classmethod
+    def from_json(cls, payload: str) -> RunJob:
+        return cls.from_mapping(json.loads(payload))
 
 
 @dataclass
@@ -396,8 +405,11 @@ class RedisStreamsJobQueue:
                 max="+",
             )
             if undelivered:
-                if lag_count == 0:
-                    lag_count = len(undelivered)
+                # Some Redis-compatible fakes (e.g. fakeredis) report
+                # a partially-updated `lag` from XINFO GROUPS. When there
+                # are no pending entries, the undelivered set below is the
+                # most reliable source for consumer-group lag.
+                lag_count = len(undelivered)
                 oldest_lag_seconds = _entry_age_seconds(undelivered[0][0])
         elif lag_count > 0:
             trailing = await self._redis.xrange(
@@ -572,9 +584,11 @@ def get_job_queue() -> JobQueue:
 
     Selection rules:
 
+    * ``jobs_impl`` / ``AGENTFLOW_JOBS_IMPL`` of ``temporal`` -> Temporal
+      workflows (durable long runs; Redis is not used for job dispatch).
     * ``AGENTFLOW_REDIS_URL`` unset, or ``worker_mode != "queue"`` -> the
       in-memory queue (sufficient for tests and inline dev).
-    * ``redis_queue_impl == "list"`` -> legacy LIST/BRPOP implementation.
+    * ``list`` -> legacy LIST/BRPOP implementation.
     * Otherwise (the default) -> Redis Streams implementation.
     """
     global _queue
@@ -582,12 +596,25 @@ def get_job_queue() -> JobQueue:
         return _queue
 
     settings = get_settings()
+    backend = jobs_backend()
+    if backend == "temporal":
+        from app.worker.temporal.queue import TemporalJobQueue
+
+        logger.info(
+            "job_queue.temporal",
+            target=settings.temporal_target,
+            namespace=settings.temporal_namespace,
+            task_queue=settings.temporal_task_queue,
+        )
+        _queue = TemporalJobQueue()
+        return _queue
+
     if not (settings.redis_url and settings.worker_mode == "queue"):
         logger.info("job_queue.in_memory")
         _queue = InMemoryJobQueue()
         return _queue
 
-    if settings.redis_queue_impl == "list":
+    if backend == "list":
         logger.info(
             "job_queue.redis_list", url=settings.redis_url, key=settings.job_queue_key
         )

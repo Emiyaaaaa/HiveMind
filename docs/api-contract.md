@@ -15,6 +15,23 @@ below are relative to that backend root.
 - JSON keys use `snake_case`. The frontend types in
   [`frontend/lib/types.ts`](../frontend/lib/types.ts) are the source of truth.
 - Errors return `{"detail": "<message>"}` with a non-2xx status code.
+- **Auth (optional).** When `AGENTFLOW_AUTH_ENABLED=true`, every `/v1/*`
+  endpoint except `GET /v1/health` requires
+  `Authorization: Bearer <api-key>` or `X-Api-Key: <api-key>`. Each key maps
+  to an organization (`tenant_id`) and role (`viewer` | `operator` | `admin`).
+  Keys may additionally be constrained to one project or one Agent using
+  `key:organization:role[:project_id[:agent_id]]`; a narrower scope is never
+  allowed to access a sibling resource and returns 404. Missing key → 401;
+  insufficient role within an allowed scope → 403.
+  Auth is **off by default** for local development.
+
+### Roles
+
+| Role | Capabilities |
+| --- | --- |
+| `viewer` | List/get agents, runs, versions, SSE |
+| `operator` | viewer + create/cancel/retry/resume runs |
+| `admin` | operator + create/update/restore agents + data erasure / retention purge |
 
 ## Endpoints
 
@@ -42,12 +59,19 @@ Request:
   "name": "writer",
   "description": "optional",
   "adapter": "echo",
-  "config": {}
+  "config": {},
+  "project_id": "01HZ..."
 }
 ```
 
 Response: a full `Agent` record (see schema below). Returns 409 if `name`
 already exists.
+
+### `POST /v1/projects` → 201
+
+Organization administrators create projects with `name` and optional
+`description`. `GET /v1/projects` lists only projects visible to the current
+organization/project scope; `GET /v1/projects/{id}` returns one visible project.
 
 ### `GET /v1/agents` → 200
 
@@ -56,6 +80,14 @@ Response: `Agent[]` ordered by `created_at` descending.
 ### `GET /v1/agents/{id}` → 200
 
 Response: `Agent`. 404 if missing.
+
+### `GET /v1/agents/{id}/quota` → 200
+
+Current period usage against the agent's configured token/cost quota
+(`Agent.config.quota`). When no quota is configured, `active` is `false` and
+limits are null.
+
+Response: `AgentQuotaStatus`. 404 if the agent is missing.
 
 ### `PATCH /v1/agents/{id}` → 200
 
@@ -95,6 +127,69 @@ config added·removed·changed).
 Copy the snapshot's adapter/config/description onto the live agent as a **new**
 version (does not delete history). No-op (no bump) when already identical.
 
+### `POST /v1/threads` → 201
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "title": "Support chat",
+  "user_id": "user-42",
+  "project_id": null
+}
+```
+
+Creates a conversation thread scoped to the agent (and tenant). `title` and
+`user_id` are optional. `project_id` defaults to the agent's project when
+omitted. Returns 404 if the agent is not visible to the caller.
+
+### `GET /v1/threads?limit=50` → 200
+
+Response: `Thread[]` for the caller's tenant/project/agent scope, newest first.
+
+### `GET /v1/threads/{id}` → 200
+
+Response: one `Thread`. 404 if missing or not visible (including cross-tenant).
+
+### `GET /v1/threads/{id}/messages?cursor=&limit=50` → 200
+
+Merged transcript across all Runs in the thread, ordered by run time then
+message index. Each item includes `run_id` plus the usual Message fields.
+The first response is the newest page; `next_cursor` is an opaque
+`run.created_at|index|id` key for older pages. 404 if the thread is not visible.
+
+### `GET /v1/threads/{id}/runs?limit=50` → 200
+
+Response: `Run[]` belonging to the thread, oldest first. 404 if the thread is
+not visible.
+
+### `POST /v1/attachments` → 201
+
+Multipart upload (`file` required, optional `caption`). Operator role.
+Persists bytes in the object store and returns metadata:
+
+```json
+{
+  "id": "01HZ...",
+  "tenant_id": "default",
+  "run_id": null,
+  "message_id": null,
+  "media_type": "image/png",
+  "filename": "chart.png",
+  "size_bytes": 1234,
+  "sha256": "…",
+  "caption": null,
+  "url": "/v1/attachments/01HZ...",
+  "created_at": "…",
+  "updated_at": "…"
+}
+```
+
+`GET /v1/attachments/{id}` returns the same metadata. `GET /v1/attachments/{id}/content`
+streams the binary. Cross-tenant ids return 404. Max size:
+`AGENTFLOW_ATTACHMENT_MAX_BYTES` (default 10 MiB).
+
 ### `POST /v1/runs` → 202
 
 Request:
@@ -102,14 +197,26 @@ Request:
 ```json
 {
   "agent_id": "01HZ...",
-  "input": { "prompt": "hi" },
+  "input": {
+    "prompt": "hi",
+    "attachments": [{ "id": "01HZ..." }]
+  },
   "metadata": {},
-  "adapter": "echo"
+  "adapter": "echo",
+  "thread_id": "01HZ..."
 }
 ```
 
-`metadata` and `adapter` are optional. When `adapter` is omitted the agent's
-default adapter is used. The server replaces the reserved `_agentflow`
+`input.attachments` may be a list of ids or `{ "id": "…" }` objects referencing
+previously uploaded attachments. Missing / cross-tenant ids → 404.
+
+`metadata`, `adapter`, and `thread_id` are optional. When `adapter` is omitted
+the agent's default adapter is used. When `thread_id` is set, the run is linked
+to that thread and the worker seeds prior thread turns into
+`AdapterContext.thread_messages` (window-trimmed). Returns 404 if the thread is
+missing, belongs to another tenant/agent, or is otherwise not visible.
+
+The server replaces the reserved `_agentflow`
 metadata namespace and records the agent's current version as
 `_agentflow.agent_version`; client-supplied values in that namespace are never
 trusted.
@@ -119,6 +226,10 @@ The Python worker resolves a pinned run through
 `AgentVersion.config` snapshot. A pinned run fails explicitly if that snapshot
 is missing. Only legacy runs without a version pin fall back to the agent's
 current config.
+
+When the agent's `config.quota` is active and `enforce` is true, returns **429**
+if the current UTC period already meets or exceeds `max_tokens` /
+`max_cost_usd`.
 
 Response: a full `Run` record. The run is created with status `pending` and
 a background job is dispatched to a worker; the response returns before the
@@ -134,13 +245,37 @@ sensible upper bound on the server (default 50).
 
 ### `GET /v1/runs/{id}` → 200
 
-Response: a `Run` populated with `steps`, `messages`, and `checkpoints`.
-404 if missing.
+Response: a `Run` populated with `steps`, a **preview** of `messages` (most
+recent *K*, default 50), and `checkpoints`. When older messages exist,
+`messages_truncated` is `true`; use `GET /v1/runs/{id}/messages` to page
+backward. 404 if missing.
+
+### `GET /v1/runs/{id}/messages?cursor=&limit=50` → 200
+
+Cursor-paginated run transcript in ascending `index` order. Omit `cursor` to
+fetch the newest page; pass `next_cursor` from a prior response to load older
+messages (`index` exclusive upper bound). `limit` clamps on the server
+(default 50, max 200).
+
+Response:
+
+```json
+{
+  "items": [/* Message */],
+  "next_cursor": 12,
+  "has_more": true
+}
+```
+
+404 if the run does not exist.
 
 ### `POST /v1/runs/{id}/cancel` → 204
 
 Signals the worker to cancel the run. Idempotent; returns 204 whether or not
 the run is already in a terminal state. Returns 404 if the run does not exist.
+
+Each call appends a `RunAuditEvent` with `action=cancel` and the caller's
+`actor_subject` / `actor_role` (API key prefix or OIDC subject).
 
 ### `POST /v1/runs/{id}/retry` → 202
 
@@ -157,7 +292,8 @@ Request (optional body):
 
 Response: a full `Run` record with status `pending` (worker will transition to
 `running`). Returns **404** if the run does not exist, **409** if status is not
-`failed` or the checkpoint index is missing.
+`failed` or the checkpoint index is missing, **429** if the agent's enforced
+quota is already exhausted.
 
 ### `POST /v1/runs/{id}/resume` → 202
 
@@ -175,6 +311,147 @@ Request (optional body):
 
 Response: a full `Run` record with status `pending`. Returns **404** if missing,
 **409** if status is not `waiting_human`.
+
+Each successful resume appends a `RunAuditEvent` with `action=resume`. The
+`detail` object may include `checkpoint_index` and the human `input` payload.
+
+### `GET /v1/runs/{id}/audit` → 200
+
+Lists cancel/resume audit events for the run in ascending time order. Requires
+`viewer` or higher. Returns **404** if the run is missing or outside the
+caller's tenant / project / agent scope.
+
+```json
+[
+  {
+    "id": "01H…",
+    "tenant_id": "acme",
+    "run_id": "01H…",
+    "action": "cancel",
+    "actor_subject": "ops-user",
+    "actor_role": "operator",
+    "detail": {},
+    "created_at": "2026-09-11T06:00:00Z"
+  }
+]
+```
+
+### `POST /v1/batches` → 202
+
+Creates 1–100 Runs for one Agent from distinct inputs and dispatches them
+through the normal worker queue. Shared optional `adapter` / `metadata` apply
+to every item; per-item `input` is required.
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "items": [
+    {"input": {"prompt": "a"}},
+    {"input": {"prompt": "b"}, "metadata": {"label": "b"}}
+  ],
+  "adapter": "echo",
+  "metadata": {"source": "nightly"}
+}
+```
+
+Response:
+
+```json
+{
+  "id": "01HZ...",
+  "agent_id": "01HZ...",
+  "status": "pending",
+  "total": 2,
+  "completed": 0,
+  "run_ids": ["01HZ...A", "01HZ...B"],
+  "created_at": "2026-09-11T06:00:00+00:00"
+}
+```
+
+`status` is `pending` while every Run is still `pending`, `completed` when
+every Run is terminal (`succeeded` / `failed` / `cancelled`), otherwise
+`running`. Duplicate empty `items` → **422**. Missing Agent → **404**. Cap is
+100 items to avoid flooding the queue.
+
+Each created Run pins `_agentflow.agent_version` and `_agentflow.batch_id`.
+
+### `GET /v1/batches?limit=50` → 200
+
+Response: `Batch[]` ordered by `created_at` descending.
+
+### `GET /v1/batches/{id}` → 200
+
+Current batch progress (recomputes `status` / `completed` from Run rows).
+404 if missing.
+
+### `GET /v1/batches/{id}/runs` → 200
+
+Response: `Run[]` for the batch, in creation order. Header rows only (no
+steps / messages / checkpoints). 404 if the batch is missing.
+
+### `POST /v1/schedules` → 201
+
+Creates a recurring Run schedule for an Agent. Provide **exactly one** of
+`cron` (5-field minute cron in `timezone`, default `UTC`) or
+`interval_seconds` (≥ 60).
+
+Request:
+
+```json
+{
+  "agent_id": "01HZ...",
+  "name": "hourly-digest",
+  "cron": "0 * * * *",
+  "timezone": "UTC",
+  "input": {"prompt": "summarize"},
+  "metadata": {},
+  "adapter": null,
+  "enabled": true
+}
+```
+
+Response: a full `Schedule` including `next_run_at`. Invalid cron / missing
+timing field / both timing fields → **422**. Missing Agent → **404**.
+
+### `GET /v1/schedules?limit=50` → 200
+
+Response: `Schedule[]` ordered by `created_at` descending.
+
+### `GET /v1/schedules/{id}` → 200
+
+404 if missing.
+
+### `PATCH /v1/schedules/{id}` → 200
+
+Partial update of `name`, `cron`, `interval_seconds`, `timezone`, `input`,
+`metadata`, `adapter`, or `enabled`. Recomputes `next_run_at` when timing
+fields change. Clearing the only timing field or setting both → **422**.
+
+### `DELETE /v1/schedules/{id}` → 204
+
+Deletes the schedule. Idempotent for missing ids within the tenant? No —
+missing → **404**. In-flight Runs are not cancelled.
+
+### `POST /v1/schedules/{id}/trigger` → 202
+
+Fires one Run immediately from the schedule template without advancing the
+cron/interval cursor when `advance` is false (default). Pass
+`{"advance": true}` to also bump `next_run_at` / `last_run_at` as if the
+sweeper had claimed it.
+
+Response: the created `Run` (`pending`). Disabled schedules still accept an
+explicit trigger. 404 if missing.
+
+### `GET /v1/schedules/{id}/runs?limit=50` → 200
+
+Runs tagged with `_agentflow.schedule_id = {id}`, newest first. 404 if the
+schedule is missing.
+
+The Python worker periodically claims due schedules (`enabled` and
+`next_run_at ≤ now`), creates a Run, enqueues it, and advances `next_run_at`.
+Fired Runs pin `_agentflow.schedule_id` and `_agentflow.agent_version`.
 
 ### `POST /v1/run-comparisons/preview` → 200
 
@@ -293,8 +570,15 @@ The supported `type` values are:
 `token.delta` is SSE-only (not persisted). Payload:
 
 ```json
-{ "step_index": 0, "delta": "Hel", "role": "assistant" }
+{ "step_index": 0, "delta": "Hel", "role": "assistant", "part": "text" }
 ```
+
+`part` discriminates fine-grained streams: `"text"` (default, visible reply),
+`"reasoning"` (model thinking / chain-of-thought), or `"attachment"` (multimodal
+file announcement; payload may include an `attachment` object). Finished
+reasoning is persisted as a `message.created` with `extra.kind = "reasoning"`;
+finished attachments as `extra.kind = "attachment"` plus
+`extra.attachments` refs. Live deltas remain ephemeral.
 
 `step.updated` flushes deferred metrics on a running step (tokens, latency)
 before `step.completed`:
@@ -319,6 +603,100 @@ Adapters should pass the ``call_id`` returned from ``emit_tool_call_started``
 into ``emit_tool_call_completed``. When ``call_id`` is omitted on completed,
 the runtime falls back to the oldest incomplete call with a matching name.
 
+``message.created`` — adapters emit ``step_index``; the runtime resolves it to
+the persisted ``step_id`` (nullable when omitted). Broadcast payload:
+
+```json
+{
+  "role": "assistant",
+  "content": "hello",
+  "step_index": 0,
+  "index": 3,
+  "step_id": "01HZ...",
+  "extra": {}
+}
+```
+
+### Outbound webhooks (push)
+
+When the runtime is configured with `AGENTFLOW_WEBHOOK_URLS`, the process that
+finalises a run (the Python worker in queue mode, the API in inline mode)
+POSTs the run's outcome to every listed URL. Only four event types are pushed:
+`run.completed`, `run.failed`, `run.cancelled` and `run.waiting_human` (the
+last one is the human-approval notification). Step/message/token events stay
+SSE-only.
+
+The request body is byte-for-byte the SSE frame JSON above (`type`, `run_id`,
+`at`, `data`), so a receiver can reuse its SSE payload parser. Headers:
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-AgentFlow-Event` | the event `type` |
+| `X-AgentFlow-Delivery` | ULID, identical across retries of the same event; de-duplicate on it |
+| `X-AgentFlow-Signature` | `sha256=<hex HMAC-SHA256(secret, raw body)>`; only when `AGENTFLOW_WEBHOOK_SECRET` is set |
+
+Delivery semantics: any 2xx response is treated as delivered. Other statuses
+and transport errors are retried with exponential backoff (0.5s, 1s, 2s, …)
+up to `AGENTFLOW_WEBHOOK_MAX_ATTEMPTS` per URL, then logged as
+`webhook.dropped` and discarded. Delivery is asynchronous and never delays or
+fails the run. Bounds: at most 16 POSTs in flight per process and 1000
+pending deliveries (further events are dropped with `webhook.overflow`); on
+shutdown the process waits up to 10 seconds for in-flight deliveries. Log
+lines show URLs without userinfo, query or fragment. Receivers should be idempotent and verify the signature with a
+constant-time compare:
+
+```python
+import hashlib, hmac
+expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+ok = hmac.compare_digest(expected, request.headers["X-AgentFlow-Signature"])
+```
+
+Subscriptions are process-wide configuration, not per-tenant resources; the
+payload carries `run_id` only, so tenant/agent filtering happens on the
+receiving side (fetch `GET /v1/runs/{id}` with a tenant-scoped key).
+
+### `POST /v1/runs/{run_id}/erase` → 200
+
+Admin-only GDPR-style erasure of run working memory: deletes all ``Message`` and
+``Checkpoint`` rows, clears ``output`` and ``_resume`` metadata, and drops the
+Redis event replay stream. Step rows are kept for audit. Returns **409** while
+the run is ``pending`` or ``running``.
+
+```json
+{ "run_id": "01HZ...", "messages_deleted": 12, "checkpoints_deleted": 4 }
+```
+
+### `POST /v1/organization/erase` → 200
+
+Admin-only tenant-wide erasure for the authenticated ``tenant_id``.
+
+```json
+{
+  "tenant_id": "default",
+  "runs_processed": 42,
+  "messages_deleted": 900,
+  "checkpoints_deleted": 120
+}
+```
+
+### `POST /v1/retention/purge` → 200
+
+Admin-only TTL purge for terminal runs older than
+``AGENTFLOW_DATA_RETENTION_TENANT_TTL_DAYS`` (0 = disabled). The Python worker
+also runs this sweep in the background when TTL is configured.
+
+```json
+{
+  "tenant_id": "default",
+  "runs_purged": 5,
+  "messages_deleted": 80,
+  "checkpoints_deleted": 10
+}
+```
+
+Optional body: ``{ "tenant_id": "default", "dry_run": false }``.
+
 ## Schemas
 
 ### `Agent`
@@ -326,6 +704,8 @@ the runtime falls back to the oldest incomplete call with a matching name.
 ```ts
 {
   id: string;
+  tenant_id: string;
+  project_id: string | null;
   name: string;
   description: string | null;
   adapter: string;
@@ -333,6 +713,52 @@ the runtime falls back to the oldest incomplete call with a matching name.
   version: number;
   created_at: string;
   updated_at: string;
+}
+```
+
+`tenant_id` is assigned from the caller's API key (or `"default"` when auth
+is disabled). Agent `name` is unique **per tenant**.
+
+Optional `config.quota` enables Agent-level token / cost budgets:
+
+```json
+{
+  "quota": {
+    "period": "month",
+    "max_tokens": 1000000,
+    "max_cost_usd": 25.0,
+    "enforce": true
+  }
+}
+```
+
+`period` is `day` | `week` | `month` (UTC calendar buckets). Either limit may
+be omitted for unlimited. With `enforce: true` (default), `POST /v1/runs`
+and `POST /v1/runs/{id}/retry` return **429** once the current period is at
+or over a limit. The Python worker accumulates usage into `agent_quota_usage`
+on terminal run states (delta-safe across retries).
+
+### `AgentQuotaStatus`
+
+```ts
+{
+  agent_id: string;
+  active: boolean;
+  enforce: boolean;
+  period: "day" | "week" | "month" | null;
+  period_key: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  max_tokens: number | null;
+  max_cost_usd: number | null;
+  used_tokens: number;
+  used_tokens_in: number;
+  used_tokens_out: number;
+  used_cost_usd: number;
+  run_count: number;
+  remaining_tokens: number | null;
+  remaining_cost_usd: number | null;
+  exceeded: boolean;
 }
 ```
 
@@ -372,6 +798,8 @@ the runtime falls back to the oldest incomplete call with a matching name.
 ```ts
 {
   id: string;
+  tenant_id: string;
+  project_id: string | null;
   agent_id: string;
   adapter: string;
   status: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "waiting_human";
@@ -382,6 +810,7 @@ the runtime falls back to the oldest incomplete call with a matching name.
   updated_at: string;
   steps: Step[];
   messages: Message[];
+  messages_truncated?: boolean;
   checkpoints: Checkpoint[];
   usage: RunUsage;
 }
@@ -436,12 +865,32 @@ ops dashboards.
 {
   id: string;
   index: number;
+  step_id: string | null;
   role: "system" | "user" | "assistant" | "tool";
   name: string | null;
   content: string;
   tool_call_id: string | null;
-  extra: Record<string, unknown>;
+  extra: Record<string, unknown>;  // kind?: "prompt_echo" | "reasoning" | …
   created_at: string;
+}
+```
+
+`extra.kind = "reasoning"` marks a persisted reasoning / thinking block
+(content is the full chain-of-thought). These rows stay on the Run transcript
+for the console but are excluded from Thread L1 window seeding.
+
+`extra.kind = "attachment"` marks a multimodal attachment message. Content is
+a caption / filename summary; `extra.attachments` holds compact refs
+(`id`, `media_type`, `filename`, `url`, `size_bytes`). Binary bytes stay in
+object storage — `Message.content` is never multimodal JSON.
+
+### `MessagePage`
+
+```ts
+{
+  items: Message[];
+  next_cursor: number | null;
+  has_more: boolean;
 }
 ```
 
@@ -465,6 +914,25 @@ ops dashboards.
   id: string;
   index: number;
   label: string | null;
+  created_at: string;
+}
+```
+
+### `RunAuditEvent`
+
+Append-only cancel/resume governance record. Written by
+`POST /v1/runs/{id}/cancel` and `POST /v1/runs/{id}/resume`; listed via
+`GET /v1/runs/{id}/audit`.
+
+```ts
+{
+  id: string;
+  tenant_id: string;
+  run_id: string;
+  action: "cancel" | "resume";
+  actor_subject: string;
+  actor_role: "viewer" | "operator" | "admin";
+  detail: Record<string, unknown>;  // e.g. checkpoint_index, input
   created_at: string;
 }
 ```

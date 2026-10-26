@@ -83,12 +83,17 @@ _worker_capacity: Any | None = None
 _gauge_values: dict[str, float] = {}
 _llm_tokens: Counter | None = None
 _llm_cost: Counter | None = None
+_llm_routing_fallbacks: Counter | None = None
+_llm_routing_exhausted: Counter | None = None
 _run_outcomes: Counter | None = None
 _step_outcomes: Counter | None = None
 _step_duration: Histogram | None = None
 _tool_calls: Counter | None = None
 _tool_errors: Counter | None = None
 _tool_duration: Histogram | None = None
+_memory_checkpoint_bytes: Histogram | None = None
+_memory_messages_per_run: Histogram | None = None
+_memory_prompt_tokens_from_history: Histogram | None = None
 _worker_job_durations = DurationWindow()
 
 
@@ -170,6 +175,8 @@ def shutdown_telemetry() -> None:
     global _worker_utilization, _worker_in_flight, _worker_capacity
     global _llm_tokens, _llm_cost, _run_outcomes
     global _step_outcomes, _step_duration, _tool_calls, _tool_errors, _tool_duration
+    global _memory_checkpoint_bytes, _memory_messages_per_run
+    global _memory_prompt_tokens_from_history
 
     if not _initialized:
         return
@@ -216,6 +223,9 @@ def shutdown_telemetry() -> None:
     _tool_calls = None
     _tool_errors = None
     _tool_duration = None
+    _memory_checkpoint_bytes = None
+    _memory_messages_per_run = None
+    _memory_prompt_tokens_from_history = None
 
 
 def get_tracer() -> Tracer:
@@ -400,7 +410,8 @@ def set_worker_utilization(*, in_flight: int, capacity: int) -> None:
 
 
 def _ensure_run_instruments() -> None:
-    global _llm_tokens, _llm_cost, _run_outcomes
+    global _llm_tokens, _llm_cost, _llm_routing_fallbacks, _llm_routing_exhausted
+    global _run_outcomes
     global _step_outcomes, _step_duration, _tool_calls, _tool_errors, _tool_duration
 
     if _meter is None:
@@ -417,6 +428,16 @@ def _ensure_run_instruments() -> None:
             "agentflow.llm.cost_usd",
             description="Estimated LLM spend in USD",
             unit="USD",
+        )
+        _llm_routing_fallbacks = meter.create_counter(
+            "agentflow.llm.routing_fallbacks",
+            description="LLM calls that fell back to a secondary model",
+            unit="1",
+        )
+        _llm_routing_exhausted = meter.create_counter(
+            "agentflow.llm.routing_exhausted",
+            description="LLM calls that exhausted the model routing chain",
+            unit="1",
         )
         _run_outcomes = meter.create_counter(
             "agentflow.run.outcomes",
@@ -450,6 +471,69 @@ def _ensure_run_instruments() -> None:
         )
 
 
+def _ensure_memory_instruments() -> None:
+    global _memory_checkpoint_bytes, _memory_messages_per_run
+    global _memory_prompt_tokens_from_history
+
+    if _meter is None:
+        setup_telemetry()
+    meter = _meter or metrics.get_meter(get_settings().otel_service_name)
+
+    if _memory_checkpoint_bytes is None:
+        _memory_checkpoint_bytes = meter.create_histogram(
+            "agentflow.memory.checkpoint_bytes",
+            description="Serialized checkpoint JSON size",
+            unit="By",
+        )
+        _memory_messages_per_run = meter.create_histogram(
+            "agentflow.memory.messages_per_run",
+            description="Message count when a run finishes",
+            unit="1",
+        )
+        _memory_prompt_tokens_from_history = meter.create_histogram(
+            "agentflow.memory.prompt_tokens_from_history",
+            description=(
+                "Estimated tokens from prior conversation turns in an LLM prompt"
+            ),
+            unit="1",
+        )
+
+
+def record_checkpoint_bytes(*, adapter: str, checkpoint_bytes: int) -> None:
+    """Record checkpoint blob size (``agentflow.memory.checkpoint_bytes``)."""
+    if not is_enabled() or checkpoint_bytes <= 0:
+        return
+    _ensure_memory_instruments()
+    assert _memory_checkpoint_bytes is not None
+    _memory_checkpoint_bytes.record(
+        checkpoint_bytes, attributes={"adapter": adapter}
+    )
+
+
+def record_messages_per_run(*, adapter: str, message_count: int) -> None:
+    """Record persisted message count at run completion."""
+    if not is_enabled() or message_count <= 0:
+        return
+    _ensure_memory_instruments()
+    assert _memory_messages_per_run is not None
+    _memory_messages_per_run.record(
+        message_count, attributes={"adapter": adapter}
+    )
+
+
+def record_prompt_tokens_from_history(
+    *, adapter: str, tokens: int
+) -> None:
+    """Record history token share of an LLM prompt."""
+    if not is_enabled() or tokens <= 0:
+        return
+    _ensure_memory_instruments()
+    assert _memory_prompt_tokens_from_history is not None
+    _memory_prompt_tokens_from_history.record(
+        tokens, attributes={"adapter": adapter}
+    )
+
+
 def record_llm_usage(
     *,
     adapter: str,
@@ -472,6 +556,36 @@ def record_llm_usage(
         _llm_tokens.add(tokens_out, attributes={**base, "direction": "out"})
     if cost_usd > 0:
         _llm_cost.add(cost_usd, attributes=base)
+
+
+def record_model_routing(
+    *,
+    adapter: str,
+    fell_back: bool = False,
+    exhausted: bool = False,
+    from_model: str | None = None,
+    to_model: str | None = None,
+    error_kind: str | None = None,
+) -> None:
+    """Count model-routing fallback / exhaustion events."""
+    if not is_enabled():
+        return
+    if not fell_back and not exhausted:
+        return
+    _ensure_run_instruments()
+    attrs: dict[str, str] = {"adapter": adapter}
+    if from_model:
+        attrs["from_model"] = from_model
+    if to_model:
+        attrs["to_model"] = to_model
+    if error_kind:
+        attrs["error_kind"] = error_kind
+    if fell_back:
+        assert _llm_routing_fallbacks is not None
+        _llm_routing_fallbacks.add(1, attributes=attrs)
+    if exhausted:
+        assert _llm_routing_exhausted is not None
+        _llm_routing_exhausted.add(1, attributes=attrs)
 
 
 def record_run_outcome(*, adapter: str, status: str) -> None:

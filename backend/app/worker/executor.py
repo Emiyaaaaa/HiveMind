@@ -33,6 +33,7 @@ from app.db.session import SessionLocal
 from app.events import EventBus
 from app.models import Agent, RunStatus
 from app.runtime.resume_context import (
+    RunResumeContext,
     parse_resume_context,
     without_resume_metadata,
 )
@@ -41,6 +42,11 @@ from app.services.agent_versions import (
     InvalidAgentVersionMetadata,
     agent_version_from_metadata,
     get_agent_version,
+)
+from app.services.episode_service import (
+    EpisodeService,
+    prompt_text,
+    render_episode_block,
 )
 from app.worker.cancel import CancelRegistry, InMemoryCancelRegistry
 
@@ -60,7 +66,7 @@ class RunExecutor:
         self.cancel_registry = cancel_registry or InMemoryCancelRegistry()
 
     async def execute(self, run_id: str, adapter_name: str) -> None:
-        """Drive a single run from PENDING/WAITING_HUMAN to a terminal state."""
+        """Execute a pending request or recover an interrupted running segment."""
 
         # Import lazily so RunService can import RunExecutor without circularity.
         from app.services.run_service import RunService
@@ -73,15 +79,34 @@ class RunExecutor:
             )
 
             run = await service._get_run(run_id)
-            agent = await session.get(Agent, run.agent_id)
-            if agent is None:
-                await service._finalize(run_id, RunStatus.FAILED, error="agent missing")
+            # A lost ACK can redeliver a segment that already finished. Protect
+            # its outcome before looking at stale cancellation or metadata.
+            if run.status in (
+                RunStatus.SUCCEEDED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            ):
+                logger.info("job.skipped", run_id=run_id, status=run.status)
                 return
 
             # Honour a cancel that arrived before the worker picked up the job.
             if await self.cancel_registry.is_cancelled(run_id):
                 await service._finalize(run_id, RunStatus.CANCELLED, error="cancelled")
                 await self._safe_clear_cancel(run_id)
+                return
+
+            resume_ctx = parse_resume_context(run.metadata_)
+            if run.status == RunStatus.WAITING_HUMAN and (
+                resume_ctx is None or resume_ctx.mode != "resume"
+            ):
+                # Redelivery is not human approval. Only a persisted resume
+                # request may advance a paused run; returning lets it be ACKed.
+                logger.info("job.skipped", run_id=run_id, status=run.status)
+                return
+
+            agent = await session.get(Agent, run.agent_id)
+            if agent is None:
+                await service._finalize(run_id, RunStatus.FAILED, error="agent missing")
                 return
 
             try:
@@ -110,17 +135,72 @@ class RunExecutor:
                     return
                 agent_config = dict(snapshot.config or {})
 
-            resume_ctx = parse_resume_context(run.metadata_)
             if resume_ctx is not None:
                 run.metadata_ = without_resume_metadata(dict(run.metadata_ or {}))
+                resume_ctx = await self._hydrate_resume_checkpoint(
+                    service, run.id, resume_ctx
+                )
+
+            # Worker crash / Temporal activity retry: recover RUNNING from
+            # its latest checkpoint. Paused runs require explicit approval.
+            if resume_ctx is None and run.status == RunStatus.RUNNING:
+                resume_ctx = await self._recover_resume(service, run.id)
 
             step_index_base = 0
             if resume_ctx is not None and resume_ctx.mode in ("retry", "resume"):
                 step_index_base = (await service._max_step_index(run.id)) + 1
 
+            run_messages = None
+            if resume_ctx is not None:
+                run_messages = await service.load_run_messages(run.id)
+
+            thread_messages: list[dict[str, Any]] = []
+            if run.thread_id:
+                from app.services.thread_service import ThreadService
+
+                thread_service = ThreadService(session)
+                thread_messages = await thread_service.load_thread_window(
+                    run.thread_id,
+                    exclude_run_id=run.id,
+                    agent_config=agent_config,
+                )
+
+            memory_hits: list[Any] = []
+            if resume_ctx is None:
+                try:
+                    memory_hits = await EpisodeService(session).recall(
+                        tenant_id=run.tenant_id,
+                        agent_id=run.agent_id,
+                        thread_id=run.thread_id,
+                        query=prompt_text(run.input),
+                    )
+                except Exception:
+                    logger.exception("episode_recall_failed", run_id=run_id)
+                    memory_hits = []
+
+            from app.services.attachment_service import AttachmentService
+
+            attachments = await AttachmentService(session).list_for_run(run.id)
+
             run.status = RunStatus.RUNNING
             await session.commit()
             await service._broadcast("run.started", run.id, {})
+
+            if memory_hits:
+                block = render_episode_block(memory_hits)
+                thread_messages = [block, *thread_messages]
+                await service._handle_event(
+                    run.id,
+                    "message.created",
+                    {
+                        "role": "system",
+                        "content": block["content"],
+                        "extra": {
+                            "kind": "memory",
+                            "memory_hit_ids": [hit.id for hit in memory_hits],
+                        },
+                    },
+                )
 
             # Serialize DB writes: adapters may emit from concurrent tasks
             # (e.g. parallel tool calls) while sharing one AsyncSession.
@@ -137,6 +217,11 @@ class RunExecutor:
                 input=run.input,
                 metadata=run.metadata_,
                 resume=resume_ctx,
+                run_messages=run_messages,
+                thread_id=run.thread_id,
+                thread_messages=thread_messages,
+                memory_hits=memory_hits,
+                attachments=attachments,
                 step_index_base=step_index_base,
                 emit=_emit,
             )
@@ -147,7 +232,9 @@ class RunExecutor:
             try:
                 try:
                     result = await trace_adapter_run(
-                        adapter_name, run_id, adapter.run(ctx)
+                        adapter_name,
+                        run_id,
+                        self._invoke_adapter(adapter, ctx, resume_ctx),
                     )
                 except asyncio.CancelledError:
                     # Cancellation may interrupt a flush; clear the session
@@ -192,14 +279,52 @@ class RunExecutor:
         except asyncio.CancelledError:
             pass
 
+    async def _recover_resume(
+        self, service: Any, run_id: str
+    ) -> RunResumeContext:
+        latest = await service._latest_checkpoint(run_id)
+        if latest is None:
+            return RunResumeContext(mode="retry")
+        return RunResumeContext(
+            mode="retry",
+            checkpoint_state=latest.state,
+            checkpoint_index=latest.index,
+        )
+
+    async def _hydrate_resume_checkpoint(
+        self,
+        service: Any,
+        run_id: str,
+        resume_ctx: RunResumeContext,
+    ) -> RunResumeContext:
+        """Load checkpoint state from DB; metadata only carries the index."""
+        if resume_ctx.checkpoint_index is not None:
+            cp = await service.get_checkpoint_by_index(
+                run_id, resume_ctx.checkpoint_index
+            )
+            if cp is not None:
+                return RunResumeContext(
+                    mode=resume_ctx.mode,
+                    checkpoint_state=cp.state,
+                    checkpoint_index=cp.index,
+                    human_input=resume_ctx.human_input,
+                )
+        latest = await service._latest_checkpoint(run_id)
+        if latest is not None:
+            return RunResumeContext(
+                mode=resume_ctx.mode,
+                checkpoint_state=latest.state,
+                checkpoint_index=latest.index,
+                human_input=resume_ctx.human_input,
+            )
+        return resume_ctx
+
     async def _invoke_adapter(
         self,
         adapter: OrchestratorAdapter,
         ctx: AdapterContext,
         resume_ctx: object,
     ) -> AdapterResult:
-        from app.runtime.resume_context import RunResumeContext
-
         if isinstance(resume_ctx, RunResumeContext):
             if resume_ctx.mode == "retry":
                 return await adapter.retry(ctx)

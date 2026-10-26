@@ -1,6 +1,6 @@
 # Production deployment
 
-AgentFlow runs as a Java API + Python worker(s) + Postgres + Redis stack.
+Hivemind runs as a Java API + Python worker(s) + Postgres + Redis stack.
 
 ## Components
 
@@ -30,7 +30,7 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_REDIS_HOST` | Redis host |
 | `AGENTFLOW_REDIS_PORT` | `6379` |
 | `AGENTFLOW_SERVER_PORT` | `8000` (or behind a load balancer) |
-| `AGENTFLOW_JOBS_IMPL` | `streams` (recommended; must match worker) |
+| `AGENTFLOW_JOBS_IMPL` | `streams` / `list` / `temporal` (must match worker) |
 
 ### Python worker (`backend`)
 
@@ -39,7 +39,8 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_WORKER_MODE` | `queue` |
 | `AGENTFLOW_DATABASE_URL` | `postgresql+asyncpg://<user>:<pass>@<host>:5432/agentflow` |
 | `AGENTFLOW_REDIS_URL` | `redis://<host>:6379/0` |
-| `AGENTFLOW_REDIS_QUEUE_IMPL` | `streams` (must match `AGENTFLOW_JOBS_IMPL`) |
+| `AGENTFLOW_JOBS_IMPL` | `streams` / `list` / `temporal` (must match Java API) |
+| `AGENTFLOW_REDIS_QUEUE_IMPL` | `streams` (used only when `AGENTFLOW_JOBS_IMPL` is unset/`streams`) |
 | `AGENTFLOW_WORKER_CONCURRENCY` | `1`–`64`; parallel jobs per worker process (default `1`) |
 | `AGENTFLOW_JOB_QUEUE_MONITOR_ENABLED` | `true`/`false`; emit queue depth metrics and delay alerts (default `true`) |
 | `AGENTFLOW_JOB_QUEUE_MONITOR_INTERVAL_SECONDS` | Poll interval for queue metrics (default `30`) |
@@ -47,6 +48,21 @@ cd backend && uv run alembic upgrade head
 | `AGENTFLOW_JOB_QUEUE_DEPTH_ALERT_THRESHOLD` | Warn when `lag + pending` reaches this count (default `100`) |
 | `AGENTFLOW_WORKER_JOB_P95_ALERT_SECONDS` | Warn when rolling worker-job p95 meets or exceeds this duration (default `60`) |
 | `AGENTFLOW_WORKER_JOB_P95_ALERT_MIN_SAMPLES` | Minimum completed jobs before p95 alerting activates (default `10`) |
+| `AGENTFLOW_WEBHOOK_URLS` | Comma-separated absolute `http(s)` URLs that receive `run.completed` / `run.failed` / `run.cancelled` / `run.waiting_human` POSTs (unset = disabled; a malformed URL aborts startup). Contract in [api-contract.md](api-contract.md#outbound-webhooks-push) |
+| `AGENTFLOW_WEBHOOK_SECRET` | HMAC-SHA256 key for `X-AgentFlow-Signature` (unset = unsigned; set it whenever receivers are reachable from outside the cluster) |
+| `AGENTFLOW_WEBHOOK_TIMEOUT_SECONDS` | Per-POST timeout (default `10`) |
+| `AGENTFLOW_WEBHOOK_MAX_ATTEMPTS` | Attempts per URL before the event is dropped, exponential backoff (default `3`) |
+
+When `AGENTFLOW_JOBS_IMPL=temporal`, also set:
+
+| Variable | Production value |
+| --- | --- |
+| `AGENTFLOW_TEMPORAL_TARGET` | `localhost:7233` |
+| `AGENTFLOW_TEMPORAL_NAMESPACE` | `default` |
+| `AGENTFLOW_TEMPORAL_TASK_QUEUE` | `agentflow-runs` |
+| `AGENTFLOW_TEMPORAL_ACTIVITY_HEARTBEAT_SECONDS` | `30` |
+| `AGENTFLOW_TEMPORAL_ACTIVITY_START_TO_CLOSE_SECONDS` | `604800` (7 days) |
+| `AGENTFLOW_TEMPORAL_ACTIVITY_MAX_ATTEMPTS` | `5` |
 
 Optional model-provider keys (`AGENTFLOW_OPENAI_API_KEY`, etc.) are only
 needed when running adapters that call external models.
@@ -60,12 +76,18 @@ needed when running adapters that call external models.
 | `AGENTFLOW_OTEL_EXPORTER_ENDPOINT` | API | OTLP HTTP traces URL (default `http://localhost:4318/v1/traces`) |
 | `AGENTFLOW_OTEL_METRICS_ENDPOINT` | API | OTLP HTTP metrics URL (default `http://localhost:4318/v1/metrics`) |
 | `AGENTFLOW_OTEL_EXPORTER_ENDPOINT` | Worker | OTLP HTTP base URL without path (default `http://localhost:4318`) |
+| `AGENTFLOW_MEMORY_CHECKPOINT_BYTES_ALERT_THRESHOLD` | API + worker | Warn when a checkpoint JSON blob exceeds this many bytes (default `262144`) |
+| `AGENTFLOW_MEMORY_MESSAGES_PER_RUN_ALERT_THRESHOLD` | API + worker | Warn when a finished run persisted this many messages (default `500`) |
+| `AGENTFLOW_MEMORY_PROMPT_TOKENS_FROM_HISTORY_ALERT_THRESHOLD` | API + worker | Warn when an LLM prompt includes this many estimated history tokens (default `8000`) |
 
 RED metric names (both stacks): `agentflow.http.server.*`, `agentflow.worker.job.*`,
 `agentflow.adapter.run.*`. The Python worker also exports queue gauges
 (`agentflow.queue.*`) from the queue monitor and per-process slot usage
 (`agentflow.worker.utilization`, `agentflow.worker.in_flight`,
-`agentflow.worker.capacity`). Run jobs carry W3C `trace_context` in the Redis payload so
+`agentflow.worker.capacity`). Memory volume histograms
+(`agentflow.memory.checkpoint_bytes`, `agentflow.memory.messages_per_run`,
+`agentflow.memory.prompt_tokens_from_history`) track checkpoint blob size,
+message accumulation, and history token pressure. Run jobs carry W3C `trace_context` in the Redis payload so
 worker spans link to the API trace.
 
 Local collector + Prometheus scrape:
@@ -76,9 +98,10 @@ docker compose --profile observability --profile app up --build
 export AGENTFLOW_OTEL_ENABLED=true
 ```
 
-Prometheus scrapes the OTel collector on `:8889` and evaluates p95 latency rules in
-`docker/prometheus/alerts.yml` (worker job p95 > 60s, HTTP p95 > 5s, both sustained
-for 5 minutes). View firing alerts at `http://localhost:9090/alerts`.
+Prometheus scrapes the OTel collector on `:8889` and evaluates rules in
+`docker/prometheus/alerts.yml` (worker job p95 > 60s, HTTP p95 > 5s, queue
+consumer delay > 30s, all sustained for 5 minutes). View firing alerts at
+`http://localhost:9090/alerts`.
 
 Import `docker/grafana/dashboards/agentflow-observability.json` into Grafana (or add a
 Grafana service to compose) for worker utilization, queue depth, consumer delay, and
@@ -107,6 +130,43 @@ worker. Scale workers horizontally by running additional `worker` containers
 
 Health check: `GET /v1/health` should return `{"status":"ok",...}`.
 
+## Helm + Terraform
+
+The Compose stack is the local reference. Production packaging lives under
+`deploy/`:
+
+| Path | Role |
+| --- | --- |
+| `deploy/helm/agentflow` | Chart: Java API, Python workers, Alembic migrate, optional in-cluster Postgres/Redis |
+| `deploy/terraform` | Installs the chart (and optionally [KEDA](https://keda.sh)) against an existing cluster |
+
+Worker autoscaling is driven by the Prometheus gauge
+`agentflow_queue_consumer_delay` (OTel `agentflow.queue.consumer_delay`, seconds
+of wait on the oldest lagging or pending Redis Stream job). Default trigger:
+KEDA `ScaledObject` with `max(agentflow_queue_consumer_delay) or vector(0)` and
+`targetConsumerDelaySeconds: 30`. Set `worker.autoscaling.provider: hpa` only
+when Prometheus Adapter already publishes that name as an External metric.
+
+Workers must run with `AGENTFLOW_OTEL_ENABLED=true` (chart `otel.enabled`) and
+Prometheus must scrape the OTel collector, or the scaler sees `vector(0)` and
+stays at `minReplicas`.
+
+```bash
+# Dev cluster (in-chart Postgres/Redis, autoscaling off — no KEDA required)
+helm upgrade --install agentflow deploy/helm/agentflow \
+  -f deploy/helm/agentflow/values-dev.yaml \
+  --set api.image.repository=... \
+  --set worker.image.repository=...
+
+# Production: Terraform applies the chart + KEDA
+cd deploy/terraform
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+`helm lint deploy/helm/agentflow` and `terraform validate` are covered in CI.
+
 ## Startup order
 
 1. Postgres and Redis
@@ -132,14 +192,17 @@ GitHub Actions job `integration` (see `.github/workflows/ci.yml`) runs:
   `AGENTFLOW_REDIS_QUEUE_IMPL=streams`). Switching to the LIST protocol
   requires rolling API and workers together and clearing the old key — see
   [api-contract.md](api-contract.md).
-- **Horizontal scale:** Add worker replicas; keep a single Java API tier (or
-  put it behind a load balancer — SSE subscribers stick to one instance unless
-  you add shared pub/sub bridging).
+- **Horizontal scale:** Add worker replicas (Helm `worker.replicaCount`, or KEDA
+  on `agentflow_queue_consumer_delay`). Keep a single Java API tier (or put it
+  behind a load balancer — SSE subscribers stick to one instance unless you add
+  shared pub/sub bridging).
 - **Backups:** Postgres holds all durable state; Redis is ephemeral coordination.
 - **Logs:** Java API logs Spring Boot output; worker logs structlog from
   `app.worker`. Look for `queue.metrics` (baseline depth/lag), `queue.consumer_delay_alert`
   (oldest job wait exceeded threshold), `queue.depth_alert` (backlog count exceeded),
   and `worker.job_p95_alert` (rolling worker-job p95 exceeded threshold).
+  Memory alerts: `memory.checkpoint_bytes_alert`, `memory.messages_per_run_alert`,
+  and `memory.prompt_tokens_from_history_alert` when volume thresholds are exceeded.
 
 ## What not to run in production
 

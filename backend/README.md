@@ -1,4 +1,4 @@
-# AgentFlow backend
+# Hivemind backend
 
 FastAPI runtime that exposes the agent execution API and a default LangGraph
 orchestrator adapter.
@@ -13,8 +13,10 @@ app/
 ├── db/               SQLAlchemy session/base
 ├── events/           In-memory + Redis event bus
 ├── models/           ORM models
+├── runtime/          Adapter-agnostic runtime helpers (memory window, quotas, webhooks, ...)
 ├── schemas/          Pydantic schemas
-└── services/         Run lifecycle service
+├── services/         Run lifecycle service
+└── worker/           Queue consumer, cancel registry, sweepers
 ```
 
 ## Develop
@@ -44,3 +46,12 @@ uv run pytest -q
 ```
 
 Tests use SQLite by default via `aiosqlite` so they do not require Postgres.
+`tests/conftest.py` points `AGENTFLOW_DATABASE_URL` at a throwaway file in a
+temp directory rather than `:memory:`: the in-memory URL shares one
+connection across every session, which makes the request session and the
+run executor's session trample each other. Export `AGENTFLOW_DATABASE_URL`
+yourself to run the suite against another database.
+
+The same command runs in CI on pushes to `main` and on pull requests
+targeting `main` (`.github/workflows/tests.yml`, together with the Python
+and TypeScript SDK tests).

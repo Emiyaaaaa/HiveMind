@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { ApprovalsNavLink } from "@/components/ApprovalsNavLink";
 import { Providers } from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "AgentFlow",
+  title: "Hivemind",
   description: "Open-source multi-agent runtime",
 };
 
@@ -21,12 +22,19 @@ export default function RootLayout({
             <header className="border-b border-border px-6 py-4 flex items-center justify-between">
               <Link href="/" className="flex items-center gap-2">
                 <span className="text-accent font-mono text-lg">▲</span>
-                <span className="font-semibold tracking-tight">AgentFlow</span>
+                <span className="font-semibold tracking-tight">Hivemind</span>
                 <span className="text-xs text-muted ml-2">runtime console</span>
               </Link>
               <nav className="flex gap-4 text-sm text-muted">
                 <Link href="/runs" className="hover:text-text">
                   Runs
+                </Link>
+                <ApprovalsNavLink />
+                <Link href="/threads" className="hover:text-text">
+                  Threads
+                </Link>
+                <Link href="/regression" className="hover:text-text">
+                  Regression
                 </Link>
                 <a
                   href="http://localhost:8000/docs"

@@ -12,6 +12,10 @@ public class AgentflowProperties {
     private Cancel cancel = new Cancel();
     private Events events = new Events();
     private Otel otel = new Otel();
+    private Auth auth = new Auth();
+    private Temporal temporal = new Temporal();
+    private Retention retention = new Retention();
+    private Attachments attachments = new Attachments();
 
     public String getVersion() {
         return version;
@@ -61,6 +65,204 @@ public class AgentflowProperties {
         this.otel = otel;
     }
 
+    public Auth getAuth() {
+        return auth;
+    }
+
+    public void setAuth(Auth auth) {
+        this.auth = auth;
+    }
+
+    public Temporal getTemporal() {
+        return temporal;
+    }
+
+    public void setTemporal(Temporal temporal) {
+        this.temporal = temporal;
+    }
+
+    public Retention getRetention() {
+        return retention;
+    }
+
+    public void setRetention(Retention retention) {
+        this.retention = retention;
+    }
+
+    public Attachments getAttachments() {
+        return attachments;
+    }
+
+    public void setAttachments(Attachments attachments) {
+        this.attachments = attachments;
+    }
+
+    public static class Auth {
+        private boolean enabled = false;
+        private List<ApiKeyEntry> keys = List.of();
+        private Oidc oidc = new Oidc();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public List<ApiKeyEntry> getKeys() {
+            return keys;
+        }
+
+        public void setKeys(List<ApiKeyEntry> keys) {
+            this.keys = keys == null ? List.of() : keys;
+        }
+
+        public Oidc getOidc() {
+            return oidc;
+        }
+
+        public void setOidc(Oidc oidc) {
+            this.oidc = oidc == null ? new Oidc() : oidc;
+        }
+    }
+
+    /**
+     * OIDC resource-server settings.
+     *
+     * <p>OIDC tokens are accepted only when both {@link Auth#enabled} and this
+     * section's {@link #enabled} flag are true. A token must contain a tenant
+     * claim. Roles are resolved from configured mappings and then from values
+     * that match the built-in {@code viewer}, {@code operator}, or {@code admin}
+     * role names.
+     */
+    public static class Oidc {
+        private boolean enabled = false;
+        private String issuerUri;
+        private String jwkSetUri;
+        private String audience;
+        private String tenantClaim = "tenant_id";
+        private String roleClaim = "roles";
+        private String defaultRole = "viewer";
+        private List<OidcRoleMapping> roleMappings = List.of();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getIssuerUri() {
+            return issuerUri;
+        }
+
+        public void setIssuerUri(String issuerUri) {
+            this.issuerUri = issuerUri;
+        }
+
+        public String getJwkSetUri() {
+            return jwkSetUri;
+        }
+
+        public void setJwkSetUri(String jwkSetUri) {
+            this.jwkSetUri = jwkSetUri;
+        }
+
+        public String getAudience() {
+            return audience;
+        }
+
+        public void setAudience(String audience) {
+            this.audience = audience;
+        }
+
+        public String getTenantClaim() {
+            return tenantClaim;
+        }
+
+        public void setTenantClaim(String tenantClaim) {
+            this.tenantClaim = tenantClaim;
+        }
+
+        public String getRoleClaim() {
+            return roleClaim;
+        }
+
+        public void setRoleClaim(String roleClaim) {
+            this.roleClaim = roleClaim;
+        }
+
+        public String getDefaultRole() {
+            return defaultRole;
+        }
+
+        public void setDefaultRole(String defaultRole) {
+            this.defaultRole = defaultRole;
+        }
+
+        public List<OidcRoleMapping> getRoleMappings() {
+            return roleMappings;
+        }
+
+        public void setRoleMappings(List<OidcRoleMapping> roleMappings) {
+            this.roleMappings = roleMappings == null ? List.of() : roleMappings;
+        }
+    }
+
+    /** Maps one value in the configured OIDC role claim to an application role. */
+    public static class OidcRoleMapping {
+        private String claimValue;
+        private String role = "viewer";
+
+        public String getClaimValue() {
+            return claimValue;
+        }
+
+        public void setClaimValue(String claimValue) {
+            this.claimValue = claimValue;
+        }
+
+        public String getRole() {
+            return role;
+        }
+
+        public void setRole(String role) {
+            this.role = role;
+        }
+    }
+
+    public static class ApiKeyEntry {
+        private String key;
+        private String tenantId = "default";
+        private String role = "admin";
+
+        public String getKey() {
+            return key;
+        }
+
+        public void setKey(String key) {
+            this.key = key;
+        }
+
+        public String getTenantId() {
+            return tenantId;
+        }
+
+        public void setTenantId(String tenantId) {
+            this.tenantId = tenantId;
+        }
+
+        public String getRole() {
+            return role;
+        }
+
+        public void setRole(String role) {
+            this.role = role;
+        }
+    }
+
     public static class Otel {
         private boolean enabled = false;
         private String serviceName = "agentflow-api";
@@ -85,11 +287,13 @@ public class AgentflowProperties {
     public static class Jobs {
         /**
          * Wire protocol used to enqueue run jobs for the Python worker.
-         * Must match the Python side's {@code AGENTFLOW_REDIS_QUEUE_IMPL}.
+         * Must match the Python side's {@code AGENTFLOW_JOBS_IMPL}.
          * <ul>
          *   <li>{@code streams} (default) -> {@code XADD} onto a Redis stream
          *       with at-least-once delivery via XACK + XAUTOCLAIM.</li>
          *   <li>{@code list} -> legacy {@code LPUSH} + {@code BRPOP}.</li>
+         *   <li>{@code temporal} -> start or signal a durable Temporal workflow
+         *       for the run; worker restarts resume from checkpoints.</li>
          * </ul>
          */
         private String impl = "streams";
@@ -109,6 +313,63 @@ public class AgentflowProperties {
 
         public void setQueueKey(String queueKey) {
             this.queueKey = queueKey;
+        }
+    }
+
+    public static class Temporal {
+        private String target = "localhost:7233";
+        private String namespace = "default";
+        private String taskQueue = "agentflow-runs";
+        private long activityHeartbeatSeconds = 30;
+        private long activityStartToCloseSeconds = 7 * 24 * 3600;
+        private int activityMaxAttempts = 5;
+
+        public String getTarget() {
+            return target;
+        }
+
+        public void setTarget(String target) {
+            this.target = target;
+        }
+
+        public String getNamespace() {
+            return namespace;
+        }
+
+        public void setNamespace(String namespace) {
+            this.namespace = namespace;
+        }
+
+        public String getTaskQueue() {
+            return taskQueue;
+        }
+
+        public void setTaskQueue(String taskQueue) {
+            this.taskQueue = taskQueue;
+        }
+
+        public long getActivityHeartbeatSeconds() {
+            return activityHeartbeatSeconds;
+        }
+
+        public void setActivityHeartbeatSeconds(long activityHeartbeatSeconds) {
+            this.activityHeartbeatSeconds = activityHeartbeatSeconds;
+        }
+
+        public long getActivityStartToCloseSeconds() {
+            return activityStartToCloseSeconds;
+        }
+
+        public void setActivityStartToCloseSeconds(long activityStartToCloseSeconds) {
+            this.activityStartToCloseSeconds = activityStartToCloseSeconds;
+        }
+
+        public int getActivityMaxAttempts() {
+            return activityMaxAttempts;
+        }
+
+        public void setActivityMaxAttempts(int activityMaxAttempts) {
+            this.activityMaxAttempts = activityMaxAttempts;
         }
     }
 
@@ -169,6 +430,57 @@ public class AgentflowProperties {
 
         public void setSseHeartbeatSeconds(long sseHeartbeatSeconds) {
             this.sseHeartbeatSeconds = sseHeartbeatSeconds;
+        }
+    }
+
+    public static class Retention {
+        private int tenantTtlDays = 0;
+        private long purgeIntervalSeconds = 3600;
+        private int purgeBatchSize = 100;
+
+        public int getTenantTtlDays() {
+            return tenantTtlDays;
+        }
+
+        public void setTenantTtlDays(int tenantTtlDays) {
+            this.tenantTtlDays = tenantTtlDays;
+        }
+
+        public long getPurgeIntervalSeconds() {
+            return purgeIntervalSeconds;
+        }
+
+        public void setPurgeIntervalSeconds(long purgeIntervalSeconds) {
+            this.purgeIntervalSeconds = purgeIntervalSeconds;
+        }
+
+        public int getPurgeBatchSize() {
+            return purgeBatchSize;
+        }
+
+        public void setPurgeBatchSize(int purgeBatchSize) {
+            this.purgeBatchSize = purgeBatchSize;
+        }
+    }
+
+    public static class Attachments {
+        private String storageDir = "./data/attachments";
+        private long maxBytes = 10L * 1024 * 1024;
+
+        public String getStorageDir() {
+            return storageDir;
+        }
+
+        public void setStorageDir(String storageDir) {
+            this.storageDir = storageDir;
+        }
+
+        public long getMaxBytes() {
+            return maxBytes;
+        }
+
+        public void setMaxBytes(long maxBytes) {
+            this.maxBytes = maxBytes;
         }
     }
 }

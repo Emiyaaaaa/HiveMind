@@ -29,6 +29,17 @@ def new_tool_call_id() -> str:
 
 
 @dataclass
+class MemoryHit:
+    """One recalled memory row. ``id`` is what audit ``memory_hit_ids`` stores."""
+
+    id: str
+    content: str
+    score: float = 0.0
+    source_run_id: str | None = None
+    kind: str = "episode"
+
+
+@dataclass
 class AdapterContext:
     """Per-run state exposed to adapters.
 
@@ -43,6 +54,15 @@ class AdapterContext:
     input: dict[str, Any]
     metadata: dict[str, Any] = field(default_factory=dict)
     resume: RunResumeContext | None = None
+    # Ordered chat history loaded from the messages table on retry / resume.
+    run_messages: list[dict[str, Any]] | None = None
+    # Prior turns from the same thread (window-trimmed); empty when no thread.
+    thread_id: str | None = None
+    thread_messages: list[dict[str, Any]] = field(default_factory=list)
+    # Episodes recalled for this run (empty when none). Also seeded as a system turn.
+    memory_hits: list[MemoryHit] = field(default_factory=list)
+    # Multimodal attachments bound to this run (metadata + storage_key); empty when none.
+    attachments: list[Any] = field(default_factory=list)
     step_index_base: int = 0
     emit: EmitCallback = field(
         default=None  # type: ignore[assignment]
@@ -94,21 +114,49 @@ class AdapterContext:
         step_index: int,
         delta: str,
         role: str = "assistant",
+        part: str = "text",
         **data: Any,
     ) -> None:
-        """Stream an incremental token chunk to SSE subscribers (no DB write)."""
+        """Stream an incremental token chunk to SSE subscribers (no DB write).
+
+        ``part`` discriminates fine-grained streams: ``text`` (default) for the
+        visible reply, ``reasoning`` for model thinking / chain-of-thought, and
+        ``attachment`` for multimodal attachment announcements (payload may
+        include an ``attachment`` object). Reasoning / attachment deltas stay
+        ephemeral; persist finished blocks with ``emit_message``.
+        """
         await self.emit(
             "token.delta",
-            {"step_index": step_index, "delta": delta, "role": role, **data},
+            {
+                "step_index": step_index,
+                "delta": delta,
+                "role": role,
+                "part": part,
+                **data,
+            },
         )
 
     async def emit_message(
-        self, *, role: str, content: str, name: str | None = None, **extra: Any
+        self,
+        *,
+        role: str,
+        content: str,
+        name: str | None = None,
+        tool_call_id: str | None = None,
+        step_index: int | None = None,
+        **extra: Any,
     ) -> None:
-        await self.emit(
-            "message.created",
-            {"role": role, "content": content, "name": name, "extra": extra},
-        )
+        payload: dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "name": name,
+            "extra": extra,
+        }
+        if tool_call_id is not None:
+            payload["tool_call_id"] = tool_call_id
+        if step_index is not None:
+            payload["step_index"] = step_index
+        await self.emit("message.created", payload)
 
     async def emit_tool_call_started(
         self,
@@ -188,7 +236,7 @@ class AdapterResult:
 
 
 class OrchestratorAdapter(ABC):
-    """Implement this to plug a new multi-agent framework into AgentFlow."""
+    """Implement this to plug a new multi-agent framework into Hivemind."""
 
     name: str = "base"
 
