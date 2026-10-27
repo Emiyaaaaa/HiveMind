@@ -10,6 +10,7 @@ public class RunResponse {
 
     private String id;
     private String tenantId;
+    private String projectId;
     private String agentId;
     private String threadId;
     private String adapter;
@@ -74,6 +75,7 @@ public class RunResponse {
         RunResponse dto = new RunResponse();
         dto.id = entity.getId();
         dto.tenantId = entity.getTenantId();
+        dto.projectId = entity.getProjectId();
         dto.agentId = entity.getAgentId();
         dto.threadId = entity.getThreadId();
         dto.adapter = entity.getAdapter();
@@ -97,6 +99,10 @@ public class RunResponse {
 
     public String getTenantId() {
         return tenantId;
+    }
+
+    public String getProjectId() {
+        return projectId;
     }
 
     public String getAgentId() {

@@ -192,4 +192,193 @@ def test_quota_exceeded_message():
         used_cost_usd=0.5,
         max_cost_usd=1.0,
     )
+    assert exc.scope == "agent"
+    assert "Agent quota exceeded" in str(exc)
     assert "tokens=100/100" in str(exc)
+
+    project_exc = QuotaExceeded(
+        scope="project",
+        scope_id="p1",
+        agent_id="a1",
+        period_key="2026-09-11",
+        reason="cost_usd",
+        used_tokens=1,
+        max_tokens=None,
+        used_cost_usd=2.0,
+        max_cost_usd=2.0,
+    )
+    assert project_exc.scope_id == "p1"
+    assert "Project quota exceeded" in str(project_exc)
+
+
+@pytest.mark.asyncio
+async def test_tenant_and_project_quota_gate_and_status(client):
+    project = await client.post("/v1/projects", json={"name": "quota-scope"})
+    assert project.status_code == 201
+    project_id = project.json()["id"]
+
+    inactive = await client.get(f"/v1/projects/{project_id}/quota")
+    assert inactive.status_code == 200
+    assert inactive.json()["scope"] == "project"
+    assert inactive.json()["active"] is False
+
+    configured = await client.put(
+        f"/v1/projects/{project_id}/quota",
+        json={"period": "weekly", "max_tokens": 4, "enforce": True},
+    )
+    assert configured.status_code == 200
+    assert configured.json()["period"] == "week"
+    assert configured.json()["max_tokens"] == 4
+    assert configured.json()["project_id"] == project_id
+
+    tenant = await client.put(
+        "/v1/tenant/quota",
+        json={"period": "month", "max_cost_usd": 1.0, "enforce": False},
+    )
+    assert tenant.status_code == 200
+    assert tenant.json()["scope"] == "tenant"
+    assert tenant.json()["enforce"] is False
+    assert tenant.json()["active"] is True
+
+    create = await client.post(
+        "/v1/agents",
+        json={
+            "name": "scoped-bot",
+            "adapter": "echo",
+            "project_id": project_id,
+            "config": {},
+        },
+    )
+    assert create.status_code == 201
+    agent_id = create.json()["id"]
+    assert create.json()["project_id"] == project_id
+
+    from app.db.session import SessionLocal
+    from app.models.quota import ProjectQuotaUsage
+    from app.runtime.quota import period_key as pk
+
+    async with SessionLocal() as session:
+        session.add(
+            ProjectQuotaUsage(
+                tenant_id="default",
+                project_id=project_id,
+                period="week",
+                period_key=pk("week"),
+                tokens_in=4,
+                tokens_out=0,
+                cost_usd=0.0,
+                run_count=1,
+            )
+        )
+        await session.commit()
+
+    blocked = await client.post(
+        "/v1/runs",
+        json={"agent_id": agent_id, "input": {"prompt": "hi"}},
+    )
+    assert blocked.status_code == 429
+    assert "project quota exceeded" in blocked.json()["detail"].lower()
+
+    status = await client.get(f"/v1/projects/{project_id}/quota")
+    assert status.json()["exceeded"] is True
+    assert status.json()["used_tokens"] == 4
+    assert status.json()["remaining_tokens"] == 0
+
+    # Organization usage at the enforced tenant cap blocks the next run.
+    tightened = await client.put(
+        "/v1/tenant/quota",
+        json={"period": "day", "max_tokens": 1, "enforce": True},
+    )
+    assert tightened.json()["scope_id"] == "default"
+    async with SessionLocal() as session:
+        from app.models.quota import TenantQuotaUsage
+
+        session.add(
+            TenantQuotaUsage(
+                tenant_id="default",
+                period="day",
+                period_key=pk("day"),
+                tokens_in=1,
+                tokens_out=0,
+                cost_usd=0.0,
+                run_count=1,
+            )
+        )
+        await session.commit()
+
+    blocked_tenant = await client.post(
+        "/v1/runs",
+        json={"agent_id": agent_id, "input": {"prompt": "hi"}},
+    )
+    assert blocked_tenant.status_code == 429
+    assert "tenant quota exceeded" in blocked_tenant.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_apply_usage_credits_every_active_scope(client):
+    from app.db.session import SessionLocal
+    from app.models import Agent
+    from app.models.quota import AgentQuotaUsage, ProjectQuotaUsage, TenantQuotaUsage
+    from app.runtime.usage import RunUsage
+    from app.services.quota_service import QuotaService
+    from sqlalchemy import select
+
+    project = await client.post("/v1/projects", json={"name": "quota-ledger"})
+    project_id = project.json()["id"]
+    await client.put(
+        f"/v1/projects/{project_id}/quota",
+        json={"period": "month", "max_tokens": 5000},
+    )
+    await client.put(
+        "/v1/tenant/quota",
+        json={"period": "month", "max_cost_usd": 10, "enforce": False},
+    )
+    create = await client.post(
+        "/v1/agents",
+        json={
+            "name": "ledger-bot",
+            "adapter": "echo",
+            "project_id": project_id,
+            "config": {"quota": {"period": "month", "max_tokens": 1000}},
+        },
+    )
+    agent_id = create.json()["id"]
+
+    async with SessionLocal() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        meta = await QuotaService(session).apply_run_usage(
+            agent=agent,
+            run_metadata={},
+            usage=RunUsage(tokens_in=10, tokens_out=5, cost_usd=0.002),
+        )
+        await session.commit()
+
+        agent_row = (
+            await session.scalars(select(AgentQuotaUsage))
+        ).one()
+        project_row = (
+            await session.scalars(select(ProjectQuotaUsage))
+        ).one()
+        tenant_row = (
+            await session.scalars(select(TenantQuotaUsage))
+        ).one()
+        agent_project_id = agent_row.project_id
+        agent_tokens_in = agent_row.tokens_in
+        agent_runs = agent_row.run_count
+        project_tokens_out = project_row.tokens_out
+        project_scope_id = project_row.project_id
+        tenant_cost = tenant_row.cost_usd
+        tenant_runs = tenant_row.run_count
+
+    applied = meta["_agentflow"]["quota_applied"]["scopes"]
+    assert applied["agent"]["period_key"]
+    assert applied["project"]["period_key"]
+    assert applied["tenant"]["period_key"]
+    assert agent_project_id == project_id
+    assert agent_tokens_in == 10
+    assert agent_runs == 1
+    assert project_scope_id == project_id
+    assert project_tokens_out == 5
+    assert tenant_cost == 0.002
+    assert tenant_runs == 1

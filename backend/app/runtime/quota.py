@@ -1,6 +1,8 @@
-"""Agent-level token / cost quota policy.
+"""Tenant, project, and agent token / cost quota policy.
 
-Limits live on ``Agent.config`` so they version with the agent definition::
+Agent limits live on ``Agent.config`` so they version with the agent definition.
+Tenant and project limits live in ``tenant_quota_configs`` and
+``project_quota_configs``. All three scopes share the same shape::
 
     {
       "quota": {
@@ -12,6 +14,8 @@ Limits live on ``Agent.config`` so they version with the agent definition::
     }
 
 When neither ``max_tokens`` nor ``max_cost_usd`` is set the quota is inactive.
+A run is blocked when any enforced scope (tenant, then project, then agent)
+is already at its limit. Usage is credited to every active scope.
 """
 
 from __future__ import annotations
@@ -55,7 +59,7 @@ class QuotaSnapshot:
 
 
 class QuotaExceeded(Exception):
-    """Raised when creating a run would violate an enforced agent quota."""
+    """Raised when creating a run would violate an enforced quota scope."""
 
     def __init__(
         self,
@@ -67,7 +71,11 @@ class QuotaExceeded(Exception):
         max_tokens: int | None,
         used_cost_usd: float,
         max_cost_usd: float | None,
+        scope: str = "agent",
+        scope_id: str | None = None,
     ) -> None:
+        self.scope = scope
+        self.scope_id = scope_id or agent_id
         self.agent_id = agent_id
         self.period_key = period_key
         self.reason = reason
@@ -75,13 +83,47 @@ class QuotaExceeded(Exception):
         self.max_tokens = max_tokens
         self.used_cost_usd = used_cost_usd
         self.max_cost_usd = max_cost_usd
+        label = {"tenant": "Tenant", "project": "Project"}.get(scope, "Agent")
         super().__init__(
-            f"Agent quota exceeded ({reason}): period={period_key} "
+            f"{label} quota exceeded ({reason}): period={period_key} "
             f"tokens={used_tokens}"
             + (f"/{max_tokens}" if max_tokens is not None else "")
             + f" cost_usd={used_cost_usd:.6f}"
             + (f"/{max_cost_usd}" if max_cost_usd is not None else "")
         )
+
+
+def normalize_period(value: Any) -> PeriodName:
+    period_raw = str(value or "month").strip().lower()
+    if period_raw in ("day", "daily"):
+        return "day"
+    if period_raw in ("week", "weekly"):
+        return "week"
+    return "month"
+
+
+def coerce_enforce(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    if value is None:
+        return True
+    return bool(value)
+
+
+def quota_config_from_values(
+    *,
+    period: Any = "month",
+    max_tokens: Any = None,
+    max_cost_usd: Any = None,
+    enforce: Any = True,
+) -> AgentQuotaConfig:
+    """Build a scope config from stored columns or an upsert payload."""
+    return AgentQuotaConfig(
+        period=normalize_period(period),
+        max_tokens=_optional_non_negative_int(max_tokens),
+        max_cost_usd=_optional_non_negative_float(max_cost_usd),
+        enforce=coerce_enforce(enforce),
+    )
 
 
 def parse_quota_config(config: dict[str, Any] | None) -> AgentQuotaConfig | None:
@@ -93,29 +135,11 @@ def parse_quota_config(config: dict[str, Any] | None) -> AgentQuotaConfig | None
         return None
     if not isinstance(raw, dict):
         return AgentQuotaConfig()
-
-    period_raw = str(raw.get("period") or "month").strip().lower()
-    period: PeriodName
-    if period_raw in ("day", "daily"):
-        period = "day"
-    elif period_raw in ("week", "weekly"):
-        period = "week"
-    else:
-        period = "month"
-
-    max_tokens = _optional_non_negative_int(raw.get("max_tokens"))
-    max_cost = _optional_non_negative_float(raw.get("max_cost_usd"))
-    enforce = raw.get("enforce", True)
-    if isinstance(enforce, str):
-        enforce = enforce.strip().lower() not in {"0", "false", "no", "off"}
-    else:
-        enforce = bool(enforce)
-
-    return AgentQuotaConfig(
-        period=period,
-        max_tokens=max_tokens,
-        max_cost_usd=max_cost,
-        enforce=enforce,
+    return quota_config_from_values(
+        period=raw.get("period"),
+        max_tokens=raw.get("max_tokens"),
+        max_cost_usd=raw.get("max_cost_usd"),
+        enforce=raw.get("enforce", True),
     )
 
 

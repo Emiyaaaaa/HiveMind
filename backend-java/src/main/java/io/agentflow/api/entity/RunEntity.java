@@ -25,6 +25,9 @@ public class RunEntity {
     @Column(name = "tenant_id", nullable = false, length = 64)
     private String tenantId = "default";
 
+    @Column(name = "project_id", length = 26)
+    private String projectId;
+
     @Column(name = "agent_id", nullable = false, length = 26)
     private String agentId;
 
@@ -94,6 +97,14 @@ public class RunEntity {
 
     public void setTenantId(String tenantId) {
         this.tenantId = tenantId;
+    }
+
+    public String getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(String projectId) {
+        this.projectId = projectId;
     }
 
     public String getAgentId() {

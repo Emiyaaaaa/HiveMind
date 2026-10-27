@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import io.agentflow.api.dto.RunResumeRequest;
+import io.agentflow.api.entity.AgentEntity;
 import io.agentflow.api.entity.CheckpointEntity;
 import io.agentflow.api.entity.RunAuditEventEntity;
 import io.agentflow.api.entity.RunEntity;
@@ -142,6 +143,11 @@ class RunAuditServiceTest {
             RunAuditEventRepository auditEvents,
             CancelSignal cancelSignal,
             CheckpointRepository checkpoints) {
+        AgentService agents = mock(AgentService.class);
+        AgentEntity agent = new AgentEntity();
+        agent.setId("agent-1");
+        agent.setProjectId("proj-1");
+        when(agents.getEntity(any())).thenReturn(agent);
         return new RunService(
                 runs,
                 mock(StepRepository.class),
@@ -149,7 +155,7 @@ class RunAuditServiceTest {
                 mock(ToolCallRepository.class),
                 checkpoints,
                 auditEvents,
-                mock(AgentService.class),
+                agents,
                 mock(ThreadRepository.class),
                 mock(JobProducer.class),
                 cancelSignal,

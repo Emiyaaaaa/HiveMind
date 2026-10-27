@@ -42,8 +42,16 @@ class AgentRead(BaseModel):
 
 
 class AgentQuotaStatus(BaseModel):
-    """Current period usage against the agent's configured token/cost quota."""
+    """Current period usage against the agent's configured token/cost quota.
 
+    ``scope`` / ``scope_id`` mirror the shared tenant and project status shape.
+    ``agent_id`` stays required for existing clients.
+    """
+
+    scope: Literal["agent"] = "agent"
+    scope_id: str | None = None
+    tenant_id: str | None = None
+    project_id: str | None = None
     agent_id: str
     active: bool
     enforce: bool = False
