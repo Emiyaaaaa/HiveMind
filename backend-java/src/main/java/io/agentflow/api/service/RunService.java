@@ -118,6 +118,7 @@ public class RunService {
 
         RunEntity run = new RunEntity();
         run.setTenantId(agent.getTenantId());
+        run.setProjectId(agent.getProjectId());
         run.setAgentId(agent.getId());
         run.setThreadId(threadId);
         run.setAdapter(adapter);
@@ -149,6 +150,7 @@ public class RunService {
         for (Map<String, Object> input : inputs) {
             RunEntity run = new RunEntity();
             run.setTenantId(agent.getTenantId());
+            run.setProjectId(agent.getProjectId());
             run.setAgentId(agentId);
             run.setAdapter(adapter);
             run.setStatus(RunStatus.PENDING);
@@ -176,6 +178,7 @@ public class RunService {
                 (adapter != null && !adapter.isBlank()) ? adapter : agent.getAdapter();
         RunEntity run = new RunEntity();
         run.setTenantId(agent.getTenantId());
+        run.setProjectId(agent.getProjectId());
         run.setAgentId(agent.getId());
         run.setAdapter(resolvedAdapter);
         run.setStatus(RunStatus.PENDING);
@@ -262,6 +265,9 @@ public class RunService {
 
         AgentEntity agent = agentService.getEntity(run.getAgentId());
         quotaService.assertCanCreateRun(agent);
+        if (run.getProjectId() == null) {
+            run.setProjectId(agent.getProjectId());
+        }
 
         List<CheckpointEntity> cps = checkpoints.findAllByRunIdOrderByIndexAsc(run.getId());
         Integer checkpointIndex = null;
@@ -293,6 +299,9 @@ public class RunService {
     public RunResponse resume(String id, RunResumeRequest req) {
         AuthPrincipal principal = AccessControl.require(Role.OPERATOR);
         RunEntity run = requireRun(id, Role.OPERATOR);
+        if (run.getProjectId() == null) {
+            run.setProjectId(agentService.getEntity(run.getAgentId()).getProjectId());
+        }
         if (run.getStatus() != RunStatus.WAITING_HUMAN) {
             throw new RunConflictException(
                     "Cannot resume run " + id + " in status " + run.getStatus().wire());

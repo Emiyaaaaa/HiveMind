@@ -3,6 +3,7 @@ package io.agentflow.api.controller;
 import io.agentflow.api.service.AgentNameConflictException;
 import io.agentflow.api.service.AgentNotFoundException;
 import io.agentflow.api.service.AgentQuotaExceededException;
+import io.agentflow.api.service.ProjectNotFoundException;
 import io.agentflow.api.service.AgentVersionNotFoundException;
 import io.agentflow.api.service.AttachmentNotFoundException;
 import io.agentflow.api.service.AttachmentTooLargeException;
@@ -27,6 +28,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(ProjectNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleProjectNotFound(ProjectNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("detail", ex.getMessage()));
+    }
 
     @ExceptionHandler(AgentNotFoundException.class)
     public ResponseEntity<Map<String, String>> handleAgentNotFound(AgentNotFoundException ex) {

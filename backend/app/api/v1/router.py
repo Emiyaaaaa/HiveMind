@@ -11,12 +11,14 @@ from app.api.v1 import (
     retention,
     runs,
     schedules,
+    tenant,
     threads,
 )
 
 api_router = APIRouter(prefix="/v1")
 api_router.include_router(health.router)
 api_router.include_router(projects.router)
+api_router.include_router(tenant.router)
 api_router.include_router(agents.router)
 api_router.include_router(threads.router)
 api_router.include_router(memories.router)

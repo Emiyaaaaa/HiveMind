@@ -53,6 +53,7 @@ public class ScheduleService {
         Timing timing = normalizeTiming(cron, interval, request.getTimezone());
         RunScheduleEntity row = new RunScheduleEntity();
         row.setTenantId(agent.getTenantId());
+        row.setProjectId(agent.getProjectId());
         row.setAgentId(agent.getId());
         row.setName(blankToNull(request.getName()));
         row.setCron(timing.cron());

@@ -54,6 +54,7 @@ public class BatchService {
         AgentEntity agent = agents.getEntity(request.getAgentId());
         RunBatchEntity batch = new RunBatchEntity();
         batch.setTenantId(agent.getTenantId());
+        batch.setProjectId(agent.getProjectId());
         batch.setAgentId(agent.getId());
         batch.setRunIds(new ArrayList<>());
         batch = batches.save(batch);
