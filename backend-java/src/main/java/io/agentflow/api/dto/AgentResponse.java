@@ -8,6 +8,7 @@ public class AgentResponse {
 
     private String id;
     private String tenantId;
+    private String projectId;
     private String name;
     private String description;
     private String adapter;
@@ -20,6 +21,7 @@ public class AgentResponse {
         AgentResponse dto = new AgentResponse();
         dto.id = entity.getId();
         dto.tenantId = entity.getTenantId();
+        dto.projectId = entity.getProjectId();
         dto.name = entity.getName();
         dto.description = entity.getDescription();
         dto.adapter = entity.getAdapter();
@@ -36,6 +38,10 @@ public class AgentResponse {
 
     public String getTenantId() {
         return tenantId;
+    }
+
+    public String getProjectId() {
+        return projectId;
     }
 
     public String getName() {

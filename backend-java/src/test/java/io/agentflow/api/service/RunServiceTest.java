@@ -20,11 +20,26 @@ import io.agentflow.api.repository.RunRepository;
 import io.agentflow.api.repository.StepRepository;
 import io.agentflow.api.repository.ThreadRepository;
 import io.agentflow.api.repository.ToolCallRepository;
+import io.agentflow.api.security.AuthPrincipal;
+import io.agentflow.api.security.Role;
+import io.agentflow.api.security.TenantContext;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class RunServiceTest {
+
+    @BeforeEach
+    void setPrincipal() {
+        TenantContext.set(new AuthPrincipal("default", Role.OPERATOR, "test"));
+    }
+
+    @AfterEach
+    void clearPrincipal() {
+        TenantContext.clear();
+    }
 
     @Test
     void createPinsVersionAndReplacesClientInternalMetadata() {
@@ -49,7 +64,7 @@ class RunServiceTest {
 
         service.create(request);
 
-        verify(runs).save(argThat(run -> run.getMetadata().equals(Map.of(
+        verify(runs).save(argThat(run -> run.getProjectId() == null && run.getMetadata().equals(Map.of(
                 "trace_id", "kept",
                 "_agentflow", Map.of("agent_version", 3)))));
     }
@@ -57,17 +72,24 @@ class RunServiceTest {
     @Test
     void createPinnedCopiesUsesSpecifiedSnapshotVersion() {
         RunRepository runs = mock(RunRepository.class);
+        AgentService agents = mock(AgentService.class);
+        AgentEntity agent = new AgentEntity();
+        agent.setId("agent-1");
+        agent.setTenantId("default");
+        agent.setProjectId("proj-1");
+        when(agents.getEntity("agent-1")).thenReturn(agent);
         when(runs.saveAll(any())).thenAnswer(call -> {
             List<RunEntity> saved = call.getArgument(0);
             saved.getFirst().setId("candidate-1");
             return saved;
         });
-        RunService service = service(runs, mock(AgentService.class));
+        RunService service = service(runs, agents);
 
         List<RunEntity> candidates = service.createPinnedCopies(
                 "agent-1", "echo", 4, List.of(Map.of("prompt", "hello")));
 
         assertThat(candidates.getFirst().getInput()).isEqualTo(Map.of("prompt", "hello"));
+        assertThat(candidates.getFirst().getProjectId()).isEqualTo("proj-1");
         assertThat(candidates.getFirst().getMetadata())
                 .isEqualTo(Map.of("_agentflow", Map.of("agent_version", 4)));
     }

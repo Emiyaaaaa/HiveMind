@@ -8,8 +8,10 @@ import io.agentflow.api.dto.AgentVersionDiffResponse;
 import io.agentflow.api.dto.AgentVersionResponse;
 import io.agentflow.api.entity.AgentEntity;
 import io.agentflow.api.entity.AgentVersionEntity;
+import io.agentflow.api.entity.ProjectEntity;
 import io.agentflow.api.repository.AgentRepository;
 import io.agentflow.api.repository.AgentVersionRepository;
+import io.agentflow.api.repository.ProjectRepository;
 import io.agentflow.api.security.AccessControl;
 import io.agentflow.api.security.Role;
 import java.util.HashMap;
@@ -17,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TreeSet;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -28,14 +31,17 @@ public class AgentService {
     private final AgentRepository repository;
     private final AgentVersionRepository versionRepository;
     private final AgentQuotaService quotaService;
+    private final ProjectRepository projects;
 
     public AgentService(
             AgentRepository repository,
             AgentVersionRepository versionRepository,
-            AgentQuotaService quotaService) {
+            AgentQuotaService quotaService,
+            ProjectRepository projects) {
         this.repository = repository;
         this.versionRepository = versionRepository;
         this.quotaService = quotaService;
+        this.projects = projects;
     }
 
     @Transactional
@@ -44,8 +50,17 @@ public class AgentService {
         if (repository.existsByTenantIdAndName(tenantId, req.getName())) {
             throw new AgentNameConflictException(req.getName());
         }
+        String projectId = blankToNull(req.getProjectId());
+        if (projectId != null) {
+            Optional<ProjectEntity> found = projects.findByIdAndTenantId(projectId, tenantId);
+            if (found == null || found.isEmpty()) {
+                throw new ProjectNotFoundException();
+            }
+            projectId = found.get().getId();
+        }
         AgentEntity entity = new AgentEntity();
         entity.setTenantId(tenantId);
+        entity.setProjectId(projectId);
         entity.setName(req.getName());
         entity.setDescription(req.getDescription());
         entity.setAdapter(req.getAdapter());
@@ -266,5 +281,12 @@ public class AgentService {
             entry.put("to", right);
             changed.put(path.isEmpty() ? "" : path, entry);
         }
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
     }
 }

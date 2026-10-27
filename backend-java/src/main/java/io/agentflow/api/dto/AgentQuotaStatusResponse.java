@@ -4,6 +4,10 @@ import java.time.Instant;
 
 public class AgentQuotaStatusResponse {
 
+    private String scope;
+    private String scopeId;
+    private String tenantId;
+    private String projectId;
     private String agentId;
     private boolean active;
     private boolean enforce;
@@ -21,6 +25,38 @@ public class AgentQuotaStatusResponse {
     private Integer remainingTokens;
     private Double remainingCostUsd;
     private boolean exceeded;
+
+    public String getScope() {
+        return scope;
+    }
+
+    public void setScope(String scope) {
+        this.scope = scope;
+    }
+
+    public String getScopeId() {
+        return scopeId;
+    }
+
+    public void setScopeId(String scopeId) {
+        this.scopeId = scopeId;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
+    }
+
+    public String getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(String projectId) {
+        this.projectId = projectId;
+    }
 
     public String getAgentId() {
         return agentId;

@@ -7,6 +7,8 @@ from app.core.auth import AuthPrincipal, Role, require_role
 from app.db.session import get_session
 from app.models import Project
 from app.schemas.project import ProjectCreate, ProjectRead
+from app.schemas.quota import QuotaConfigWrite, QuotaStatus
+from app.services.quota_service import QuotaService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -51,8 +53,41 @@ async def get_project(
     session: AsyncSession = Depends(get_session),
     principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
 ) -> Project:
+    return await _load_project(session, project_id, principal, Role.VIEWER)
+
+
+@router.get("/{project_id}/quota", response_model=QuotaStatus)
+async def get_project_quota(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.VIEWER)),
+) -> QuotaStatus:
+    project = await _load_project(session, project_id, principal, Role.VIEWER)
+    return QuotaStatus.model_validate(
+        await QuotaService(session).status_for_project(project)
+    )
+
+
+@router.put("/{project_id}/quota", response_model=QuotaStatus)
+async def put_project_quota(
+    project_id: str,
+    payload: QuotaConfigWrite,
+    session: AsyncSession = Depends(get_session),
+    principal: AuthPrincipal = Depends(require_role(Role.ADMIN)),
+) -> QuotaStatus:
+    project = await _load_project(session, project_id, principal, Role.ADMIN)
+    service = QuotaService(session)
+    await service.upsert_project_config(project, payload.model_dump())
+    body = await service.status_for_project(project)
+    await session.commit()
+    return QuotaStatus.model_validate(body)
+
+
+async def _load_project(
+    session: AsyncSession, project_id: str, principal: AuthPrincipal, minimum: Role
+) -> Project:
     project = await session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    principal.require_project(project.tenant_id, project.id, Role.VIEWER)
+    principal.require_project(project.tenant_id, project.id, minimum)
     return project

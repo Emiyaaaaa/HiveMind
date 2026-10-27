@@ -47,9 +47,8 @@ public class ThreadService {
         ThreadEntity thread = new ThreadEntity();
         thread.setTenantId(agent.getTenantId());
         thread.setAgentId(agent.getId());
-        // Prefer explicit project_id; otherwise leave null (Java AgentEntity
-        // does not yet mirror agents.project_id — Python create inherits it).
-        thread.setProjectId(blankToNull(req.getProjectId()));
+        String projectId = blankToNull(req.getProjectId());
+        thread.setProjectId(projectId != null ? projectId : agent.getProjectId());
         thread.setUserId(blankToNull(req.getUserId()));
         thread.setTitle(blankToNull(req.getTitle()));
         return ThreadResponse.fromEntity(threads.save(thread));
