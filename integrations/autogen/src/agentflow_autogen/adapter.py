@@ -16,7 +16,6 @@ from app.core.logging import get_logger
 from app.models.run import RunStatus
 from autogen_agentchat.base import TaskResult
 from autogen_agentchat.messages import (
-    BaseChatMessage,
     ModelClientStreamingChunkEvent,
     TextMessage,
     ToolCallExecutionEvent,
@@ -24,6 +23,7 @@ from autogen_agentchat.messages import (
 )
 
 from agentflow_autogen.tools import (
+    BridgedToolExecution,
     build_function_tools,
     inject_tools,
 )
@@ -68,8 +68,9 @@ class AutoGenAdapter(OrchestratorAdapter):
                         bridged_tools, bridged_names = build_function_tools(
                             surface,
                             ctx,
-                            step_index=handler.current_step_index,
+                            step_index=lambda: handler.current_step_index,
                             on_tool_error=bridged_failure.append,
+                            on_tool_execution=handler.record_bridged_tool,
                         )
                     else:
                         bridged_tools = []
@@ -133,6 +134,8 @@ class _StreamHandler:
         self._final_reply = ""
         self._replies: list[str] = []
         self._active_tool_calls: dict[str, tuple[str, str, float]] = {}
+        self._bridged_tool_executions: list[BridgedToolExecution] = []
+        self._pending_bridged_calls: dict[str, tuple[str, dict[str, Any]]] = {}
         self._pending_user_prompt: str | None = None
 
     @property
@@ -150,15 +153,30 @@ class _StreamHandler:
         self._started_at = time.monotonic()
         self._tokens_in = 0
         self._tokens_out = 0
+        self._final_reply = ""
         await self.ctx.emit_step_started(index=self._current_step_index, node=self._current_node)
+
+    async def ensure_step(self, node: str) -> None:
+        """Start or rotate the active step when an AutoGen turn changes source."""
+        if not self.step_started or self.step_completed:
+            await self.begin_step(node)
+            return
+        if self.per_turn_steps and node != self._current_node:
+            await self.complete_step(output={"reply": self._final_reply})
+            await self.begin_step(node)
 
     async def emit_user_prompt(self, prompt: str) -> None:
         self._pending_user_prompt = prompt
         step_index = self._current_step_index if self.step_started else None
         await self.ctx.emit_message(role="user", content=prompt, step_index=step_index)
 
+    def record_bridged_tool(self, execution: BridgedToolExecution) -> None:
+        """Hold tool events until AutoGen emits an event with the owning source."""
+        self._bridged_tool_executions.append(execution)
+
     async def handle(self, event: Any, *, bridged_names: frozenset[str]) -> None:
         if isinstance(event, ModelClientStreamingChunkEvent):
+            await self.ensure_step(str(event.source or self.default_node))
             if self.stream_tokens and isinstance(event.content, str):
                 await self.ctx.emit_token_delta(
                     step_index=self._current_step_index,
@@ -192,13 +210,7 @@ class _StreamHandler:
             )
             return
 
-        if self.per_turn_steps:
-            if self.step_started and not self.step_completed:
-                await self.complete_step(output={"reply": self._final_reply})
-            await self.begin_step(str(message.source or self.default_node))
-
-        if not self.step_started:
-            await self.begin_step(str(message.source or self.default_node))
+        await self.ensure_step(str(message.source or self.default_node))
 
         self._accumulate_usage(message)
         content = str(message.content or "")
@@ -218,11 +230,19 @@ class _StreamHandler:
         *,
         bridged_names: frozenset[str],
     ) -> None:
+        await self.ensure_step(str(event.source or self.default_node))
         self._accumulate_usage(event)
         for call in event.content:
-            if call.name in bridged_names:
-                continue
             arguments = _parse_tool_arguments(call.arguments)
+            if call.name in bridged_names:
+                emitted = await self._emit_bridged_tool(
+                    name=call.name,
+                    arguments=arguments,
+                    call_id=call.id,
+                )
+                if not emitted:
+                    self._pending_bridged_calls[call.id] = (call.name, arguments)
+                continue
             call_id = await self.ctx.emit_tool_call_started(
                 step_index=self._current_step_index,
                 name=call.name,
@@ -236,8 +256,16 @@ class _StreamHandler:
         *,
         bridged_names: frozenset[str],
     ) -> None:
+        await self.ensure_step(str(event.source or self.default_node))
         for result in event.content:
             if result.name in bridged_names:
+                pending = self._pending_bridged_calls.pop(result.call_id, None)
+                name, arguments = pending or (result.name, {})
+                await self._emit_bridged_tool(
+                    name=name,
+                    arguments=arguments,
+                    call_id=result.call_id,
+                )
                 continue
             active = self._active_tool_calls.pop(result.call_id, None)
             if active is None:
@@ -258,6 +286,50 @@ class _StreamHandler:
                 error=str(result.content) if result.is_error else None,
                 latency_ms=int((time.monotonic() - started) * 1000),
             )
+
+    async def _emit_bridged_tool(
+        self,
+        *,
+        name: str,
+        arguments: dict[str, Any],
+        call_id: str,
+    ) -> bool:
+        execution_index = next(
+            (
+                index
+                for index, execution in enumerate(self._bridged_tool_executions)
+                if execution.name == name and execution.arguments == arguments
+            ),
+            None,
+        )
+        if execution_index is None:
+            execution_index = next(
+                (
+                    index
+                    for index, execution in enumerate(self._bridged_tool_executions)
+                    if execution.name == name
+                ),
+                None,
+            )
+        if execution_index is None:
+            return False
+
+        execution = self._bridged_tool_executions.pop(execution_index)
+        emitted_call_id = await self.ctx.emit_tool_call_started(
+            step_index=self._current_step_index,
+            name=execution.name,
+            arguments=execution.arguments,
+            call_id=call_id,
+        )
+        await self.ctx.emit_tool_call_completed(
+            step_index=self._current_step_index,
+            name=execution.name,
+            call_id=emitted_call_id,
+            result=execution.result,
+            error=execution.error,
+            latency_ms=execution.latency_ms,
+        )
+        return True
 
     async def _handle_task_result(self, result: TaskResult) -> None:
         for message in result.messages:
