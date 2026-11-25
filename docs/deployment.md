@@ -183,8 +183,8 @@ and the schema has been applied.
 GitHub Actions job `integration` (see `.github/workflows/ci.yml`) runs:
 
 1. `docker compose --profile app up` against ephemeral Postgres/Redis
-2. End-to-end smoke (`scripts/ci/java_stack_smoke.py`) — create agent, run,
-   poll until `succeeded`
+2. End-to-end smoke (`scripts/ci/java_stack_smoke.py`) — health, echo run,
+   message pages, retry, resume, cancel, threads, agent versions, and batches
 
 ## Operational notes
 
