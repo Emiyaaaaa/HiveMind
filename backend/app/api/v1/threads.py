@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthPrincipal, Role, require_role
 from app.db.session import get_session
-from app.schemas.run import RunRead, run_read_from_orm
+from app.schemas.run import RunRead, run_header_from_orm
 from app.schemas.thread import (
     ThreadCreate,
     ThreadMessagePage,
@@ -113,4 +113,4 @@ async def list_thread_runs(
         )
     except ThreadNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Thread not found: {exc}") from exc
-    return [run_read_from_orm(run) for run in runs]
+    return [run_header_from_orm(run) for run in runs]

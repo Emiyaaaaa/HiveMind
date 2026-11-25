@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthPrincipal, Role, require_role
 from app.db.session import get_session
 from app.events import EventBus, get_event_bus
+from app.runtime.quota import QuotaExceeded
 from app.schemas.audit import RunAuditEventRead
 from app.schemas.run import (
     MessagePage,
@@ -11,9 +12,9 @@ from app.schemas.run import (
     RunRead,
     RunResume,
     RunRetry,
+    run_header_from_orm,
     run_read_from_orm,
 )
-from app.runtime.quota import QuotaExceeded
 from app.services.run_service import (
     AgentNotFound,
     AttachmentRefNotFound,
@@ -100,7 +101,7 @@ async def list_runs(
         project_id=principal.project_id,
         agent_id=principal.agent_id,
     )
-    return [run_read_from_orm(run) for run in runs]
+    return [run_header_from_orm(run) for run in runs]
 
 
 @router.get("/{run_id}", response_model=RunRead)
